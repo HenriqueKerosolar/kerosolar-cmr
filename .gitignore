@@ -1,0 +1,24 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+/build
+tsconfig.tsbuildinfo
+
+# env / segredos (NUNCA versionar)
+.env
+.env.local
+.env*.local
+# mantém o exemplo
+!.env.example
+
+# WhatsApp (Baileys) — sessões/credenciais sensíveis
+/wa-sessions/
+
+# logs e SO
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

@@ -1,0 +1,348 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  admin
+  agent   // atendente humano
+}
+
+enum Channel {
+  whatsapp
+  instagram
+  facebook
+  simulator
+}
+
+enum LeadStatus {
+  open
+  won
+  lost
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageSender {
+  contact
+  ai
+  human
+  system
+}
+
+enum TaskStatus {
+  pending
+  completed
+  cancelled
+}
+
+enum TaskType {
+  call
+  message
+  meeting
+  followup
+  other
+}
+
+// ─── Usuários do CRM ─────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(agent)
+  avatarUrl    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedLeads Lead[]  @relation("LeadResponsible")
+  tasks         Task[]  @relation("TaskResponsible")
+  notes         Note[]  @relation("NoteAuthor")
+
+  @@index([email])
+  @@map("users")
+}
+
+// ─── Funil ────────────────────────────────────────────────────────────────────
+
+model Pipeline {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  icon        String?  // emoji do funil
+  isDefault   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  // IA própria deste funil (Salesbot)
+  botEnabled  Boolean  @default(true)
+  botName     String?  // nome do bot neste funil (ex: "Sol")
+  botPrompt   String?  // prompt/script de IA específico deste funil
+  aiModel     String?  // modelo de IA específico (opcional)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stages           Stage[]
+  leads            Lead[]
+  whatsappAccounts WhatsappAccountPipeline[]
+
+  @@map("pipelines")
+}
+
+model Stage {
+  id         String   @id @default(cuid())
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name       String
+  color      String?
+  sortOrder  Int      @default(0)
+  isWon      Boolean  @default(false)
+  isLost     Boolean  @default(false)
+  // IA opcional por etapa (sobrescreve a do funil quando preenchido)
+  botPrompt  String?
+  botEnabled Boolean  @default(true)
+  // Fluxo de automação da etapa: { openingMessages: [{text, delaySeconds, mediaUrl?, mediaType?}], handoffToAi: bool }
+  flow       Json?
+  createdAt  DateTime @default(now())
+
+  leads Lead[]
+
+  @@index([pipelineId])
+  @@map("stages")
+}
+
+// ─── Contatos ─────────────────────────────────────────────────────────────────
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  city      String?
+  state     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contacts Contact[]
+  leads    Lead[]
+
+  @@map("companies")
+}
+
+model Contact {
+  id          String   @id @default(cuid())
+  name        String?
+  phone       String?
+  email       String?
+  avatarUrl   String?
+  // Identidade por canal
+  whatsappId  String?  @unique
+  instagramId String?  @unique
+  facebookId  String?  @unique
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id])
+  customFields Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  leads         Lead[]
+  conversations Conversation[]
+
+  @@index([phone])
+  @@map("contacts")
+}
+
+// ─── Lead (card central, estilo Kommo) ───────────────────────────────────────
+
+model Lead {
+  id            String     @id @default(cuid())
+  title         String
+  pipelineId    String
+  pipeline      Pipeline   @relation(fields: [pipelineId], references: [id])
+  stageId       String
+  stage         Stage      @relation(fields: [stageId], references: [id])
+  contactId     String?
+  contact       Contact?   @relation(fields: [contactId], references: [id])
+  companyId     String?
+  company       Company?   @relation(fields: [companyId], references: [id])
+  responsibleId String?
+  responsible   User?      @relation("LeadResponsible", fields: [responsibleId], references: [id])
+  status        LeadStatus @default(open)
+  value         Float      @default(0)
+  source        Channel?
+  lossReason    String?
+  customFields  Json?      // qualificação: billValue, propertyType, roofType, city, etc.
+  aiEnabled     Boolean    @default(true)
+  lastMessageAt DateTime?
+  closedAt      DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  conversations Conversation[]
+  tasks         Task[]
+  notes         Note[]
+
+  @@index([pipelineId, stageId])
+  @@index([contactId])
+  @@index([responsibleId])
+  @@index([status])
+  @@map("leads")
+}
+
+// ─── Chat omnichannel ─────────────────────────────────────────────────────────
+
+model Conversation {
+  id            String    @id @default(cuid())
+  channel       Channel
+  contactId     String
+  contact       Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  leadId        String?
+  lead          Lead?     @relation(fields: [leadId], references: [id])
+  accountId     String?   // qual conta de WhatsApp recebeu/envia (multi-número)
+  account       WhatsappAccount? @relation(fields: [accountId], references: [id])
+  externalId    String?
+  aiEnabled     Boolean   @default(true)
+  lastMessageAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  messages Message[]
+
+  @@unique([channel, contactId])
+  @@index([leadId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      MessageDirection
+  senderType     MessageSender
+  senderUserId   String?
+  content        String
+  mediaUrl       String?
+  mediaType      String?
+  externalId     String?
+  isRead         Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+// ─── Tarefas & Timeline ───────────────────────────────────────────────────────
+
+model Task {
+  id            String     @id @default(cuid())
+  leadId        String?
+  lead          Lead?      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  title         String
+  type          TaskType   @default(followup)
+  status        TaskStatus @default(pending)
+  dueAt         DateTime?
+  responsibleId String?
+  responsible   User?      @relation("TaskResponsible", fields: [responsibleId], references: [id])
+  completedAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([leadId])
+  @@index([dueAt, status])
+  @@map("tasks")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?    @relation("NoteAuthor", fields: [authorId], references: [id])
+  type      String   @default("note") // note | stage_change | system
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+  @@map("notes")
+}
+
+// ─── Canais & Configurações ───────────────────────────────────────────────────
+
+model ChannelIntegration {
+  id          String   @id @default(cuid())
+  channel     Channel  @unique
+  enabled     Boolean  @default(false)
+  externalId  String?
+  accessToken String?
+  verifyToken String?
+  appSecret   String?
+  config      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("channel_integrations")
+}
+
+/// Configurações gerais (chave→valor): ai_provider, anthropic_key, openai_key, ai_model, bot_name, bot_prompt
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_configs")
+}
+
+/// Ações agendadas (chamada da etapa com delay, follow-ups, etc.)
+model ScheduledAction {
+  id             String   @id @default(cuid())
+  leadId         String
+  conversationId String
+  stageId        String?
+  type           String   // send_message
+  payload        Json?    // { text, mediaUrl?, mediaType? }
+  runAt          DateTime
+  done           Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([done, runAt])
+  @@map("scheduled_actions")
+}
+
+// ─── WhatsApp (conexão via QR, sem API oficial — Baileys) ────────────────────
+
+model WhatsappAccount {
+  id          String   @id @default(cuid())
+  label       String              // "Vendas", "Suporte" — nome amigável
+  phone       String?             // número conectado (preenchido após login)
+  status      String   @default("disconnected") // disconnected | connecting | qr | connected
+  qr          String?             // dataURL do QR code atual (quando status = qr)
+  lastError   String?
+  connectedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  pipelines     WhatsappAccountPipeline[]
+  conversations Conversation[]
+
+  @@map("whatsapp_accounts")
+}
+
+/// Quais contas de WhatsApp estão ativas em cada funil (N:N)
+model WhatsappAccountPipeline {
+  accountId  String
+  account    WhatsappAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  pipelineId String
+  pipeline   Pipeline        @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, pipelineId])
+  @@map("whatsapp_account_pipelines")
+}
