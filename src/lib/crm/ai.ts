@@ -97,17 +97,18 @@ export async function extractBillFromImage(
   cfg: AiConfig,
   imageBase64: string,
   imageMediaType = 'image/jpeg',
-): Promise<{ kwh: number | null; valor: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean }> {
-  const fallback = { kwh: null, valor: null, medidor: null, distribuidora: null, isIdentityDoc: false }
-  const prompt = `Você é um leitor de documentos. Analise a imagem e extraia:
-1. consumo em kWh (número médio mensal ou do mês atual) — SOMENTE se for conta de luz/energia
-2. valor total a pagar em R$ — SOMENTE se for conta de luz/energia
-3. tipo de medidor/ligação: "monofásico", "bifásico" ou "trifásico" — SOMENTE se for conta de luz
-4. nome da distribuidora (Enel, Light, CPFL, Cemig, Copel, Energisa, etc.) — SOMENTE se for conta de luz
-5. docType: "bill" se for conta de energia/luz, "identity" se for RG, CNH, carteira de identidade, CPF físico ou passaporte, "other" para qualquer outro documento
+): Promise<{ kwh: number | null; valor: number | null; paineis: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean }> {
+  const fallback = { kwh: null, valor: null, paineis: null, medidor: null, distribuidora: null, isIdentityDoc: false }
+  const prompt = `Você é um leitor de documentos e imagens. Analise a imagem e extraia:
+1. consumo/geração em kWh — de conta de luz (consumo médio mensal) OU de anúncio/kit de energia solar (ex: "geração média de 300 kWh/mês")
+2. valor total a pagar em R$ — SOMENTE se for conta de luz/energia (NÃO use o preço de um anúncio/kit aqui)
+3. paineis: quantidade de painéis/placas/módulos solares que a imagem indica (ex: anúncio "5 PAINÉIS DE 540 W" → 5). null se não houver.
+4. tipo de medidor/ligação: "monofásico", "bifásico" ou "trifásico" — SOMENTE se for conta de luz
+5. nome da distribuidora (Enel, Light, CPFL, Cemig, Copel, Energisa, etc.) — SOMENTE se for conta de luz
+6. docType: "bill" se for conta de energia/luz, "identity" se for RG, CNH, carteira de identidade, CPF físico ou passaporte, "other" para qualquer outro (incluindo anúncios/kits)
 
 Responda SOMENTE com JSON válido, sem texto fora dele:
-{"kwh": number|null, "valor": number|null, "medidor": string|null, "distribuidora": string|null, "docType": "bill"|"identity"|"other"}`
+{"kwh": number|null, "valor": number|null, "paineis": number|null, "medidor": string|null, "distribuidora": string|null, "docType": "bill"|"identity"|"other"}`
 
   try {
     let raw = ''
@@ -145,6 +146,7 @@ Responda SOMENTE com JSON válido, sem texto fora dele:
     return {
       kwh:           typeof parsed.kwh === 'number'          ? parsed.kwh           : null,
       valor:         typeof parsed.valor === 'number'        ? parsed.valor         : null,
+      paineis:       typeof parsed.paineis === 'number'      ? parsed.paineis       : null,
       medidor:       typeof parsed.medidor === 'string'      ? parsed.medidor       : null,
       distribuidora: typeof parsed.distribuidora === 'string' ? parsed.distribuidora : null,
       isIdentityDoc: parsed.docType === 'identity',

@@ -384,8 +384,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   if (input.imageBase64 && !consumo.kwh && !consumo.reais) {
     const aiCfg = await loadAiConfig()
     billData = await extractBillFromImage(aiCfg, input.imageBase64, input.imageMediaType ?? 'image/jpeg')
-    if (billData.kwh)         consumo = { kwh: billData.kwh }
-    else if (billData.valor)  consumo = { reais: billData.valor }
+    if (billData.kwh)             consumo = { kwh: billData.kwh }
+    else if (billData.paineis)    consumo = { kwh: billData.paineis * 60 }  // 1 painel = 60 kWh
+    else if (billData.valor)      consumo = { reais: billData.valor }
     if (billData.medidor || billData.distribuidora) {
       const billInfo = [billData.medidor, billData.distribuidora].filter(Boolean).join(' | ')
       text = `${text}\n[Dados lidos da foto: ${billInfo}]`.trim()
