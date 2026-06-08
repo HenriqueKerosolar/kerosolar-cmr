@@ -14,12 +14,17 @@ type Session = { sock: any; status: string; qr: string | null; phone: string | n
 const g = globalThis as unknown as { __waSessions?: Map<string, Session> }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
 
-const SESSIONS_DIR = path.join(process.cwd(), 'wa-sessions')
+// Em produção Railway usa volume persistente em /data; em dev usa pasta local
+const SESSIONS_DIR = fs.existsSync('/data')
+  ? '/data/wa-sessions'
+  : path.join(process.cwd(), 'wa-sessions')
 
 const silentLogger: any = {
-  level: 'silent',
+  level: 'error',
   child: () => silentLogger,
-  trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {},
+  trace() {}, debug() {}, info() {}, warn() {},
+  error(...args: unknown[]) { console.error('[baileys]', ...args) },
+  fatal(...args: unknown[]) { console.error('[baileys fatal]', ...args) },
 }
 
 async function setStatus(accountId: string, data: Partial<{ status: string; qr: string | null; phone: string | null; lastError: string | null; connectedAt: Date | null }>) {
@@ -28,30 +33,52 @@ async function setStatus(accountId: string, data: Partial<{ status: string; qr: 
 
 /** Inicia (ou reinicia) a conexão de uma conta de WhatsApp. */
 export async function startSession(accountId: string): Promise<void> {
-  if (sessions.get(accountId)?.status === 'connected') return
+  // Previne sessões duplas: se já existe qualquer sessão ativa (connecting / qr / connected), ignora
+  if (sessions.has(accountId)) {
+    console.log(`[wa] startSession ${accountId} — sessão já ativa (${sessions.get(accountId)?.status}), ignorando`)
+    return
+  }
+
+  console.log('[wa] startSession', accountId)
 
   // imports dinâmicos — só carregam no servidor, quando necessário
   const baileys = await import('@whiskeysockets/baileys')
   const makeWASocket = (baileys.default ?? (baileys as any).makeWASocket) as any
-  const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = baileys as any
+  const { useMultiFileAuthState, DisconnectReason, Browsers,
+          fetchLatestWaWebVersion, fetchLatestBaileysVersion } = baileys as any
   const { Boom } = await import('@hapi/boom')
 
   const dir = path.join(SESSIONS_DIR, accountId)
   fs.mkdirSync(dir, { recursive: true })
   const { state, saveCreds } = await useMultiFileAuthState(dir)
-  const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }))
+  // fetchLatestWaWebVersion busca a versão atual direto dos servidores do WhatsApp (mais confiável)
+  const { version } = await (fetchLatestWaWebVersion ?? fetchLatestBaileysVersion)().catch((e: unknown) => {
+    console.error('[wa] fetchVersion failed:', e)
+    return { version: undefined }
+  })
+  console.log('[wa] using version', version)
+
+  // Reserva o slot ANTES de criar o socket para evitar race condition
+  sessions.set(accountId, { sock: null, status: 'connecting', qr: null, phone: null })
+  await setStatus(accountId, { status: 'connecting', qr: null, lastError: null })
+
+  const browserConfig = Browsers?.macOS?.('Chrome') ?? ['Mac OS X', 'Chrome', '130.0.0']
 
   const sock = makeWASocket({
     version,
     auth: state,
     printQRInTerminal: false,
     logger: silentLogger,
-    browser: ['KeroSolar CRM', 'Chrome', '1.0.0'],
+    browser: browserConfig,
     markOnlineOnConnect: false,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 30000,
+    retryRequestDelayMs: 2000,
+    maxMsgRetryCount: 2,
   })
-
-  sessions.set(accountId, { sock, status: 'connecting', qr: null, phone: null })
-  await setStatus(accountId, { status: 'connecting', qr: null, lastError: null })
+  // Atualiza o slot com o socket real
+  const sessRef = sessions.get(accountId)
+  if (sessRef) sessRef.sock = sock
 
   sock.ev.on('creds.update', saveCreds)
 
@@ -60,6 +87,7 @@ export async function startSession(accountId: string): Promise<void> {
     const sess = sessions.get(accountId)
 
     if (qr && sess) {
+      console.log('[wa] QR received for', accountId)
       const dataUrl = await QRCode.toDataURL(qr).catch(() => null)
       sess.qr = dataUrl
       sess.status = 'qr'
@@ -76,16 +104,23 @@ export async function startSession(accountId: string): Promise<void> {
 
     if (connection === 'close') {
       const code = (lastDisconnect?.error as InstanceType<typeof Boom>)?.output?.statusCode
-      const loggedOut = code === DisconnectReason.loggedOut
+      const loggedOut   = code === DisconnectReason.loggedOut
+      // credenciais ruins / servidor rejeitou → limpa sessão, não tenta reconectar em loop
+      const badSession  = code === DisconnectReason.badSession
+        || code === 401  // unauthorized
+        || code === 408  // stream timeout (credencial inválida)
+        || code === 428  // connection failed / stream error
+        || code === 440  // kicked
+        || code === 515  // restart required (versão desatualizada)
       sessions.delete(accountId)
-      if (loggedOut) {
-        // desconectou de vez — limpa credenciais
+      if (loggedOut || badSession) {
+        console.log(`[wa] sessão inválida (code ${code}) — limpando credenciais de ${accountId}`)
         fs.rmSync(dir, { recursive: true, force: true })
-        await setStatus(accountId, { status: 'disconnected', qr: null, phone: null, connectedAt: null })
+        await setStatus(accountId, { status: 'disconnected', qr: null, phone: null, connectedAt: null, lastError: badSession ? `Sessão rejeitada (${code}) — reconecte manualmente` : null })
       } else {
         await setStatus(accountId, { status: 'disconnected', qr: null, lastError: `close (${code})` })
-        // reconecta automaticamente
-        setTimeout(() => startSession(accountId).catch(() => {}), 3000)
+        // reconecta automaticamente só em quedas de rede (não em rejeição de credencial)
+        setTimeout(() => startSession(accountId).catch(() => {}), 5000)
       }
     }
   })
@@ -234,4 +269,37 @@ export async function disconnect(accountId: string): Promise<void> {
 export function getLiveStatus(accountId: string): { status: string; qr: string | null; phone: string | null } | null {
   const s = sessions.get(accountId)
   return s ? { status: s.status, qr: s.qr, phone: s.phone } : null
+}
+
+/**
+ * No startup:
+ * - Contas "connected" → tenta reconectar (sessão persistida em disco)
+ * - Contas "connecting" / "qr" → reseta para "disconnected" (QR expirou, usuário precisa reconectar manualmente)
+ * Chamado via instrumentation.ts.
+ */
+export async function reconnectAllOnStartup(): Promise<void> {
+  try {
+    // Reseta contas presas em connecting/qr (QR expirado, não vale reconectar automaticamente)
+    const stuck = await prisma.whatsappAccount.updateMany({
+      where: { status: { in: ['connecting', 'qr'] } },
+      data: { status: 'disconnected', qr: null },
+    })
+    if (stuck.count > 0) {
+      console.log(`[wa] ${stuck.count} conta(s) em qr/connecting resetadas para disconnected`)
+    }
+
+    // Só tenta reconectar as que estavam efetivamente conectadas
+    const accounts = await prisma.whatsappAccount.findMany({
+      where: { status: 'connected' },
+    })
+    if (accounts.length === 0) return
+    console.log(`[wa] Reconectando ${accounts.length} conta(s) no startup…`)
+    for (const acc of accounts) {
+      // pequeno delay entre cada conta para não sobrecarregar
+      await new Promise((r) => setTimeout(r, 2000))
+      startSession(acc.id).catch((e) => console.error(`[wa] startup reconnect ${acc.id}:`, e))
+    }
+  } catch (e) {
+    console.error('[wa] reconnectAllOnStartup error:', e)
+  }
 }
