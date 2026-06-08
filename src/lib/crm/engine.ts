@@ -52,6 +52,25 @@ const DEFAULT_RETURN_MESSAGE =
 /** Simula digitação: espera um tempo proporcional ao tamanho da mensagem (700ms + 30ms/caractere, máx 6s). */
 const simularDigitacao = (t: string) => new Promise<void>((r) => setTimeout(r, Math.min(6000, 700 + (t?.length ?? 0) * 30)))
 
+/**
+ * Verifica (de forma determinística) se a data cai em dia útil no fuso de Brasília.
+ * Dia útil = segunda a sexta, exceto feriados nacionais fixos.
+ * (LLM não calcula dia da semana de forma confiável; por isso validamos aqui.)
+ */
+function ehDiaUtil(date: Date): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit',
+  }).formatToParts(date)
+  const weekday = parts.find((p) => p.type === 'weekday')?.value
+  if (weekday === 'Sat' || weekday === 'Sun') return false
+  const dd = parts.find((p) => p.type === 'day')?.value
+  const mm = parts.find((p) => p.type === 'month')?.value
+  // Feriados nacionais fixos (MM-DD)
+  const feriadosFixos = ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '11-20', '12-25']
+  if (feriadosFixos.includes(`${mm}-${dd}`)) return false
+  return true
+}
+
 /** A etapa tem automação configurada? (blocos, chamada, palavra-chave ou inatividade) */
 function stageHasAutomation(flow: unknown): boolean {
   const f = flow as { blocks?: unknown[]; openingMessages?: unknown[]; keywordRules?: unknown[]; noReplyMinutes?: number } | null
@@ -706,7 +725,14 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   if (result.appointment?.scheduledAt) {
     try {
       const apptDate = new Date(result.appointment.scheduledAt)
-      if (!isNaN(apptDate.getTime()) && apptDate > now) {
+      // Bloqueio determinístico de dia NÃO útil (fim de semana/feriado) — a IA não
+      // calcula dia da semana de forma confiável, então validamos aqui.
+      if (!isNaN(apptDate.getTime()) && apptDate > now && !ehDiaUtil(apptDate)) {
+        outboundText = 'Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. Te respondo assim que ele confirmar! Mas caso queira agendar para um dia útil, é só me passar 😊'
+        outboundSender = 'ai'
+        leadUpdate.highPriority = true
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `⚠️ Cliente pediu agendamento em dia NÃO útil (${apptDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}). Encaminhado ao consultor.` } })
+      } else if (!isNaN(apptDate.getTime()) && apptDate > now) {
         const contactName = contact.name ?? lead.title
         const channelLabel = result.appointment.channel === 'phone' ? 'Ligação' : result.appointment.channel === 'video' ? 'Videochamada' : 'WhatsApp'
         const appt = await prisma.appointment.create({

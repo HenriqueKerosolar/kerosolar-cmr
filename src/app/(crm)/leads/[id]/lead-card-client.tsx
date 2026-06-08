@@ -48,7 +48,16 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   }, [lead.id])
 
   useEffect(() => { const t = setInterval(poll, 4000); return () => clearInterval(t) }, [poll])
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages])
+  // Auto-scroll só quando o usuário JÁ está perto do fim — se ele subiu para ler
+  // mensagens antigas, o polling não arrasta a tela para baixo.
+  const nearBottomRef = useRef(true)
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
+  useEffect(() => {
+    if (nearBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [messages])
 
   const run = (fn: () => Promise<unknown>) => startTransition(async () => { await fn(); router.refresh() })
 
@@ -124,7 +133,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
+        <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-auto p-4 space-y-3">
           {messages.map((m) => {
             if (m.senderType === 'system') return <div key={m.id} className="text-center"><span className="text-[11px] text-[--muted-foreground] bg-[--muted]/50 rounded-full px-2 py-0.5">{m.content}</span></div>
             const isIn = m.direction === 'inbound'
