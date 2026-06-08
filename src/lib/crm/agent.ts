@@ -123,11 +123,10 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
       `SÓ DEPOIS de apresentar o orçamento, se ainda não souber, você pode perguntar o tipo de medidor.`
   }
 
-  // Orçamento já armazenado no lead — injeta SOMENTE se o cliente está perguntando algo sobre ele
+  // Orçamento já armazenado no lead — injeta SEMPRE que existir, para a IA saber
+  // que o cliente JÁ TEM orçamento (não pedir a conta de novo, pode agendar visita).
   const storedSolar = opts.lead?.solar as Record<string, unknown> | undefined
-  const lastUserMsg = [...history].reverse().find((m) => m.role === 'user')?.content?.toLowerCase() ?? ''
-  const clienteAskingBudget = /parcela|presta[cç]|payback|retorno|econom|valor|pre[cç]o|cust[ao]|or[cç]amento|quanto|mensalidad|financ|kit|desconto|vista|avista|sistema solar|investimento/i.test(lastUserMsg)
-  if (storedSolar && !opts.estimate && clienteAskingBudget) {
+  if (storedSolar && !opts.estimate) {
     const brl = (v: unknown) =>
       typeof v === 'number' ? v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : null
     const num = (v: unknown) => typeof v === 'number' ? v : null
@@ -140,7 +139,7 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
       ? (storedSolar.financiamento as { prazo: number; parcela: number }[])
       : []
     if (sistema) {
-      let s = `\n\n## ORÇAMENTO JÁ ENVIADO A ESTE CLIENTE — use estes números para responder qualquer dúvida sobre o orçamento:\n`
+      let s = `\n\n## ⚠️ ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO. É PROIBIDO pedir a conta de luz, o consumo ou qualquer dado para orçar de novo — você JÁ TEM os números abaixo. Se ele pedir para AGENDAR VISITA, PODE prosseguir com o agendamento (NÃO exija orçamento, ele já tem).\n`
       if (conta)    s += `- Conta de luz atual: ${brl(conta)}/mês\n`
       if (consumo)  s += `- Consumo: ${consumo} kWh/mês\n`
       s += `- *Valor do sistema: ${brl(sistema)}*\n`
@@ -150,7 +149,7 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
         s += `- Opções de financiamento:\n`
         for (const f of fin) s += `  • ${f.prazo}x de ${brl(f.parcela)}/mês\n`
       }
-      s += `\nQuando o cliente perguntar sobre parcela, payback, economia, valor ou qualquer detalhe deste orçamento → responda com esses números (NÃO peça a conta de novo).`
+      s += `\nQuando o cliente perguntar sobre parcela, payback, economia, valor ou qualquer detalhe → responda com esses números. NUNCA peça a conta novamente.`
       system += s
     }
   }
@@ -281,7 +280,7 @@ Existem 3 situações possíveis:
 
 3) Cliente JÁ recebeu orçamento e quer FINANCIAMENTO → antes de agendar precisa verificar o crédito. Responda: "Ótimo! Para o financiamento precisamos primeiro verificar se o crédito está liberado. É rápido — me passa: nome completo, CPF, CEP, data de nascimento e e-mail. O ideal é que a conta de luz esteja no nome de quem vai financiar (ou de pai, mãe ou filhos)." Só agende após coletar esses dados ou indicar que serão verificados.
 
-Para identificar se já tem orçamento: verifique se o histórico da conversa já teve um orçamento apresentado (mensagem com "ORÇAMENTO SOLAR") ou se os dados de qualificação já estão preenchidos (billValue, consumoKwh).
+Para identificar se já tem orçamento: se houver no contexto acima o bloco "ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO", então ele JÁ TEM orçamento → use a situação 2 ou 3, NUNCA a 1 (não peça a conta). Também conta como "já tem orçamento" se o histórico já mostrou um orçamento (mensagem com "Seus números" / "ORÇAMENTO SOLAR") ou se billValue/consumoKwh já estão preenchidos.
 
 DIAS NÃO ÚTEIS (vale para visita técnica e qualquer agendamento): se o cliente pedir um dia de fim de semana ou feriado, informe gentilmente que não é dia útil. Se ele confirmar que quer esse dia mesmo assim, responda EXATAMENTE: "Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. Te respondo assim que ele confirmar! Mas caso queira agendar para um dia útil, é só me passar 😊" — e marque highPriority: true. Dias úteis = segunda a sexta, exceto feriados nacionais.`
 
