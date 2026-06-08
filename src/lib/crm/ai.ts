@@ -140,7 +140,7 @@ Responda SOMENTE com JSON válido, sem texto fora dele:
       if (!res.ok) return fallback
       raw = (await res.json()).choices?.[0]?.message?.content ?? ''
     }
-    const parsed = extractJson<typeof fallback>(raw)
+    const parsed = extractJson<typeof fallback & { docType?: string }>(raw)
     if (!parsed) return fallback
     return {
       kwh:           typeof parsed.kwh === 'number'          ? parsed.kwh           : null,
