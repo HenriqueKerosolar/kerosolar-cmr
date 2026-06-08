@@ -185,6 +185,24 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // Bloqueio TOTAL: cliente já recusou bot antes → só humano, nenhuma automação
   if (lead.humanOnly) return base
 
+  // 4.1) Aviso de migração do sistema — enviado UMA vez por lead enquanto a config existir.
+  //      Para desativar: apague a entrada 'migration_warning' em SystemConfig (Configurações).
+  {
+    const cfM = (lead.customFields as Record<string, unknown> | null) ?? {}
+    if (!cfM.migrationWarningSent) {
+      const migCfg = await prisma.systemConfig.findUnique({ where: { key: 'migration_warning' } })
+      if (migCfg?.value) {
+        const { dispatchOutbound } = await import('./flow')
+        await dispatchOutbound(conversation.id, migCfg.value, undefined, 'system')
+        await prisma.lead.update({
+          where: { id: lead.id },
+          data: { customFields: { ...cfM, migrationWarningSent: true } },
+        })
+        lead = { ...lead, customFields: { ...cfM, migrationWarningSent: true } } as typeof lead
+      }
+    }
+  }
+
   // IA só responde se: lead ON + conversa ON + funil ON + etapa ON
   const aiOn = lead.aiEnabled && conversation.aiEnabled
     && (fullPipeline?.botEnabled ?? true)

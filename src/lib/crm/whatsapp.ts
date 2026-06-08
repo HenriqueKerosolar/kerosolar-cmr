@@ -95,8 +95,9 @@ export async function startSession(accountId: string): Promise<void> {
       logger: silentLogger,
       browser: browserConfig,
       markOnlineOnConnect: false,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 30000,
+      connectTimeoutMs: 25000,
+      defaultQueryTimeoutMs: 25000,
+      keepAliveIntervalMs: 15000,
       retryRequestDelayMs: 2000,
       maxMsgRetryCount: 2,
       ...(proxyAgent ? { agent: proxyAgent, fetchAgent: proxyAgent } : {}),
@@ -105,10 +106,24 @@ export async function startSession(accountId: string): Promise<void> {
     const sessRef = sessions.get(accountId)
     if (sessRef) sessRef.sock = sock
 
+    // DEBUG: instrumenta o WebSocket cru pra ver onde trava via proxy
+    try {
+      const ws = (sock as any).ws
+      if (ws) {
+        ws.on?.('open', () => console.log('[wa-ws] OPEN — websocket conectou'))
+        ws.on?.('error', (e: any) => console.error('[wa-ws] ERROR', e?.message || e))
+        ws.on?.('close', (c: any) => console.log('[wa-ws] CLOSE', c))
+        ws.on?.('CB:iq', () => console.log('[wa-ws] recebeu IQ do servidor'))
+      } else {
+        console.log('[wa-ws] sock.ws indisponível para instrumentar')
+      }
+    } catch (e) { console.error('[wa-ws] instrument falhou', e) }
+
     sock.ev.on('creds.update', saveCreds)
 
     sock.ev.on('connection.update', async (u: any) => {
       const { connection, lastDisconnect, qr } = u
+      console.log('[wa] connection.update:', JSON.stringify({ connection, hasQr: !!qr, err: (lastDisconnect?.error as any)?.output?.statusCode }))
       const sess = sessions.get(accountId)
 
       if (qr && sess) {
@@ -129,25 +144,34 @@ export async function startSession(accountId: string): Promise<void> {
 
       if (connection === 'close') {
         const code = (lastDisconnect?.error as InstanceType<typeof Boom>)?.output?.statusCode
-        const loggedOut  = code === DisconnectReason.loggedOut
-        // credenciais ruins / servidor rejeitou → limpa sessão, não tenta reconectar em loop
-        const badSession = code === DisconnectReason.badSession
-          || code === 401  // unauthorized
-          || code === 408  // stream timeout (credencial inválida)
-          || code === 428  // connection failed / stream error
-          || code === 440  // kicked
-          || code === 515  // restart required (versão desatualizada / IP rejeitado)
         sessions.delete(accountId)
-        if (loggedOut || badSession) {
-          console.log(`[wa] sessão inválida (code ${code}) — limpando credenciais de ${accountId}`)
+
+        // 515 (restartRequired) é NORMAL — o WhatsApp pede pra reiniciar a conexão
+        // logo após gerar o QR / parear. Deve reconectar IMEDIATAMENTE sem limpar creds.
+        const restartRequired = code === DisconnectReason.restartRequired || code === 515
+        // logout de verdade → apaga credenciais, não reconecta
+        const loggedOut = code === DisconnectReason.loggedOut || code === 401
+        // outra sessão assumiu o número → não reconecta
+        const replaced  = code === DisconnectReason.connectionReplaced || code === 440
+
+        if (restartRequired) {
+          console.log(`[wa] restart required (${code}) — reconectando imediatamente, mantendo credenciais`)
+          await setStatus(accountId, { status: 'connecting', qr: null })
+          setTimeout(() => startSession(accountId).catch(() => {}), 1500)
+        } else if (loggedOut) {
+          console.log(`[wa] logout (${code}) — limpando credenciais de ${accountId}`)
           fs.rmSync(dir, { recursive: true, force: true })
           await setStatus(accountId, {
             status: 'disconnected', qr: null, phone: null, connectedAt: null,
-            lastError: badSession ? `Sessão rejeitada (${code}) — reconecte manualmente` : null,
+            lastError: 'Desconectado pelo WhatsApp — reconecte e leia o QR novamente',
           })
+        } else if (replaced) {
+          console.log(`[wa] conexão substituída (${code}) — outra sessão assumiu o número`)
+          await setStatus(accountId, { status: 'disconnected', qr: null, lastError: 'Conexão aberta em outro lugar' })
         } else {
+          // queda de rede / timeout → reconecta com delay, mantém credenciais
+          console.log(`[wa] close (${code}) — reconectando em 5s`)
           await setStatus(accountId, { status: 'disconnected', qr: null, lastError: `close (${code})` })
-          // reconecta automaticamente só em quedas de rede (não em rejeição de credencial)
           setTimeout(() => startSession(accountId).catch(() => {}), 5000)
         }
       }

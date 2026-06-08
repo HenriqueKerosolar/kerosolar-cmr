@@ -51,6 +51,8 @@ export function wantsHuman(text: string): boolean {
     /\b(transfer\w+|falar|quero)\b.*\b(consultor|especialista|atendente)\b/,
     /\b(quero|pode)\s+(o\s+)?consultor\b/,
     /\bnao\s+(e|eh|é)\s+(bot|rob[oô]|ia)\??/,
+    /^(ja\s+)?(fui\s+|ja\s+fui\s+)?atendid[ao][.!]?$/,  // "atendido" — botão do aviso de migração
+    /\bja\s+(fui\s+)?atendid[ao]\b/,
   ]
   return patterns.some((re) => re.test(t))
 }

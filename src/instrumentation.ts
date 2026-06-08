@@ -5,13 +5,14 @@ export async function register() {
   const { startScheduler } = await import('@/lib/crm/flow')
   startScheduler()
 
-  // Religa as contas de WhatsApp que estavam conectadas antes do restart
-  try {
-    const { prisma } = await import('@/lib/prisma')
-    const { startSession } = await import('@/lib/crm/whatsapp')
-    const connected = await prisma.whatsappAccount.findMany({ where: { status: 'connected' }, select: { id: true } })
-    for (const a of connected) startSession(a.id).catch(() => {})
-  } catch (e) {
-    console.error('[instrumentation] restore wa', e)
-  }
+  // Reconecta todas as contas que estavam ativas (connected / qr / connecting) antes do restart
+  // Delay de 3s para o banco estar pronto antes de começar as reconexões
+  setTimeout(async () => {
+    try {
+      const { reconnectAllOnStartup } = await import('@/lib/crm/whatsapp')
+      await reconnectAllOnStartup()
+    } catch (e) {
+      console.error('[instrumentation] restore wa:', e)
+    }
+  }, 3000)
 }
