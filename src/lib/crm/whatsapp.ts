@@ -64,6 +64,27 @@ export async function startSession(accountId: string): Promise<void> {
     })
     console.log('[wa] using version', version)
 
+    // Proxy opcional — define PROXY_URL no Railway para rotear pelo IP residencial
+    // Formatos aceitos:
+    //   HTTP/HTTPS : http://user:pass@host:port
+    //   SOCKS5     : socks5://user:pass@host:port
+    let proxyAgent: import('http').Agent | undefined
+    const proxyUrl = process.env.PROXY_URL
+    if (proxyUrl) {
+      try {
+        if (proxyUrl.startsWith('socks')) {
+          const { SocksProxyAgent } = await import('socks-proxy-agent')
+          proxyAgent = new SocksProxyAgent(proxyUrl)
+        } else {
+          const { HttpsProxyAgent } = await import('https-proxy-agent')
+          proxyAgent = new HttpsProxyAgent(proxyUrl)
+        }
+        console.log('[wa] usando proxy:', proxyUrl.replace(/:([^@:]+)@/, ':***@'))
+      } catch (e) {
+        console.error('[wa] falha ao criar proxy agent:', e)
+      }
+    }
+
     const browserConfig = Browsers?.macOS?.('Chrome') ?? ['Mac OS X', 'Chrome', '130.0.0']
 
     const sock = makeWASocket({
@@ -77,6 +98,7 @@ export async function startSession(accountId: string): Promise<void> {
       defaultQueryTimeoutMs: 30000,
       retryRequestDelayMs: 2000,
       maxMsgRetryCount: 2,
+      ...(proxyAgent ? { agent: proxyAgent, fetchAgent: proxyAgent } : {}),
     })
     // Atualiza o slot com o socket real
     const sessRef = sessions.get(accountId)
