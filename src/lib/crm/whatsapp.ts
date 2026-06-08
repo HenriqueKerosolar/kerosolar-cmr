@@ -63,7 +63,6 @@ export async function startSession(accountId: string): Promise<void> {
       return { version: undefined }
     })
     console.log('[wa] using version', version)
-    console.log('[wa] PROXY_URL:', process.env.PROXY_URL ? process.env.PROXY_URL.replace(/:([^@:]+)@/, ':***@') : 'NÃO DEFINIDO')
 
     // Proxy opcional — define PROXY_URL no Railway para rotear pelo IP residencial
     // Formatos aceitos:
@@ -106,24 +105,10 @@ export async function startSession(accountId: string): Promise<void> {
     const sessRef = sessions.get(accountId)
     if (sessRef) sessRef.sock = sock
 
-    // DEBUG: instrumenta o WebSocket cru pra ver onde trava via proxy
-    try {
-      const ws = (sock as any).ws
-      if (ws) {
-        ws.on?.('open', () => console.log('[wa-ws] OPEN — websocket conectou'))
-        ws.on?.('error', (e: any) => console.error('[wa-ws] ERROR', e?.message || e))
-        ws.on?.('close', (c: any) => console.log('[wa-ws] CLOSE', c))
-        ws.on?.('CB:iq', () => console.log('[wa-ws] recebeu IQ do servidor'))
-      } else {
-        console.log('[wa-ws] sock.ws indisponível para instrumentar')
-      }
-    } catch (e) { console.error('[wa-ws] instrument falhou', e) }
-
     sock.ev.on('creds.update', saveCreds)
 
     sock.ev.on('connection.update', async (u: any) => {
       const { connection, lastDisconnect, qr } = u
-      console.log('[wa] connection.update:', JSON.stringify({ connection, hasQr: !!qr, err: (lastDisconnect?.error as any)?.output?.statusCode }))
       const sess = sessions.get(accountId)
 
       if (qr && sess) {
