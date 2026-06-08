@@ -63,6 +63,7 @@ export async function startSession(accountId: string): Promise<void> {
       return { version: undefined }
     })
     console.log('[wa] using version', version)
+    console.log('[wa] PROXY_URL:', process.env.PROXY_URL ? process.env.PROXY_URL.replace(/:([^@:]+)@/, ':***@') : 'NÃO DEFINIDO')
 
     // Proxy opcional — define PROXY_URL no Railway para rotear pelo IP residencial
     // Formatos aceitos:
