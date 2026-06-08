@@ -77,17 +77,28 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             <p className="font-semibold text-sm truncate">{lead.contact?.name ?? lead.title}</p>
             <p className="text-xs text-[--muted-foreground]">{lead.contact?.phone ?? '—'}</p>
           </div>
-          {/* Toggle IA */}
+          {/* Toggle IA — liga/desliga a IA neste lead, vale em qualquer etapa */}
           <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-[--muted-foreground]">IA</span>
+            <span className={`text-xs font-medium ${aiEnabled ? 'text-[--primary]' : 'text-amber-600 dark:text-amber-400'}`}>
+              {aiEnabled ? '🤖 IA ativa' : '👤 Manual'}
+            </span>
             <button onClick={() => { setAiEnabled(!aiEnabled); run(() => toggleLeadAi(lead.id, !aiEnabled)) }}
+              title={aiEnabled ? 'Desligar a IA neste lead (você assume)' : 'Ligar a IA neste lead'}
               className={`relative w-11 h-6 rounded-full transition ${aiEnabled ? 'bg-[--primary]' : 'bg-[--muted]'}`}>
               <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition ${aiEnabled ? 'left-5' : 'left-0.5'}`} />
             </button>
           </div>
         </div>
 
-        {!aiEnabled && <div className="px-4 py-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-xs text-center">👤 Você assumiu — a IA está pausada neste lead.</div>}
+        {!aiEnabled && (
+          <div className="px-4 py-2 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-xs text-center flex items-center justify-center gap-2 flex-wrap">
+            <span>👤 Você assumiu — a IA está pausada neste lead.</span>
+            <button onClick={() => { setAiEnabled(true); run(() => toggleLeadAi(lead.id, true)) }}
+              className="px-2.5 py-1 rounded-md bg-[--primary] text-[--primary-foreground] font-medium hover:opacity-90 transition">
+              🤖 Ligar IA de novo
+            </button>
+          </div>
+        )}
 
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
           {messages.map((m) => {
