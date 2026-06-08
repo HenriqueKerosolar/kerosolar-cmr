@@ -34,7 +34,9 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [tab, setTab] = useState<'chat' | 'timeline'>('chat')
   const [deleting, setDeleting] = useState(false)
   const [testMode, setTestMode] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   // Polling do chat
   const poll = useCallback(async () => {
@@ -64,6 +66,29 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
     }
   }
 
+  async function uploadFile(file: File) {
+    if (uploading) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('caption', text.trim())   // texto do input vai como legenda
+      const res = await fetch(`/api/leads/${lead.id}/send-media`, { method: 'POST', body: fd })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(data.error || 'Falha ao enviar o arquivo.')
+      } else {
+        setText('')
+        await poll()
+      }
+    } catch {
+      alert('Falha ao enviar o arquivo.')
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
   const cf = lead.customFields ?? {}
 
   return (
@@ -77,17 +102,16 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             <p className="font-semibold text-sm truncate">{lead.contact?.name ?? lead.title}</p>
             <p className="text-xs text-[--muted-foreground]">{lead.contact?.phone ?? '—'}</p>
           </div>
-          {/* Toggle IA — liga/desliga a IA neste lead, vale em qualquer etapa */}
-          <div className="ml-auto flex items-center gap-2">
-            <span className={`text-xs font-medium ${aiEnabled ? 'text-[--primary]' : 'text-amber-600 dark:text-amber-400'}`}>
-              {aiEnabled ? '🤖 IA ativa' : '👤 Manual'}
-            </span>
-            <button onClick={() => { setAiEnabled(!aiEnabled); run(() => toggleLeadAi(lead.id, !aiEnabled)) }}
-              title={aiEnabled ? 'Desligar a IA neste lead (você assume)' : 'Ligar a IA neste lead'}
-              className={`relative w-11 h-6 rounded-full transition ${aiEnabled ? 'bg-[--primary]' : 'bg-[--muted]'}`}>
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition ${aiEnabled ? 'left-5' : 'left-0.5'}`} />
-            </button>
-          </div>
+          {/* Botão IA — liga/desliga a IA neste lead, vale em qualquer etapa */}
+          <button onClick={() => { setAiEnabled(!aiEnabled); run(() => toggleLeadAi(lead.id, !aiEnabled)) }}
+            title={aiEnabled ? 'Clique para DESLIGAR a IA (você assume o atendimento)' : 'Clique para LIGAR a IA'}
+            className={`ml-auto shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+              aiEnabled
+                ? 'bg-[--primary] text-[--primary-foreground] hover:opacity-90'
+                : 'bg-amber-500 text-white hover:opacity-90'
+            }`}>
+            {aiEnabled ? '🤖 IA ativa · Desligar' : '👤 Manual · Ligar IA'}
+          </button>
         </div>
 
         {!aiEnabled && (
@@ -108,7 +132,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
               <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
                 <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${isIn ? 'bg-[--muted] rounded-bl-sm' : 'bg-[--primary] text-[--primary-foreground] rounded-br-sm'}`}>
                   {!isIn && <div className="text-[10px] opacity-70 mb-0.5">{m.senderType === 'ai' ? '🤖 IA' : m.senderType === 'human' ? '👤 Você' : 'Sistema'}</div>}
-                  {m.mediaUrl && <div className="text-xs underline mb-1">📎 mídia</div>}
+                  {m.mediaUrl && (
+                    /\.(png|jpe?g|webp|gif)$/i.test(m.mediaUrl)
+                      ? /* eslint-disable-next-line @next/next/no-img-element */
+                        <a href={m.mediaUrl} target="_blank" rel="noreferrer"><img src={m.mediaUrl} alt="anexo" className="max-w-full rounded-lg mb-1 max-h-60 object-contain" /></a>
+                      : <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs underline mb-1">📎 Abrir arquivo</a>
+                  )}
                   <WhatsAppText text={m.content} />
                 </div>
               </div>
@@ -118,9 +147,20 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         </div>
 
         <div className="border-t border-[--border] p-3 space-y-2">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* Anexar documento/imagem — só no envio real (não no modo teste) */}
+            <input ref={fileRef} type="file" className="hidden"
+              accept="image/*,video/mp4,application/pdf,.doc,.docx,.xls,.xlsx"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f) }} />
+            {!testMode && (
+              <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                title="Anexar documento ou imagem"
+                className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-[--input] text-lg hover:bg-[--accent] disabled:opacity-50">
+                {uploading ? '⏳' : '📎'}
+              </button>
+            )}
             <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-              placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem…'}
+              placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou anexe um arquivo…'}
               className={`flex-1 px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : 'border-[--input] bg-[--background]'}`} />
             <button onClick={send} disabled={sending || !text.trim()}
               className={`px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${testMode ? 'bg-violet-600 text-white' : 'bg-[--primary] text-[--primary-foreground]'}`}>
