@@ -162,6 +162,24 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     })
   }
 
+  // 3.5) DEDUPLICAÇÃO — evita resposta duplicada quando a MESMA mensagem chega 2x
+  // (Baileys reentrega/retransmite, reconexão pós-restart reprocessa offline, evento duplo).
+  // Se já existe uma mensagem inbound com este externalMessageId, ignora silenciosamente.
+  if (input.externalMessageId) {
+    const jaProcessada = await prisma.message.findFirst({
+      where: { direction: 'inbound', externalId: input.externalMessageId },
+      select: { id: true },
+    })
+    if (jaProcessada) {
+      console.log('[engine] mensagem duplicada ignorada:', input.externalMessageId)
+      return {
+        contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
+        reply: null, aiHandled: false, handoff: false,
+        stage: pipeline.stages.find((s) => s.id === lead!.stageId)?.name ?? firstStage.name,
+      }
+    }
+  }
+
   // 4) Mensagem recebida
   const now = new Date()
   await prisma.message.create({

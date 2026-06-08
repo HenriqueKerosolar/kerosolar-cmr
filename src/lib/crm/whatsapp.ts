@@ -11,8 +11,12 @@ import { loadAiConfig, transcribeAudio } from './ai'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session> }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string> }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
+
+// Dedup em memória: IDs de mensagens já processadas (evita resposta duplicada
+// quando o Baileys dispara messages.upsert 2x para a mesma mensagem).
+const seenMsgs: Set<string> = (g.__waSeenMsgs ??= new Set())
 
 // Em produção Railway usa volume persistente em /data; em dev usa pasta local
 const SESSIONS_DIR = fs.existsSync('/data')
@@ -182,6 +186,15 @@ async function handleIncoming(accountId: string, msg: any) {
   if (msg.key.fromMe) return
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
+
+  // Dedup em memória por ID da mensagem — barra eventos duplicados do mesmo processo
+  const msgId: string | undefined = msg.key?.id
+  if (msgId) {
+    if (seenMsgs.has(msgId)) { console.log('[wa] msg duplicada ignorada (mem):', msgId); return }
+    seenMsgs.add(msgId)
+    // limita o tamanho do Set pra não vazar memória (mantém ~os últimos 1000)
+    if (seenMsgs.size > 1000) { for (const id of seenMsgs) { seenMsgs.delete(id); if (seenMsgs.size <= 800) break } }
+  }
 
   let text: string =
     msg.message?.conversation ||
