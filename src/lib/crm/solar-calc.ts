@@ -187,13 +187,23 @@ function parseBrNumber(s: string): number {
 }
 
 /** Tenta extrair consumo (kWh) e/ou valor (R$) de um texto livre. Retorna ambos quando disponíveis. */
+// 1 painel/placa/módulo ≈ 60 kWh/mês (regra comercial KeroSolar)
+const KWH_POR_PAINEL = 60
+
 export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   const t = text.toLowerCase()
   let kwh: number | undefined
   let reais: number | undefined
 
-  const kwhMatch = t.match(/([\d.,]+)\s*(kwh|kw\/h|quilowatt|kw h)/)
-  if (kwhMatch) { const k = parseBrNumber(kwhMatch[1]); if (k > 0) kwh = k }
+  // Pedido por nº de placas/painéis/módulos → converte para kWh (1 painel = 60 kWh)
+  // Ex.: "5 painéis" = 300 kWh, "10 placas" = 600 kWh. Ignora a potência em W ("540w").
+  const painelMatch = t.match(/(\d+)\s*(pain[eé]is|painel|placas?|m[oó]dulos?)/)
+  if (painelMatch) { const n = parseInt(painelMatch[1], 10); if (n > 0) kwh = n * KWH_POR_PAINEL }
+
+  if (!kwh) {
+    const kwhMatch = t.match(/([\d.,]+)\s*(kwh|kw\/h|quilowatt|kw h)/)
+    if (kwhMatch) { const k = parseBrNumber(kwhMatch[1]); if (k > 0) kwh = k }
+  }
 
   // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações
   const reaisMatch =
