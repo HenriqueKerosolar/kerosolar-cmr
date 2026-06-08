@@ -170,7 +170,7 @@ export async function transcribeAudio(
       : mimeType.includes('mp4') || mimeType.includes('m4a') ? 'm4a'
       : 'mp3'
     const fd = new FormData()
-    fd.append('file', new Blob([audioBuffer], { type: mimeType }), `audio.${ext}`)
+    fd.append('file', new Blob([new Uint8Array(audioBuffer)], { type: mimeType }), `audio.${ext}`)
     fd.append('model', 'whisper-1')
     fd.append('language', 'pt')   // prioriza português, mas Whisper detecta outros idiomas automaticamente
     const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
