@@ -745,12 +745,17 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
           },
         })
         await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `📅 Agendamento criado: ${channelLabel} em ${apptDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.` } })
-        // Lembrete 2h antes (só agenda se faltar mais de 2h — desativado no simulador)
-        const reminderAt = new Date(apptDate.getTime() - 2 * 60 * 60 * 1000)
-        if (reminderAt > now && !isSimulator) {
-          await prisma.scheduledAction.create({
-            data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'appointment_reminder', payload: { appointmentId: appt.id } as object, runAt: reminderAt },
-          })
+        // Confirmação 1 dia antes + lembrete 2h antes (só agenda se houver tempo — desativado no simulador)
+        if (!isSimulator) {
+          const confirmAt = new Date(apptDate.getTime() - 24 * 60 * 60 * 1000)  // 1 dia antes: pede confirmação
+          const reminderAt = new Date(apptDate.getTime() - 2 * 60 * 60 * 1000)  // 2h antes: lembrete final
+          for (const runAt of [confirmAt, reminderAt]) {
+            if (runAt > now) {
+              await prisma.scheduledAction.create({
+                data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'appointment_reminder', payload: { appointmentId: appt.id } as object, runAt },
+              })
+            }
+          }
         }
       }
     } catch (e) { console.error('[appointment save]', e) }

@@ -277,13 +277,18 @@ Existem 3 situações possíveis:
 
 1) Cliente AINDA NÃO recebeu orçamento e pede visita → responda: "Para marcarmos a visita técnica precisamos primeiro fazer o seu orçamento! Assim o consultor já vai com os números em mãos. Você pode me enviar a sua conta de luz ou me passar o consumo médio mensal?" NÃO agende sem orçamento.
 
-2) Cliente JÁ recebeu orçamento e quer pagar À VISTA ou no CARTÃO → pode agendar normalmente. Pergunte só o melhor dia e horário (NÃO pergunte canal — visita técnica é presencial).
+2) Cliente JÁ recebeu orçamento e quer pagar À VISTA ou no CARTÃO → pode agendar. Pergunte SOMENTE o melhor DIA e HORÁRIO. É TERMINANTEMENTE PROIBIDO perguntar "qual canal/meio prefere" (WhatsApp, ligação, videochamada) — a VISITA TÉCNICA é PRESENCIAL, alguém vai ao endereço do cliente. O channel do appointment é SEMPRE "visit".
 
 3) Cliente JÁ recebeu orçamento e quer FINANCIAMENTO → antes de agendar precisa verificar o crédito. Responda: "Ótimo! Para o financiamento precisamos primeiro verificar se o crédito está liberado. É rápido — me passa: nome completo, CPF, CEP, data de nascimento e e-mail. O ideal é que a conta de luz esteja no nome de quem vai financiar (ou de pai, mãe ou filhos)." Só agende após coletar esses dados ou indicar que serão verificados.
 
 Para identificar se já tem orçamento: se houver no contexto acima o bloco "ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO", então ele JÁ TEM orçamento → use a situação 2 ou 3, NUNCA a 1 (não peça a conta). Também conta como "já tem orçamento" se o histórico já mostrou um orçamento (mensagem com "Seus números" / "ORÇAMENTO SOLAR") ou se billValue/consumoKwh já estão preenchidos.
 
-DIAS NÃO ÚTEIS (vale para visita técnica e qualquer agendamento): se o cliente pedir um dia de fim de semana ou feriado, informe gentilmente que não é dia útil. Se ele confirmar que quer esse dia mesmo assim, responda EXATAMENTE: "Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. Te respondo assim que ele confirmar! Mas caso queira agendar para um dia útil, é só me passar 😊" — e marque highPriority: true. Dias úteis = segunda a sexta, exceto feriados nacionais.`
+CONFIRMAÇÃO ANTES DE MARCAR: quando o cliente disser um dia e horário, NÃO grave o agendamento ainda. Primeiro REPITA o resumo para ele confirmar: "Então fica assim: visita técnica (presencial, no seu endereço) na [dia] às [hora]. Posso confirmar? 😊". Só preencha o "appointment" no JSON DEPOIS que o cliente responder confirmando ("sim", "pode confirmar", "isso", etc.).
+
+DIAS NÃO ÚTEIS — NUNCA agende em fim de semana ou feriado. Se o cliente pedir um dia desses:
+  a) PRIMEIRO ofereça trocar para um dia útil: "Esse dia cai no fim de semana / feriado e não fazemos visita nesse dia 😊 Quer que eu marque num dia de semana? Me diz qual dia útil fica melhor pra você." NÃO preencha o appointment.
+  b) SÓ se o cliente INSISTIR no dia não útil, responda EXATAMENTE: "Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. Te respondo assim que ele confirmar! Mas caso queira agendar para um dia útil, é só me passar 😊" — e marque highPriority: true, sem preencher o appointment.
+Dias úteis = segunda a sexta, exceto feriados nacionais.`
 
   // Regra fixa: agendamento de ligação
   system += `\n\n## LIGAÇÃO/AGENDAMENTO: quando o cliente confirmar um agendamento (dia e horário definidos), ` +

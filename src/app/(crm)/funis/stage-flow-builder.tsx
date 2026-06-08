@@ -35,6 +35,30 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 
 export type NoReply = { minutes: number; message?: string; targetStageName?: string }
 
+/** Campo de tempo com unidade (minuto/hora/dia). Guarda sempre em MINUTOS internamente. */
+function TimeInput({ minutes, onChange }: { minutes: number; onChange: (m: number) => void }) {
+  const infer: 'min' | 'hour' | 'day' =
+    minutes > 0 && minutes % 1440 === 0 ? 'day'
+    : minutes > 0 && minutes % 60 === 0 ? 'hour'
+    : 'min'
+  const [unit, setUnit] = useState<'min' | 'hour' | 'day'>(infer)
+  const factor = unit === 'day' ? 1440 : unit === 'hour' ? 60 : 1
+  const value = Math.round((minutes / factor) * 100) / 100
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input type="number" min={0} step="any" value={value}
+        onChange={(e) => onChange(Math.round((parseFloat(e.target.value) || 0) * factor))}
+        className="w-20 px-2 py-1 rounded border border-[--input] bg-[--background] text-right" />
+      <select value={unit} onChange={(e) => setUnit(e.target.value as 'min' | 'hour' | 'day')}
+        className="px-1.5 py-1 rounded border border-[--input] bg-[--background] text-sm">
+        <option value="min">minuto(s)</option>
+        <option value="hour">hora(s)</option>
+        <option value="day">dia(s)</option>
+      </select>
+    </span>
+  )
+}
+
 export function StageFlowBuilder({ blocks, setBlocks, allStages, noReply, setNoReply }: {
   blocks: FlowBlock[]
   setBlocks: (b: FlowBlock[]) => void
@@ -84,7 +108,7 @@ export function StageFlowBuilder({ blocks, setBlocks, allStages, noReply, setNoR
             )}
             {b.type === 'wait' && (
               <div className="flex items-center gap-2 text-sm">Esperar
-                <input type="number" min={0} value={b.minutes ?? 0} onChange={(e) => upd(b.id, { minutes: parseInt(e.target.value) || 0 })} className="w-24 px-2 py-1 rounded border border-[--input] bg-[--background] text-right" /> minutos
+                <TimeInput minutes={b.minutes ?? 0} onChange={(m) => upd(b.id, { minutes: m })} />
               </div>
             )}
             {b.type === 'question' && (
@@ -153,8 +177,8 @@ export function StageFlowBuilder({ blocks, setBlocks, allStages, noReply, setNoR
         <p className="text-sm font-medium">⏳ Se o cliente não responder uma pergunta</p>
         <div className="flex items-center gap-2 text-sm flex-wrap">
           <span>Após</span>
-          <input type="number" min={0} value={noReply.minutes} onChange={(e) => setNoReply({ ...noReply, minutes: parseInt(e.target.value) || 0 })} className="w-20 px-2 py-1 rounded border border-[--input] bg-[--background] text-right" />
-          <span>minutos sem resposta, enviar:</span>
+          <TimeInput minutes={noReply.minutes} onChange={(m) => setNoReply({ ...noReply, minutes: m })} />
+          <span>sem resposta, enviar:</span>
         </div>
         <textarea value={noReply.message ?? ''} onChange={(e) => setNoReply({ ...noReply, message: e.target.value })} rows={2} placeholder="Mensagem de follow-up (ex: Vi que você não respondeu...)" className="w-full px-2 py-1.5 rounded border border-[--input] bg-[--background] text-sm outline-none" />
         <div className="flex items-center gap-2 text-sm flex-wrap">
