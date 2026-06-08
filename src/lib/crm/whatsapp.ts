@@ -4,6 +4,7 @@ import fs from 'fs'
 import QRCode from 'qrcode'
 import { prisma } from '@/lib/prisma'
 import { ingestMessage } from './engine'
+import { loadAiConfig, transcribeAudio } from './ai'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -102,12 +103,79 @@ async function handleIncoming(accountId: string, msg: any) {
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
 
-  const text =
+  let text: string =
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption ||
     ''
+
+  let displayText: string | undefined
+
+  // Áudio / PTT → transcreve via OpenAI Whisper
+  const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage)
+  if (isAudio) {
+    try {
+      const { downloadMediaMessage } = await import('@whiskeysockets/baileys') as any
+      const sess = sessions.get(accountId)
+      const buffer: Buffer = await downloadMediaMessage(
+        msg, 'buffer', {},
+        sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
+      )
+      const cfg = await loadAiConfig()
+      const transcript = await transcribeAudio(cfg, buffer, 'audio/ogg')
+      if (transcript) {
+        text = transcript
+        displayText = `🎤 "${transcript}"`
+      }
+    } catch (e) {
+      console.error('[wa audio]', e)
+    }
+  }
+
+  // Documento PDF → extrai texto e detecta se é conta de luz ou outro documento
+  const isDoc = !!(msg.message?.documentMessage)
+  if (isDoc && !text.trim()) {
+    try {
+      const docMsg = msg.message.documentMessage
+      const mimeType: string = docMsg?.mimetype ?? ''
+      if (mimeType === 'application/pdf' || docMsg?.fileName?.toLowerCase().endsWith('.pdf')) {
+        const { downloadMediaMessage } = await import('@whiskeysockets/baileys') as any
+        const sess = sessions.get(accountId)
+        const buffer: Buffer = await downloadMediaMessage(
+          msg, 'buffer', {},
+          sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
+        )
+        const { execFile } = await import('child_process')
+        const { writeFile, unlink } = await import('fs/promises')
+        const { tmpdir } = await import('os')
+        const { join } = await import('path')
+        const tmp = join(tmpdir(), `wa_doc_${Date.now()}.pdf`)
+        await writeFile(tmp, buffer)
+        const pdfText: string = await new Promise((resolve) => {
+          execFile('pdftotext', [tmp, '-'], (err, stdout) => {
+            unlink(tmp).catch(() => {})
+            resolve(err || !stdout.trim() ? '' : stdout.trim().slice(0, 3000))
+          })
+        })
+        if (pdfText) {
+          const { parseBillText, isBillPdf } = await import('./pdf-utils')
+          const summary = parseBillText(pdfText)
+          const isBill = isBillPdf(summary)
+          if (isBill) {
+            text = `Segue minha conta de luz (PDF):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema.\n\n${pdfText.slice(0, 1500)}`
+            displayText = '📄 Conta de luz enviada (PDF)'
+          } else {
+            text = `Segue um documento PDF. Leia o conteúdo abaixo e responda qualquer dúvida sobre ele:\n\n${pdfText}`
+            displayText = '📄 Documento enviado (PDF)'
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[wa doc]', e)
+    }
+  }
+
   if (!text.trim()) return
 
   const phone = jid.split('@')[0]
@@ -121,6 +189,7 @@ async function handleIncoming(accountId: string, msg: any) {
     channel: 'whatsapp',
     externalId: phone,
     text: text.trim(),
+    displayText,
     name,
     phone,
     accountId,

@@ -5,6 +5,85 @@ import { verifySession } from '@/lib/dal'
 import { revalidatePath } from 'next/cache'
 import { dispatchOutbound, enterStage } from '@/lib/crm/flow'
 
+/**
+ * Simula uma mensagem do cliente entrando (inbound) — uso exclusivo do agente
+ * para testar o bot dentro de qualquer etapa sem precisar abrir o Simulador.
+ */
+export async function simulateClientMessage(leadId: string, text: string) {
+  await verifySession()
+  const conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
+  if (!conv) throw new Error('Esse lead ainda não tem conversa.')
+  const leadRow = await prisma.lead.findUnique({ where: { id: leadId }, select: { contactId: true, pipelineId: true } })
+  const contact = leadRow?.contactId ? await prisma.contact.findUnique({ where: { id: leadRow.contactId } }) : null
+  const { ingestMessage } = await import('@/lib/crm/engine')
+  await ingestMessage({
+    channel: conv.channel,
+    externalId: (conv.externalId || contact?.phone || leadId) as string,
+    text,
+    name: contact?.name ?? undefined,
+    phone: contact?.phone ?? undefined,
+    pipelineId: leadRow?.pipelineId ?? null,
+  })
+  revalidatePath(`/leads/${leadId}`)
+}
+
+/** Cria um lead manualmente (lançamento pelo atendente). */
+export async function createManualLead(data: {
+  name?: string; phone?: string; email?: string
+  pipelineId: string; stageId: string; value?: number; startBot?: boolean
+}) {
+  await verifySession()
+  const phone = data.phone?.replace(/\D/g, '') || null
+  const name = data.name?.trim() || null
+
+  // contato por telefone (cria se não existir)
+  let contact = phone
+    ? await prisma.contact.findFirst({ where: { OR: [{ phone }, { whatsappId: phone }] } })
+    : null
+  if (!contact) {
+    contact = await prisma.contact.create({
+      data: { name, phone, whatsappId: phone, email: data.email?.trim() || null },
+    })
+  } else {
+    const upd: Record<string, string> = {}
+    if (name && !contact.name) upd.name = name
+    if (data.email?.trim() && !contact.email) upd.email = data.email.trim()
+    if (Object.keys(upd).length) contact = await prisma.contact.update({ where: { id: contact.id }, data: upd })
+  }
+
+  const lead = await prisma.lead.create({
+    data: {
+      title: name || phone || 'Lead manual',
+      pipelineId: data.pipelineId,
+      stageId: data.stageId,
+      contactId: contact.id,
+      value: data.value ?? 0,
+    },
+  })
+
+  // conversa (WhatsApp) pra poder atender pelo card
+  if (phone) {
+    const existing = await prisma.conversation.findUnique({
+      where: { channel_contactId: { channel: 'whatsapp', contactId: contact.id } },
+    })
+    if (!existing) {
+      await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead.id, externalId: phone } })
+    } else if (existing.leadId !== lead.id) {
+      await prisma.conversation.update({ where: { id: existing.id }, data: { leadId: lead.id } })
+    }
+  }
+
+  await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Lead criado manualmente.' } })
+
+  // Aciona o bot/fluxo da etapa (trata como lead novo) se solicitado e houver telefone
+  if (data.startBot && phone) {
+    await enterStage(lead.id, data.stageId).catch((e) => console.error('[manual startBot]', e))
+  }
+
+  revalidatePath('/leads')
+  return lead.id
+}
+
 /** Atendente envia uma mensagem manual (texto e/ou mídia por URL). */
 export async function sendManualMessage(leadId: string, text: string, media?: { url: string; type: 'image' | 'video' | 'document' }) {
   const session = await verifySession()
@@ -18,10 +97,11 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
 /** Liga/desliga a IA para este lead (atendente assume ou devolve pro bot). */
 export async function toggleLeadAi(leadId: string, enabled: boolean) {
   await verifySession()
-  await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: enabled } })
+  // ao reativar, libera o bloqueio total (humanOnly)
+  await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: enabled, ...(enabled ? { humanOnly: false } : {}) } })
   const conv = await prisma.conversation.findFirst({ where: { leadId } })
   if (conv) await prisma.conversation.update({ where: { id: conv.id }, data: { aiEnabled: enabled } })
-  await prisma.note.create({ data: { leadId, type: 'system', content: enabled ? 'IA reativada.' : 'Atendente assumiu a conversa.' } })
+  await prisma.note.create({ data: { leadId, type: 'system', content: enabled ? 'IA reativada (bloqueio liberado).' : 'Atendente assumiu a conversa.' } })
   revalidatePath(`/leads/${leadId}`)
 }
 
@@ -42,6 +122,17 @@ export async function moveLeadStage(leadId: string, stageId: string) {
   await prisma.note.create({ data: { leadId, type: 'stage_change', content: `Movido para "${stage?.name}".` } })
   await enterStage(leadId, stageId).catch(() => {})
   revalidatePath(`/leads/${leadId}`)
+  revalidatePath('/leads')
+}
+
+/** Apaga o lead e tudo ligado a ele (conversas, mensagens, tarefas, notas, agendamentos). */
+export async function deleteLead(leadId: string) {
+  await verifySession()
+  await prisma.$transaction([
+    prisma.scheduledAction.deleteMany({ where: { leadId } }),
+    prisma.conversation.deleteMany({ where: { leadId } }), // cascata: mensagens
+    prisma.lead.delete({ where: { id: leadId } }),          // cascata: tarefas, notas
+  ])
   revalidatePath('/leads')
 }
 

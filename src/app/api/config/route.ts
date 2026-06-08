@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionSafe } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
 
-const ALLOWED_KEYS = ['ai_provider', 'anthropic_key', 'openai_key', 'ai_model', 'bot_name', 'bot_prompt', 'handoff_message']
+const ALLOWED_KEYS = ['ai_provider', 'anthropic_key', 'openai_key', 'ai_model', 'bot_name', 'bot_prompt', 'handoff_message', 'low_consumption_message', 'return_message', 'after_hours_message', 'budget_followup_message', 'consultant_name']
 
 export async function POST(req: NextRequest) {
   const session = await getSessionSafe()

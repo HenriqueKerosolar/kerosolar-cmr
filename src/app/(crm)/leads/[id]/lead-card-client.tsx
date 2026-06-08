@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect, useCallback, useTransition } from 'react'
 import Link from 'next/link'
+import { WhatsAppText } from '@/components/whatsapp-text'
 import { useRouter } from 'next/navigation'
 import {
-  sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask,
+  sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage,
 } from '@/app/actions/lead'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; createdAt: string }
@@ -21,7 +22,7 @@ type Lead = {
 }
 
 const fmtBRL = (n?: unknown) => typeof n === 'number' ? n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'
-const channelIcon: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪' }
+const channelIcon: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
 
 export function LeadCardClient({ lead }: { lead: Lead }) {
   const router = useRouter()
@@ -31,6 +32,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [tab, setTab] = useState<'chat' | 'timeline'>('chat')
+  const [deleting, setDeleting] = useState(false)
+  const [testMode, setTestMode] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Polling do chat
@@ -51,8 +54,14 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
     if (!text.trim() || sending) return
     setSending(true)
     const t = text; setText('')
-    setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, createdAt: new Date().toISOString() }])
-    try { await sendManualMessage(lead.id, t); await poll() } finally { setSending(false) }
+    if (testMode) {
+      // modo teste: simula mensagem do cliente → bot responde
+      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'inbound', senderType: 'contact', content: t, mediaUrl: null, createdAt: new Date().toISOString() }])
+      try { await simulateClientMessage(lead.id, t); await poll() } finally { setSending(false) }
+    } else {
+      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, createdAt: new Date().toISOString() }])
+      try { await sendManualMessage(lead.id, t); await poll() } finally { setSending(false) }
+    }
   }
 
   const cf = lead.customFields ?? {}
@@ -89,7 +98,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${isIn ? 'bg-[--muted] rounded-bl-sm' : 'bg-[--primary] text-[--primary-foreground] rounded-br-sm'}`}>
                   {!isIn && <div className="text-[10px] opacity-70 mb-0.5">{m.senderType === 'ai' ? '🤖 IA' : m.senderType === 'human' ? '👤 Você' : 'Sistema'}</div>}
                   {m.mediaUrl && <div className="text-xs underline mb-1">📎 mídia</div>}
-                  {m.content}
+                  <WhatsAppText text={m.content} />
                 </div>
               </div>
             )
@@ -97,10 +106,20 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           {messages.length === 0 && <p className="text-center text-sm text-[--muted-foreground] mt-8">Nenhuma mensagem ainda.</p>}
         </div>
 
-        <div className="border-t border-[--border] p-3 flex gap-2">
-          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="Escreva uma mensagem…" className="flex-1 px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
-          <button onClick={send} disabled={sending || !text.trim()} className="px-4 py-2 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">Enviar</button>
+        <div className="border-t border-[--border] p-3 space-y-2">
+          <div className="flex gap-2">
+            <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
+              placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem…'}
+              className={`flex-1 px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : 'border-[--input] bg-[--background]'}`} />
+            <button onClick={send} disabled={sending || !text.trim()}
+              className={`px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${testMode ? 'bg-violet-600 text-white' : 'bg-[--primary] text-[--primary-foreground]'}`}>
+              {testMode ? '🧪' : 'Enviar'}
+            </button>
+          </div>
+          <button onClick={() => setTestMode(!testMode)}
+            className={`text-[11px] px-2 py-0.5 rounded-full border transition ${testMode ? 'bg-violet-100 dark:bg-violet-950/30 border-violet-400 text-violet-700 dark:text-violet-300' : 'border-[--border] text-[--muted-foreground] hover:border-violet-400 hover:text-violet-600'}`}>
+            {testMode ? '🧪 Modo teste ativo — enviando como cliente' : '🧪 Testar bot (simular cliente)'}
+          </button>
         </div>
       </div>
 
@@ -111,11 +130,11 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           <p className="text-xs text-[--muted-foreground]">{lead.pipeline.icon} {lead.pipeline.name}</p>
         </div>
 
-        {/* Etapa */}
+        {/* Etapa — transferir o lead de etapa */}
         <div>
-          <label className="block text-xs font-medium text-[--muted-foreground] mb-1">Etapa</label>
+          <label className="block text-xs font-medium text-[--muted-foreground] mb-1">Etapa (transferir)</label>
           <select value={lead.stage.id} onChange={(e) => run(() => moveLeadStage(lead.id, e.target.value))}
-            className="w-full px-2 py-1.5 rounded-lg border border-[--input] bg-[--background] text-sm">
+            className="w-full px-2 py-1.5 rounded-lg border border-[--input] bg-[--background] text-sm font-medium">
             {lead.pipeline.stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
@@ -138,10 +157,24 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         {/* Qualificação */}
         <div>
           <p className="text-xs font-medium text-[--muted-foreground] mb-1">Qualificação</p>
-          {([['Conta de luz', fmtBRL(cf.billValue)], ['Imóvel', (cf.propertyType as string) ?? '—'], ['Telhado', (cf.roofType as string) ?? '—'], ['Cidade', (cf.city as string) ?? '—']] as [string, string][]).map(([k, v]) => (
+          {([['Conta de luz', fmtBRL(cf.billValue)], ['Consumo', cf.consumoKwh ? `${cf.consumoKwh} kWh` : '—'], ['Imóvel', (cf.propertyType as string) ?? '—'], ['Telhado', (cf.roofType as string) ?? '—'], ['Cidade', (cf.city as string) ?? '—']] as [string, string][]).map(([k, v]) => (
             <div key={k} className="flex justify-between gap-2"><span className="text-[--muted-foreground]">{k}</span><span className="font-medium">{v}</span></div>
           ))}
         </div>
+
+        {/* ☀️ Simulação Solar */}
+        {(() => {
+          const s = cf.solar as Record<string, number> | undefined
+          if (!s) return null
+          return (
+            <div className="p-3 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-200 dark:border-amber-900/40">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1.5">☀️ Simulação Solar</p>
+              {([['Sistema', fmtBRL(s.valorSistema)], ['Economia/mês', fmtBRL(s.economiaMensal)], ['Payback', `${s.paybackAnos} anos`], ['Economia 30 anos', fmtBRL(s.economia30Anos)], ['Menor parcela', fmtBRL(s.menorParcela)]] as [string, string][]).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-2"><span className="text-[--muted-foreground]">{k}</span><span className="font-medium">{v}</span></div>
+              ))}
+            </div>
+          )
+        })()}
 
         {/* Tarefas */}
         <div>
@@ -168,6 +201,21 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Apagar lead */}
+        <div className="pt-2 border-t border-[--border]">
+          <button
+            onClick={() => {
+              if (deleting) return
+              if (!confirm(`Apagar o lead "${lead.title}"? Isso remove a conversa, mensagens, tarefas e notas. Não dá pra desfazer.`)) return
+              setDeleting(true)
+              startTransition(async () => { await deleteLead(lead.id); router.push('/leads') })
+            }}
+            disabled={deleting}
+            className="w-full px-3 py-2 rounded-lg border border-red-300 dark:border-red-900/50 text-red-600 dark:text-red-400 text-sm font-medium hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50">
+            {deleting ? 'Apagando…' : '🗑️ Apagar lead'}
+          </button>
         </div>
       </div>
     </div>

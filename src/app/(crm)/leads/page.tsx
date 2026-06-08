@@ -2,6 +2,9 @@ import { verifySession } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
 import { ensureDefaultPipeline } from '@/lib/crm/engine'
 import Link from 'next/link'
+import { BroadcastButton } from './broadcast-button'
+import { NewLeadButton } from './new-lead-button'
+import { ImportButton } from './import-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +22,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     include: {
       leads: {
         where: { status: 'open' },
-        orderBy: { lastMessageAt: 'desc' },
+        orderBy: [{ highPriority: 'desc' }, { lastMessageAt: 'desc' }],
         include: { contact: true },
       },
     },
@@ -40,9 +43,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         <Link href="/funis" className="px-3 py-1.5 rounded-lg text-sm border border-dashed border-[--border] text-[--muted-foreground] hover:bg-[--accent]">+ Gerenciar</Link>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-bold">{current.icon} {current.name}</h1>
-        <span className="text-sm text-[--muted-foreground]">{totalLeads} leads abertos</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-[--muted-foreground]">{totalLeads} leads abertos</span>
+          <ImportButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
+          <NewLeadButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
+          <BroadcastButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
+        </div>
       </div>
 
       {/* Kanban */}
@@ -58,7 +66,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               {stage.leads.map((lead) => (
                 <Link key={lead.id} href={`/leads/${lead.id}`}
                   className="p-3 rounded-xl border border-[--border] bg-[--card] hover:shadow-sm transition block space-y-1.5">
-                  <p className="font-medium text-sm truncate">{lead.title}</p>
+                  <p className="font-medium text-sm truncate">{lead.highPriority && '⚡ '}{lead.title}</p>
                   {lead.contact?.phone && <p className="text-xs text-[--muted-foreground]">{lead.contact.phone}</p>}
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {lead.source && (

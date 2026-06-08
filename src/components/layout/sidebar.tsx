@@ -10,6 +10,7 @@ const NAV = [
   { href: '/funis',         icon: '📊', label: 'Funis' },
   { href: '/whatsapp',      icon: '📱', label: 'WhatsApp' },
   { href: '/meta',          icon: '📷', label: 'Insta/Face' },
+  { href: '/agenda',        icon: '📅', label: 'Agenda' },
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },
   { href: '/configuracoes', icon: '⚙️', label: 'Config' },
 ]

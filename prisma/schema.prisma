@@ -18,6 +18,7 @@ enum Channel {
   instagram
   facebook
   simulator
+  webchat
 }
 
 enum LeadStatus {
@@ -87,6 +88,9 @@ model Pipeline {
   botName     String?  // nome do bot neste funil (ex: "Sol")
   botPrompt   String?  // prompt/script de IA específico deste funil
   aiModel     String?  // modelo de IA específico (opcional)
+  // Janela de envio das mensagens automáticas deste funil (dias úteis)
+  sendStartHour Int    @default(9)
+  sendEndHour   Int    @default(18)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -182,6 +186,10 @@ model Lead {
   lossReason    String?
   customFields  Json?      // qualificação: billValue, propertyType, roofType, city, etc.
   aiEnabled     Boolean    @default(true)
+  humanOnly     Boolean    @default(false)  // cliente recusou bot → bloqueia TODAS as automações
+  afterHoursAsked   Boolean @default(false) // já perguntamos "registrar ou prosseguir" hoje à noite?
+  afterHoursProceed Boolean @default(false) // cliente optou por prosseguir agora (fora do horário)
+  highPriority      Boolean @default(false) // Grupo A/demanda OU forte intenção de fechar → topo do inbox
   lastMessageAt DateTime?
   closedAt      DateTime?
   createdAt     DateTime   @default(now())
@@ -190,6 +198,7 @@ model Lead {
   conversations Conversation[]
   tasks         Task[]
   notes         Note[]
+  appointments  Appointment[]
 
   @@index([pipelineId, stageId])
   @@index([contactId])
@@ -211,6 +220,7 @@ model Conversation {
   account       WhatsappAccount? @relation(fields: [accountId], references: [id])
   externalId    String?
   aiEnabled     Boolean   @default(true)
+  flowState     Json?     // estado do fluxo de blocos: { stageId, index, waitingField }
   lastMessageAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -315,6 +325,26 @@ model ScheduledAction {
 
   @@index([done, runAt])
   @@map("scheduled_actions")
+}
+
+// ─── Agenda de consultorias ───────────────────────────────────────────────────
+
+model Appointment {
+  id           String    @id @default(cuid())
+  leadId       String
+  lead         Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  title        String
+  scheduledAt  DateTime
+  channel      String    // whatsapp | phone | video
+  status       String    @default("scheduled") // scheduled | done | cancelled
+  notes        String?
+  remindedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([scheduledAt, status])
+  @@index([leadId])
+  @@map("appointments")
 }
 
 // ─── WhatsApp (conexão via QR, sem API oficial — Baileys) ────────────────────

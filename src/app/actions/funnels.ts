@@ -33,6 +33,7 @@ export async function createPipeline(data: { name: string; icon?: string; descri
 export async function updatePipeline(id: string, data: {
   name?: string; icon?: string; description?: string
   botEnabled?: boolean; botName?: string; botPrompt?: string; aiModel?: string
+  sendStartHour?: number; sendEndHour?: number
 }) {
   await verifySession()
   await prisma.pipeline.update({ where: { id }, data })
@@ -70,24 +71,34 @@ export async function addStage(pipelineId: string, name: string) {
   revalidatePath('/leads')
 }
 
+export type FlowBlock =
+  | { id: string; type: 'message'; text: string; mediaUrl?: string }
+  | { id: string; type: 'wait'; minutes: number }
+  | { id: string; type: 'question'; text: string; field: string }
+  | { id: string; type: 'condition'; source: 'field' | 'reply'; field?: string; op: 'contains' | 'equals'; value: string; gotoId: string }
+  | { id: string; type: 'move_stage'; targetStageId: string }
+  | { id: string; type: 'task'; title: string }
+  | { id: string; type: 'notify' }
+  | { id: string; type: 'ai' }
+  | { id: string; type: 'handoff' }
+
 export type StageFlow = {
-  openingMessages: { text: string; delaySeconds: number; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document' }[]
-  handoffToAi: boolean   // depois da "chamada", entrega a conversa pra IA da etapa
-  // Mudança de etapa por PALAVRA-CHAVE (e variações) detectada na mensagem do cliente
+  blocks?: FlowBlock[]   // construtor de blocos (Salesbot)
+  openingMessages?: { text: string; delaySeconds: number; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document' }[]
+  handoffToAi?: boolean
   keywordRules?: { keywords: string; targetStageId: string }[]
-  // Mudança automática por inatividade do cliente
-  noReplyMinutes?: number          // 0/ausente = desligado
-  noReplyTargetStageId?: string    // etapa de destino se o cliente não responder
+  noReplyMinutes?: number
+  noReplyTargetStageId?: string
 }
 
 export async function updateStage(id: string, data: {
   name?: string; color?: string; isWon?: boolean; isLost?: boolean
-  botEnabled?: boolean; botPrompt?: string; flow?: StageFlow
+  botEnabled?: boolean; botPrompt?: string; flow?: Record<string, unknown>
 }) {
   await verifySession()
   await prisma.stage.update({
     where: { id },
-    data: { ...data, flow: data.flow ? (data.flow as unknown as object) : undefined },
+    data: { ...data, flow: data.flow !== undefined ? (data.flow as unknown as object) : undefined },
   })
   revalidatePath('/funis')
   revalidatePath('/leads')

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ingestMessage } from '@/lib/crm/engine'
 import { getMetaConfig, sendMetaMessage, fetchMetaProfile } from '@/lib/crm/meta'
+import { loadAiConfig, transcribeAudio } from '@/lib/crm/ai'
 
 /**
  * Webhook da Meta (Messenger + Instagram).
@@ -38,11 +39,34 @@ export async function POST(req: NextRequest) {
       for (const ev of entry.messaging ?? []) {
         if (ev.message?.is_echo) continue
         const senderId: string = ev.sender?.id
-        const text: string =
-          ev.message?.text ||
-          ev.message?.attachments?.[0]?.payload?.url ||
-          ''
-        if (!senderId || !text.trim()) continue
+        if (!senderId) continue
+
+        let text: string = ev.message?.text || ''
+        let displayText: string | undefined
+
+        // Áudio → transcreve via Whisper
+        const attachment = ev.message?.attachments?.[0]
+        const audioUrl: string | null =
+          attachment?.type === 'audio' ? (attachment?.payload?.url ?? null) : null
+
+        if (audioUrl) {
+          try {
+            const audioRes = await fetch(audioUrl)
+            if (audioRes.ok) {
+              const buf = Buffer.from(await audioRes.arrayBuffer())
+              const aiCfg = await loadAiConfig()
+              const transcript = await transcribeAudio(aiCfg, buf, 'audio/mpeg')
+              if (transcript) {
+                text = transcript
+                displayText = `🎤 "${transcript}"`
+              }
+            }
+          } catch (e) {
+            console.error('[meta audio]', e)
+          }
+        }
+
+        if (!text.trim()) continue
 
         const name = await fetchMetaProfile(channel, senderId).catch(() => null)
 
@@ -50,6 +74,7 @@ export async function POST(req: NextRequest) {
           channel,
           externalId: senderId,
           text: text.trim(),
+          displayText,
           name,
           pipelineId: cfg?.pipelineId,
           externalMessageId: ev.message?.mid,

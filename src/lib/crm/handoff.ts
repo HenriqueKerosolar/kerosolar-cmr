@@ -5,10 +5,27 @@ export const DEFAULT_HANDOFF_MESSAGE =
   'Entendido! 🙋 A partir de agora vou desativar o atendimento automático para você. ' +
   'Você será transferido para um de nossos atendentes humanos e em breve será atendido. Obrigado pela paciência!'
 
-/** Mensagem de transferência (configurável em Config → key handoff_message). */
+/** Dentro do horário comercial de atendimento? (seg–sex, 9h–18h, fuso de Brasília) */
+function dentroDoHorarioComercial(): boolean {
+  const spHour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+  const spDay = new Date().toLocaleString('en-US', { weekday: 'short', timeZone: 'America/Sao_Paulo' })
+  const diaUtil = !['Sat', 'Sun'].includes(spDay)
+  return diaUtil && spHour >= 9 && spHour < 18
+}
+
+/**
+ * Mensagem de transferência para o consultor (dinâmica):
+ * - dentro do horário: avisa que o consultor entra em contato em breve
+ * - fora do horário: avisa que já encaminhou e o atendimento segue no horário comercial
+ * Nome do consultor configurável (key consultant_name, padrão "Henrique Leal").
+ */
 export async function getHandoffMessage(): Promise<string> {
-  const row = await prisma.systemConfig.findUnique({ where: { key: 'handoff_message' } })
-  return row?.value?.trim() || DEFAULT_HANDOFF_MESSAGE
+  const nameRow = await prisma.systemConfig.findUnique({ where: { key: 'consultant_name' } })
+  const consultor = nameRow?.value?.trim() || 'Henrique Leal'
+  const base = `Perfeito! Já encaminhei seu atendimento para o nosso consultor ${consultor}.`
+  return dentroDoHorarioComercial()
+    ? `${base} Em breve ele entra em contato com você 😊`
+    : `${base} O atendimento continuará no horário comercial 😊`
 }
 
 /**
@@ -31,6 +48,8 @@ export function wantsHuman(text: string): boolean {
     /\b(sair|parar|para|chega)\s+(do|de|com o)\s+(bot|rob[oô]|ia|atendimento automatico)\b/,
     /\bquero\s+(um\s+)?humano\b/,
     /\bme\s+(transfere|transfira|passa)\s+(para|pro|pra)\b/,
+    /\b(transfer\w+|falar|quero)\b.*\b(consultor|especialista|atendente)\b/,
+    /\b(quero|pode)\s+(o\s+)?consultor\b/,
     /\bnao\s+(e|eh|é)\s+(bot|rob[oô]|ia)\??/,
   ]
   return patterns.some((re) => re.test(t))
@@ -42,10 +61,13 @@ export function wantsHuman(text: string): boolean {
  */
 export async function performHandoff(leadId: string, conversationId: string, reason = 'Cliente pediu atendimento humano'): Promise<string> {
   const msg = await getHandoffMessage()
-  await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: false } })
+  // Bloqueio TOTAL: desliga IA + marca humanOnly (impede QUALQUER automação)
+  await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: false, humanOnly: true } })
   await prisma.conversation.update({ where: { id: conversationId }, data: { aiEnabled: false, lastMessageAt: new Date() } })
+  // Cancela todas as ações agendadas pendentes (chamadas, timers de inatividade)
+  await prisma.scheduledAction.updateMany({ where: { leadId, done: false }, data: { done: true } })
   await prisma.task.create({ data: { leadId, title: reason, type: 'message', dueAt: new Date() } })
-  await prisma.note.create({ data: { leadId, type: 'system', content: `${reason} — IA desativada, transferido para humano.` } })
+  await prisma.note.create({ data: { leadId, type: 'system', content: `${reason} — TODAS as automações pausadas, transferido para humano.` } })
   await prisma.message.create({
     data: { conversationId, direction: 'outbound', senderType: 'system', content: msg },
   })

@@ -6,10 +6,9 @@ import {
   createPipeline, updatePipeline, deletePipeline,
   addStage, updateStage, deleteStage, setPipelineChannels,
 } from '@/app/actions/funnels'
+import { StageFlowBuilder, type FlowBlock, type NoReply } from './stage-flow-builder'
 
-type FlowMsg = { text: string; delaySeconds: number; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document' }
-type KeywordRule = { keywords: string; targetStageId: string }
-type StageFlow = { openingMessages: FlowMsg[]; handoffToAi: boolean; keywordRules?: KeywordRule[]; noReplyMinutes?: number; noReplyTargetStageId?: string }
+type StageFlow = { blocks?: FlowBlock[]; openingMessages?: unknown[]; handoffToAi?: boolean; keywordRules?: unknown[]; noReplyMinutes?: number; noReplyTargetStageId?: string }
 type Stage = {
   id: string; name: string; color: string | null; sortOrder: number
   isWon: boolean; isLost: boolean; botEnabled: boolean; botPrompt: string | null
@@ -19,6 +18,7 @@ type Pipeline = {
   id: string; name: string; icon: string | null; description: string | null
   isDefault: boolean; botEnabled: boolean; botName: string | null
   botPrompt: string | null; aiModel: string | null
+  sendStartHour: number; sendEndHour: number
   stages: Stage[]
   whatsappAccounts: { accountId: string }[]
   _count: { leads: number }
@@ -135,8 +135,6 @@ function StagesEditor({ pipeline, run, pending }: { pipeline: Pipeline; run: (fn
             </div>
             <input defaultValue={s.name} onBlur={(e) => e.target.value !== s.name && run(() => updateStage(s.id, { name: e.target.value }))}
               className="flex-1 bg-transparent outline-none text-sm font-medium border-b border-transparent focus:border-[--primary]" />
-            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={s.isWon} onChange={(e) => run(() => updateStage(s.id, { isWon: e.target.checked, isLost: false }))} /> Ganho</label>
-            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={s.isLost} onChange={(e) => run(() => updateStage(s.id, { isLost: e.target.checked, isWon: false }))} /> Perdido</label>
             <button onClick={() => setExpanded(expanded === s.id ? null : s.id)}
               className={`text-xs px-2.5 py-1 rounded-lg border transition ${expanded === s.id ? 'bg-[--primary] text-[--primary-foreground] border-[--primary]' : 'border-[--border] hover:bg-[--accent]'}`}>
               ⚙️ Bot/IA
@@ -158,32 +156,22 @@ function StagesEditor({ pipeline, run, pending }: { pipeline: Pipeline; run: (fn
 
 // ─── Configurador de Bot + IA de uma etapa ──────────────────────────────────────
 function StageBotPanel({ stage, allStages, run, pending }: { stage: Stage; allStages: Stage[]; run: (fn: () => Promise<unknown>) => void; pending: boolean }) {
-  const initial = stage.flow ?? { openingMessages: [], handoffToAi: true }
-  const [msgs, setMsgs] = useState<FlowMsg[]>(initial.openingMessages ?? [])
-  const [handoff, setHandoff] = useState(initial.handoffToAi ?? true)
+  const initial = (stage.flow ?? {}) as { blocks?: FlowBlock[]; noReply?: NoReply }
+  const [blocks, setBlocks] = useState<FlowBlock[]>(initial.blocks ?? [])
+  const [noReply, setNoReply] = useState<NoReply>(initial.noReply ?? { minutes: 0 })
   const [prompt, setPrompt] = useState(stage.botPrompt ?? '')
-  const [noReplyMin, setNoReplyMin] = useState(initial.noReplyMinutes ?? 0)
-  const [noReplyTarget, setNoReplyTarget] = useState(initial.noReplyTargetStageId ?? '')
-  const [rules, setRules] = useState<KeywordRule[]>(initial.keywordRules ?? [])
+  const [saved, setSaved] = useState(false)
 
-  const addMsg = () => setMsgs([...msgs, { text: '', delaySeconds: 0 }])
-  const updMsg = (i: number, patch: Partial<FlowMsg>) => setMsgs(msgs.map((m, idx) => idx === i ? { ...m, ...patch } : m))
-  const delMsg = (i: number) => setMsgs(msgs.filter((_, idx) => idx !== i))
-
-  const addRule = () => setRules([...rules, { keywords: '', targetStageId: '' }])
-  const updRule = (i: number, patch: Partial<KeywordRule>) => setRules(rules.map((r, idx) => idx === i ? { ...r, ...patch } : r))
-  const delRule = (i: number) => setRules(rules.filter((_, idx) => idx !== i))
-
-  const save = () => run(() => updateStage(stage.id, {
-    botPrompt: prompt,
-    flow: {
-      openingMessages: msgs.filter((m) => m.text.trim() || m.mediaUrl),
-      handoffToAi: handoff,
-      keywordRules: rules.filter((r) => r.keywords.trim() && r.targetStageId),
-      noReplyMinutes: noReplyMin > 0 ? noReplyMin : undefined,
-      noReplyTargetStageId: noReplyMin > 0 && noReplyTarget ? noReplyTarget : undefined,
-    },
-  }))
+  const save = () => {
+    setSaved(false)
+    run(async () => {
+      await updateStage(stage.id, {
+        botPrompt: prompt,
+        flow: { blocks, noReply: noReply.minutes > 0 ? noReply : undefined },
+      })
+      setSaved(true)
+    })
+  }
 
   return (
     <div className="border-t border-[--border] bg-[--muted]/20 p-4 space-y-5">
@@ -196,95 +184,29 @@ function StageBotPanel({ stage, allStages, run, pending }: { stage: Stage; allSt
         <span className="text-sm font-medium">Bot/IA ativo nesta etapa</span>
       </div>
 
-      {/* Chamada (mensagens de abertura) */}
+      {/* Construtor de blocos */}
       <div>
-        <p className="text-sm font-medium mb-1">📢 Chamada da etapa</p>
-        <p className="text-xs text-[--muted-foreground] mb-2">Mensagens que o bot dispara automaticamente quando o lead <b>entra</b> nesta etapa. Defina um atraso (delay) para cada uma.</p>
-        <div className="space-y-2">
-          {msgs.map((m, i) => (
-            <div key={i} className="p-3 rounded-lg border border-[--border] bg-[--card] space-y-2">
-              <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
-                <span>#{i + 1}</span>
-                <span className="ml-auto">Aguardar</span>
-                <input type="number" min={0} value={Math.round(m.delaySeconds / 60)}
-                  onChange={(e) => updMsg(i, { delaySeconds: Math.max(0, parseInt(e.target.value) || 0) * 60 })}
-                  className="w-16 px-2 py-1 rounded border border-[--input] bg-[--background] text-right" />
-                <span>min antes de enviar</span>
-                <button onClick={() => delMsg(i)} className="text-[--destructive] ml-1">🗑</button>
-              </div>
-              <textarea value={m.text} onChange={(e) => updMsg(i, { text: e.target.value })} rows={2}
-                placeholder="Texto da mensagem… (ex: Oi {nome}! Vi que você tem interesse em energia solar ☀️)"
-                className="w-full px-2 py-1.5 rounded border border-[--input] bg-[--background] text-sm outline-none" />
-              <input value={m.mediaUrl ?? ''} onChange={(e) => updMsg(i, { mediaUrl: e.target.value, mediaType: 'image' })}
-                placeholder="(opcional) URL de imagem/vídeo/PDF para enviar junto"
-                className="w-full px-2 py-1 rounded border border-[--input] bg-[--background] text-xs outline-none" />
-            </div>
-          ))}
-          <button onClick={addMsg} className="text-xs px-3 py-1.5 rounded-lg border border-dashed border-[--border] hover:bg-[--accent]">+ Adicionar mensagem da chamada</button>
-        </div>
+        <p className="text-sm font-medium mb-1">🤖 Fluxo do bot (blocos)</p>
+        <p className="text-xs text-[--muted-foreground] mb-2">Monte o fluxo em sequência. Ele roda quando o lead <b>entra</b> nesta etapa. Use {'{nome}'} nas mensagens.</p>
+        <StageFlowBuilder blocks={blocks} setBlocks={setBlocks} noReply={noReply} setNoReply={setNoReply} allStages={allStages.filter((s) => s.id !== stage.id)} />
       </div>
-
-      {/* Entrega para IA */}
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={handoff} onChange={(e) => setHandoff(e.target.checked)} />
-        Após a chamada, deixar a <b>IA desta etapa</b> conduzir a conversa
-      </label>
 
       {/* Script de IA da etapa */}
       <div>
-        <p className="text-sm font-medium mb-1">🤖 Script de IA desta etapa</p>
-        <p className="text-xs text-[--muted-foreground] mb-2">Prompt específico desta etapa (substitui o do funil). Use {'{BOT_NAME}'} para o nome do bot.</p>
-        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={8}
-          placeholder={'Ex (etapa Orçamento): Você é {BOT_NAME}. O cliente já foi qualificado. Seu objetivo nesta etapa é coletar os dados finais (consumo em kWh, endereço completo) e dizer que enviará o orçamento em até 24h.'}
+        <p className="text-sm font-medium mb-1">🧠 Script de IA desta etapa</p>
+        <p className="text-xs text-[--muted-foreground] mb-2">Usado quando o fluxo chega no bloco "Entregar p/ IA". Substitui o prompt do funil. Use {'{BOT_NAME}'}.</p>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={6}
+          placeholder={'Ex: Você é {BOT_NAME}. O cliente já foi qualificado. Conduza para o fechamento...'}
           className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none font-mono" />
       </div>
 
-      {/* 🔑 Mudança de etapa por palavra-chave */}
-      <div className="p-3 rounded-lg border border-[--border] bg-[--card] space-y-2">
-        <p className="text-sm font-medium">🔑 Mudar de etapa por palavra-chave</p>
-        <p className="text-xs text-[--muted-foreground]">Se o cliente escrever alguma dessas palavras (separe por vírgula — pode usar variações/raízes, ex: <i>fech, comprar, quero</i>), o lead muda de etapa automaticamente.</p>
-        <div className="space-y-2">
-          {rules.map((r, i) => (
-            <div key={i} className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-[--muted-foreground]">Se disser</span>
-              <input value={r.keywords} onChange={(e) => updRule(i, { keywords: e.target.value })}
-                placeholder="fech, comprar, quero fechar"
-                className="flex-1 min-w-[140px] px-2 py-1 rounded border border-[--input] bg-[--background] text-sm" />
-              <span className="text-xs text-[--muted-foreground]">→ mover para</span>
-              <select value={r.targetStageId} onChange={(e) => updRule(i, { targetStageId: e.target.value })}
-                className="px-2 py-1 rounded border border-[--input] bg-[--background] text-sm">
-                <option value="">— etapa —</option>
-                {allStages.filter((s) => s.id !== stage.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              <button onClick={() => delRule(i)} className="text-[--destructive] text-xs">🗑</button>
-            </div>
-          ))}
-          <button onClick={addRule} className="text-xs px-3 py-1.5 rounded-lg border border-dashed border-[--border] hover:bg-[--accent]">+ Adicionar regra de palavra-chave</button>
-        </div>
+      <div className="flex items-center gap-3">
+        <button disabled={pending} onClick={save}
+          className="px-5 py-2 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">
+          {pending ? 'Salvando…' : 'Salvar fluxo da etapa'}
+        </button>
+        {saved && !pending && <span className="text-sm text-green-600 font-medium">✅ Fluxo salvo!</span>}
       </div>
-
-      {/* ⏱️ Mudança automática por inatividade */}
-      <div className="p-3 rounded-lg border border-[--border] bg-[--card] space-y-2">
-        <p className="text-sm font-medium">⏱️ Mudança automática por inatividade</p>
-        <p className="text-xs text-[--muted-foreground]">Se o cliente <b>não responder</b> dentro do tempo, move o lead automaticamente para outra etapa (ex: &quot;Não respondeu&quot;).</p>
-        <div className="flex items-center gap-2 flex-wrap text-sm">
-          <span>Se ficar</span>
-          <input type="number" min={0} value={noReplyMin} onChange={(e) => setNoReplyMin(Math.max(0, parseInt(e.target.value) || 0))}
-            className="w-20 px-2 py-1 rounded border border-[--input] bg-[--background] text-right" />
-          <span>min sem responder, mover para</span>
-          <select value={noReplyTarget} onChange={(e) => setNoReplyTarget(e.target.value)}
-            className="px-2 py-1 rounded border border-[--input] bg-[--background]" disabled={noReplyMin <= 0}>
-            <option value="">— escolha a etapa —</option>
-            {allStages.filter((s) => s.id !== stage.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-        {noReplyMin > 0 && !noReplyTarget && <p className="text-xs text-amber-600">Escolha a etapa de destino.</p>}
-      </div>
-
-      <button disabled={pending} onClick={save}
-        className="px-5 py-2 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">
-        {pending ? 'Salvando…' : 'Salvar bot da etapa'}
-      </button>
     </div>
   )
 }
@@ -331,6 +253,24 @@ function AiEditor({ pipeline, run, pending }: { pipeline: Pipeline; run: (fn: ()
         className="px-6 py-2.5 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">
         {pending ? 'Salvando…' : 'Salvar IA do funil'}
       </button>
+
+      {/* Janela de horário de envio do funil */}
+      <div className="pt-4 border-t border-[--border]">
+        <p className="text-sm font-medium mb-1">🕘 Horário de envio das mensagens automáticas (dias úteis)</p>
+        <p className="text-xs text-[--muted-foreground] mb-2">Mensagens de bot/chamadas/disparos só saem nesta faixa. Nada é enviado após 21h. Padrão 9h–18h.</p>
+        <div className="flex items-center gap-2 text-sm">
+          <span>Das</span>
+          <select defaultValue={pipeline.sendStartHour} onChange={(e) => run(() => updatePipeline(pipeline.id, { sendStartHour: parseInt(e.target.value) }))}
+            className="px-2 py-1 rounded border border-[--input] bg-[--background]">
+            {Array.from({ length: 16 }, (_, i) => i + 6).map((h) => <option key={h} value={h}>{h}h</option>)}
+          </select>
+          <span>às</span>
+          <select defaultValue={pipeline.sendEndHour} onChange={(e) => run(() => updatePipeline(pipeline.id, { sendEndHour: parseInt(e.target.value) }))}
+            className="px-2 py-1 rounded border border-[--input] bg-[--background]">
+            {Array.from({ length: 16 }, (_, i) => i + 7).map((h) => <option key={h} value={h}>{h}h</option>)}
+          </select>
+        </div>
+      </div>
     </div>
   )
 }

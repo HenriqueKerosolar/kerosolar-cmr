@@ -66,6 +66,29 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
         </div>
       </section>
 
+      {/* Fora do horário */}
+      <section className="space-y-4">
+        <h2 className="font-semibold border-b border-[--border] pb-2">Recepção fora do horário (após 21h)</h2>
+        <div>
+          <label className="block text-sm font-medium mb-1">Mensagem ao receber contato após 21h</label>
+          <p className="text-xs text-[--muted-foreground] mb-1">A IA pergunta se quer deixar registrado ou prosseguir agora. Use {'{SAUDACAO}'} para Bom dia/Boa tarde/Boa noite.</p>
+          <textarea value={cfg['after_hours_message'] ?? ''} onChange={(e) => set('after_hours_message', e.target.value)} rows={3}
+            placeholder="{SAUDACAO}! Recebi sua mensagem. Quer começar o atendimento agora ou deixar registrado para o horário comercial?"
+            className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
+        </div>
+      </section>
+
+      {/* Reengajamento */}
+      <section className="space-y-4">
+        <h2 className="font-semibold border-b border-[--border] pb-2">Reengajamento (cliente sumiu 10+ dias)</h2>
+        <div>
+          <label className="block text-sm font-medium mb-1">Mensagem quando o cliente retorna após 10 dias sem contato</label>
+          <textarea value={cfg['return_message'] ?? ''} onChange={(e) => set('return_message', e.target.value)} rows={3}
+            placeholder="Que bom que você retornou! Vamos continuar..."
+            className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
+        </div>
+      </section>
+
       {/* Bot */}
       <section className="space-y-4">
         <h2 className="font-semibold border-b border-[--border] pb-2">Agente / Salesbot</h2>
