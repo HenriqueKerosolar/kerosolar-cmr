@@ -412,7 +412,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   const cfEarly = (lead.customFields as Record<string, unknown> | null) ?? {}
   const temOrcamento = !!(cfEarly.solar || cfEarly.consumoKwh || cfEarly.billValue)
   const txtNormAceit = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-  const aceitouOrcamento = temOrcamento && /\b(aceito|aceitar|fechei|vou fechar|quero fechar|topei|vamos fechar|bora fechar|vamos em frente|bora la|quero financiar|quero parcelar|quero o sistema|quero instalar|quero contratar|quero assinar|quero prosseguir|quero o financiamento|me manda o contrato|quero o contrato|sim quero|quero sim|pode comecar|pode fechar)\b/.test(txtNormAceit)
+  // ATENÇÃO: NÃO incluir "quero financiar"/"quero parcelar"/"quero o financiamento" aqui —
+  // são AMBÍGUOS (cliente quer VER/entender as opções, não fechar). Aceitação só explícita.
+  const aceitouOrcamento = temOrcamento && /\b(aceito|aceitar|fechei|vou fechar|quero fechar|topei|vamos fechar|bora fechar|fechado|quero o sistema|quero instalar|quero contratar|quero assinar|me manda o contrato|quero o contrato|pode fechar|pode comecar|quero prosseguir)\b/.test(txtNormAceit)
 
   if (aceitouOrcamento && !lead.humanOnly) {
     const FINANCING_STAGE = 'Financiamento - Pedido de Documentos'
