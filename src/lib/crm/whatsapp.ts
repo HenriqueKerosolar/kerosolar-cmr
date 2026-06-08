@@ -109,6 +109,9 @@ export async function startSession(accountId: string): Promise<void> {
 
     sock.ev.on('connection.update', async (u: any) => {
       const { connection, lastDisconnect, qr } = u
+      if (connection || qr) {
+        console.log(`[wa] ${accountId} →`, connection || 'qr', qr ? '(qr)' : '', (lastDisconnect?.error as any)?.output?.statusCode ?? '')
+      }
       const sess = sessions.get(accountId)
 
       if (qr && sess) {
