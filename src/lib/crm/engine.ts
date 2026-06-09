@@ -229,6 +229,22 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // Bloqueio TOTAL: cliente já recusou bot antes → só humano, nenhuma automação
   if (lead.humanOnly) return base
 
+  // 🕑 Operador respondendo manualmente? A IA AGUARDA 2 min de inatividade dele antes de
+  //    voltar a responder (cada mensagem do operador reinicia o tempo). Vale tanto p/ respostas
+  //    pelo CRM quanto pelo app do WhatsApp (ambas ficam como outbound 'human'). A mensagem do
+  //    cliente já foi salva acima — só não acionamos nenhuma resposta automática agora.
+  {
+    const MS_INATIVIDADE = 2 * 60 * 1000
+    const ultimaHumana = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, direction: 'outbound', senderType: 'human' },
+      orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+    })
+    if (ultimaHumana && Date.now() - new Date(ultimaHumana.createdAt).getTime() < MS_INATIVIDADE) {
+      console.log('[engine] operador ativo (<2min) → IA aguarda')
+      return base
+    }
+  }
+
   // 4.1) Aviso de migração do sistema — enviado UMA vez por lead enquanto a config existir.
   //      Para desativar: apague a entrada 'migration_warning' em SystemConfig (Configurações).
   {

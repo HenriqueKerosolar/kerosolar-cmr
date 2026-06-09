@@ -59,6 +59,10 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
   se o atendente responde direto pelo celular/WhatsApp Web (fora do CRM), a mensagem e os
   ARQUIVOS aparecem no chat do CRM como "👤 Você". A IA NÃO é desligada (segue trabalhando).
   Dedup: ids enviados pelo próprio CRM ficam em `sentByCrm` e são ignorados (não duplica).
+- **IA aguarda quando o operador responde** (2 min de inatividade): se o atendente respondeu
+  manualmente (pelo CRM OU pelo app do WhatsApp) há menos de 2 min, a IA NÃO responde o cliente
+  (espera). Cada mensagem do operador reinicia o tempo. Lógica no `engine.ts` (última msg
+  outbound `human` < 2 min → `return base`).
 
 ### Leitura de conta de luz (3 formatos)
 - **📷 Foto/imagem** → `extractBillFromImage` (visão da IA) lê kWh, valor ou nº de painéis.
