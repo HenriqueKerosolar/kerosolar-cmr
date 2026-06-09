@@ -154,6 +154,9 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   ficam ativos por 3 dias…nova cotação pode ter reajuste". Configurável: `budget_validity_message`.
   AS DUAS etapas de orçamento (automático e manual) movem pra Repescagem aos 3 dias
   (noReply 4320 min, `moveImmediately:true`, destino Repescagem), alinhado à validade.
+- **Etapa "Ficou de enviar a conta":** 2 cobranças com 24h de intervalo (só dia útil + horário
+  comercial), depois silêncio → Repescagem (24h). Se o cliente diz que não quer mais/já resolveu
+  (keywordRules) → move pra "Leads adquiridos". Mensagens de bloco suportam `{SAUDACAO}` e `{nome}`.
 - **Tarefa antes da Repescagem:** quando um lead que JÁ recebeu orçamento some e seria movido
   pra Repescagem, o sistema cria uma TAREFA "📞 Orçamento sem retorno — retomar contato" e marca
   `highPriority` (lead valioso não é arquivado sem um humano tentar). Em `handleFlowNoReply`.
