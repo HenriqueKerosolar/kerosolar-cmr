@@ -736,6 +736,29 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     outboundText = 'Desculpa, não entendi bem 😅 Pode me explicar de outro jeito? Se preferir, me manda sua conta de luz que eu já te ajudo.'
   }
 
+  // 🔒 ANTI-LOOP (regra universal: nunca repetir mensagem). Se a IA vai responder
+  // EXATAMENTE o que já respondeu por último, ela está travada → em vez de repetir,
+  // passa pro humano (melhor não insistir do que mandar o mesmo texto de novo).
+  if (!result.handoff && !presentBudget && outboundText?.trim()) {
+    const normMsg = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    const lastOut = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, direction: 'outbound', senderType: { in: ['ai', 'system'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { content: true },
+    })
+    if (lastOut && normMsg(lastOut.content) === normMsg(outboundText)) {
+      console.warn('[engine] IA ia repetir a mesma mensagem → encaminhando ao humano')
+      const { getHandoffMessage } = await import('./handoff')
+      outboundText = await getHandoffMessage()
+      outboundSender = 'system'
+      leadUpdate.aiEnabled = false
+      leadUpdate.highPriority = true
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
+      await prisma.task.create({ data: { leadId: lead.id, title: '⚠️ IA travou (ia repetir) — assumir conversa', type: 'message', dueAt: now } })
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'IA ia repetir a mesma mensagem — encaminhado ao humano e IA desativada.' } })
+    }
+  }
+
   // Limpa agendamento pendente de confirmação quando cliente responde
   if (cf.pendingAppointmentId) {
     merged.pendingAppointmentId = null

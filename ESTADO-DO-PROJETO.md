@@ -88,6 +88,12 @@ e valem em qualquer etapa / qualquer lead:
    nenhum, passa pro humano (`handoff: true`). Melhor não responder do que mandar valor errado.
 3. **Sempre educado(a) e cortês** em qualquer situação, mesmo com cliente grosseiro.
 
+**Como a regra 1 (nunca repetir) é GARANTIDA no código** (não só no prompt):
+- `dispatchOutbound` (flow.ts): não reenvia mensagem automática (ai/system) idêntica à
+  última que enviamos na conversa → mata follow-up/saudação duplicados.
+- `engine.ts` (anti-loop): se a IA for responder EXATAMENTE o que já respondeu por último,
+  ela está travada → em vez de repetir, **passa pro humano** (IA desligada + tarefa + highPriority).
+
 - Prompt padrão em `DEFAULT_SYSTEM` (pode ser sobrescrito por `bot_prompt` no banco — hoje não há).
 - **Consumo:** foto, kWh e R$ são EQUIVALENTES — qualquer um basta; nunca insistir na foto
   se já tem o consumo. Assume o valor (não pede confirmação do número).

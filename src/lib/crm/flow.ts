@@ -59,6 +59,22 @@ export async function dispatchOutbound(
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } })
   if (!conv) return
 
+  // 🔒 Anti-repetição (regra universal: nunca repetir mensagem). Mensagens automáticas
+  // (ai/system) NÃO são reenviadas se forem idênticas à última que NÓS mandamos nesta
+  // conversa — evita follow-up/saudação duplicados e loop da IA. (Humano pode repetir.)
+  if (text && !media && (senderType === 'ai' || senderType === 'system')) {
+    const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    const lastOut = await prisma.message.findFirst({
+      where: { conversationId, direction: 'outbound', senderType: { in: ['ai', 'system'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { content: true },
+    })
+    if (lastOut && norm(lastOut.content) === norm(text)) {
+      console.warn('[flow dispatch] mensagem repetida bloqueada:', text.slice(0, 60))
+      return
+    }
+  }
+
   await prisma.message.create({
     data: {
       conversationId,
