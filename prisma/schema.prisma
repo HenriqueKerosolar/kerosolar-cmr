@@ -245,9 +245,11 @@ model Message {
   mediaType      String?
   externalId     String?
   isRead         Boolean          @default(false)
+  readAt         DateTime?        // ✓✓ azul do WhatsApp (lido pelo cliente) — para métricas de "visualizado"
   createdAt      DateTime         @default(now())
 
   @@index([conversationId])
+  @@index([externalId])
   @@map("messages")
 }
 

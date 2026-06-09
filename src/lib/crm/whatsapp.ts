@@ -216,6 +216,20 @@ export async function startSession(accountId: string): Promise<void> {
         try { await handleIncoming(accountId, msg) } catch (e) { console.error('[wa incoming]', e) }
       }
     })
+
+    // Recibo de leitura (✓✓ azul): marca nossas mensagens como "lidas" pra métrica de visualizado.
+    sock.ev.on('messages.update', async (updates: any[]) => {
+      for (const u of updates) {
+        const st = u.update?.status
+        const lido = st === 4 || st === 5 || st === 'READ' || st === 'PLAYED'
+        if (lido && u.key?.id) {
+          await prisma.message.updateMany({
+            where: { externalId: u.key.id, direction: 'outbound', readAt: null },
+            data: { readAt: new Date() },
+          }).catch(() => {})
+        }
+      }
+    })
   } catch (e) {
     console.error('[wa] startSession error:', e)
     sessions.delete(accountId)
@@ -475,17 +489,18 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
   }
 }
 
-/** Envia mensagem de texto. */
-export async function sendText(accountId: string, jid: string, text: string): Promise<void> {
+/** Envia mensagem de texto. Devolve o ID da mensagem no WhatsApp (pra rastrear "lido"). */
+export async function sendText(accountId: string, jid: string, text: string): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
   const sent = await sess.sock.sendMessage(fullJid, { text })
   markSentByCrm(sent?.key?.id)
+  return sent?.key?.id ?? null
 }
 
 /** Envia mídia (imagem, vídeo, documento) por URL. */
-export async function sendMedia(accountId: string, jid: string, opts: { url: string; type: 'image' | 'video' | 'document'; caption?: string; fileName?: string }): Promise<void> {
+export async function sendMedia(accountId: string, jid: string, opts: { url: string; type: 'image' | 'video' | 'document'; caption?: string; fileName?: string }): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
@@ -495,6 +510,7 @@ export async function sendMedia(accountId: string, jid: string, opts: { url: str
                                { document: { url: opts.url }, fileName: opts.fileName ?? 'arquivo', caption: opts.caption }
   const sent = await sess.sock.sendMessage(fullJid, payload)
   markSentByCrm(sent?.key?.id)
+  return sent?.key?.id ?? null
 }
 
 export async function disconnect(accountId: string): Promise<void> {

@@ -208,6 +208,12 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   lista "Precisam de mim". Volta sozinha quando o cliente manda nova mensagem (a IA zera o
   `resolvedAt` no `ingestMessage`). Ação `resolveConversation` em `actions/lead.ts`.
 - **Data/hora em cada mensagem do chat:** horário de Brasília (DD/MM/AAAA HH:mm), via `horaBrasilia`.
+- **Painel de Resultados** (`/resultados`, menu "📊 Resultados"): fila de disparo (send_message
+  pendentes), funil de eficiência 30d (enviados → visualizados → responderam → ganhos), ganhos/perdidos,
+  leads por etapa. **Visualizado** = recibo de leitura ✓✓ azul do WhatsApp: `messages.update` status
+  READ/PLAYED → grava `Message.readAt`. Para casar, `dispatchOutbound` salva o ID do WhatsApp no
+  `Message.externalId` (sendText/sendMedia retornam o id). Vale só pra mensagens enviadas a partir de 2026-06-09.
+- **Modais:** fundo branco sólido (`bg-white dark:bg-zinc-900`) + backdrop `bg-black/70` (corrigida transparência).
 - **Mensagem de migração:** DESLIGADA em 2026-06-09 (config `migration_warning` apagada
   do `system_configs`). Não é mais enviada. Para religar, recriar a config com a mensagem.
 - **Fora do horário (21h–06h):** quando o cliente escreve nesse intervalo, a IA pergunta

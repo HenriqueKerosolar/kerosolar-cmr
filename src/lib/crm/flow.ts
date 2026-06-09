@@ -75,7 +75,7 @@ export async function dispatchOutbound(
     }
   }
 
-  await prisma.message.create({
+  const createdMsg = await prisma.message.create({
     data: {
       conversationId,
       direction: 'outbound',
@@ -93,8 +93,11 @@ export async function dispatchOutbound(
     if (conv.channel === 'whatsapp' && conv.accountId && conv.contact?.whatsappId) {
       const wa = await import('./whatsapp')
       const jid = conv.contact.whatsappId
-      if (media) await wa.sendMedia(conv.accountId, jid, { url: media.url, type: media.type, caption: text })
-      else await wa.sendText(conv.accountId, jid, text)
+      const waId = media
+        ? await wa.sendMedia(conv.accountId, jid, { url: media.url, type: media.type, caption: text })
+        : await wa.sendText(conv.accountId, jid, text)
+      // guarda o ID do WhatsApp na mensagem pra casar com o recibo de leitura (✓✓ azul)
+      if (waId) await prisma.message.update({ where: { id: createdMsg.id }, data: { externalId: waId } }).catch(() => {})
     } else if (conv.channel === 'facebook' || conv.channel === 'instagram') {
       const meta = await import('./meta')
       const recipient = conv.channel === 'facebook' ? conv.contact?.facebookId : conv.contact?.instagramId
