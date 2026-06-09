@@ -205,6 +205,9 @@ async function runFrom(leadId: string, conversationId: string, stageId: string, 
       }
       case 'ai': {
         await setState(conversationId, null) // entrega pra IA: próximas mensagens vão pro agente
+        // Se a etapa tem "sem resposta" (ex.: → Repescagem), arma o relógio aqui — senão o
+        // lead silencioso ficaria parado pra sempre (não há bloco de pergunta pra armar).
+        await scheduleNoReply(leadId, conversationId, stageId, isSimulator)
         return
       }
       case 'handoff': {
@@ -218,6 +221,8 @@ async function runFrom(leadId: string, conversationId: string, stageId: string, 
     }
   }
   await setState(conversationId, null) // fim do fluxo
+  // Fluxo terminou sem pausa/IA → ainda assim arma o "sem resposta" da etapa, se houver.
+  await scheduleNoReply(leadId, conversationId, stageId, isSimulator)
 }
 
 /** Substitui variáveis ({nome}) no texto. */

@@ -133,6 +133,10 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 - **VISITA TÉCNICA** = ida presencial ao endereço do cliente. `channel: "visit"`.
   **NUNCA perguntar canal.** Só dia e horário. (É o padrão para solar.)
 - **ATENDIMENTO** = conversa remota com o consultor. Aí SIM pergunta WhatsApp/ligação/vídeo.
+- **noReply em fluxo de blocos sem pergunta:** o `noReply` da etapa (ex.: "Não respondeu o
+  anúncio" → Repescagem em 180 min) é armado ao chegar no bloco de IA E no fim do fluxo
+  (`runFrom` em `flow-blocks.ts`) — antes só era armado em bloco de pergunta, então leads
+  silenciosos ficavam parados pra sempre. Agora seguem pra etapa de destino sozinhos.
 - **Dia não útil** (fim de semana/feriado): trava determinística `ehDiaUtil` (em `engine.ts`)
   IMPEDE gravar. A IA primeiro oferece trocar por dia útil; se insistir, escala ao consultor
   (highPriority) sem agendar.
