@@ -254,8 +254,11 @@ async function handleIncoming(accountId: string, msg: any) {
           const { parseBillText, isBillPdf } = await import('./pdf-utils')
           const summary = parseBillText(pdfText)
           const isBill = isBillPdf(summary)
+          console.log('[wa pdf]', isBill ? 'conta de luz' : 'documento', '—', summary.replace(/\n/g, ' | '))
           if (isBill) {
-            text = `Segue minha conta de luz (PDF):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema.\n\n${pdfText.slice(0, 1500)}`
+            // SÓ o resumo estruturado — NÃO incluir o texto bruto (código de barras e
+            // linha digitável confundem a extração de consumo e geram valores absurdos)
+            text = `Segue minha conta de luz (PDF):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema.`
             displayText = '📄 Conta de luz enviada (PDF)'
           } else {
             text = `Segue um documento PDF. Leia o conteúdo abaixo e responda qualquer dúvida sobre ele:\n\n${pdfText}`
