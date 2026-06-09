@@ -137,6 +137,11 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   anúncio" → Repescagem em 180 min) é armado ao chegar no bloco de IA E no fim do fluxo
   (`runFrom` em `flow-blocks.ts`) — antes só era armado em bloco de pergunta, então leads
   silenciosos ficavam parados pra sempre. Agora seguem pra etapa de destino sozinhos.
+- **Travas de `handleFlowNoReply` (não-respondeu) agora são específicas:** os bloqueios
+  "lead ativo (2+ msgs)" e "já tem orçamento" só valem quando o DESTINO é "Não respondeu o
+  anúncio". Para outros destinos (ex.: "Recebeu orçamento automático" → Repescagem em 3h),
+  o lead com orçamento que some É movido normalmente. Etapa do orçamento: espera 60 min →
+  "conseguiu ver o orçamento?" → IA → 180 min mudo → Repescagem.
 - **Dia não útil** (fim de semana/feriado): trava determinística `ehDiaUtil` (em `engine.ts`)
   IMPEDE gravar. A IA primeiro oferece trocar por dia útil; se insistir, escala ao consultor
   (highPriority) sem agendar.

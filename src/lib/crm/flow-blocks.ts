@@ -63,20 +63,23 @@ export async function handleFlowNoReply(action: { leadId: string; conversationId
   })
   if (inbound > 0) return
 
-  // ⚠️ Regra principal: "Não respondeu o anúncio" é SÓ para quem entrou e não respondeu nada.
-  // Se o cliente enviou 2+ mensagens (foi ativo, fez perguntas, enviou conta, recebeu orçamento)
-  // NÃO mover para "Não respondeu o anúncio" — ele já interagiu.
-  const totalInbound = await prisma.message.count({
-    where: { conversationId: action.conversationId, direction: 'inbound' },
-  })
-  if (totalInbound > 1) return // lead teve atividade real → ignora
-
-  // Também não move se já tem qualificação solar (conta, kWh, orçamento)
-  const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
-  if (cf.solar || cf.billValue || cf.consumoKwh) return
-
   const nr = await getNoReply(action.stageId)
   if (!nr) return
+
+  // ⚠️ As travas abaixo valem SÓ quando o destino é "Não respondeu o anúncio" — esse balde
+  // é exclusivo de quem entrou e NÃO respondeu nada. Para outros destinos (ex.: Repescagem,
+  // que recebe inclusive quem já tem orçamento e sumiu) NÃO bloqueamos o movimento.
+  const ehNaoRespondeu = /n[aã]o respondeu/i.test(nr.targetStageName || '')
+  if (ehNaoRespondeu) {
+    // 2+ mensagens = lead ativo (fez perguntas, enviou conta) → não joga no "não respondeu"
+    const totalInbound = await prisma.message.count({
+      where: { conversationId: action.conversationId, direction: 'inbound' },
+    })
+    if (totalInbound > 1) return
+    // já tem qualificação solar (conta, kWh, orçamento) → também não joga nesse balde
+    const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+    if (cf.solar || cf.billValue || cf.consumoKwh) return
+  }
   const step = (action.payload as { step?: number })?.step ?? 1
   // moveImmediately: 1 passo só (transfere direto, sem mensagem intermediária)
   if (step === 1 && !nr.moveImmediately) {
@@ -89,7 +92,7 @@ export async function handleFlowNoReply(action: { leadId: string; conversationId
     await setState(action.conversationId, null)
     if (nr.targetStageName) {
       const target = await prisma.stage.findFirst({ where: { name: { equals: nr.targetStageName, mode: 'insensitive' } } })
-      if (target) await moveLeadToStage(action.leadId, target.id, `Sem resposta na chegada — movido para "${target.name}".`)
+      if (target) await moveLeadToStage(action.leadId, target.id, `Sem resposta — movido para "${target.name}".`)
     }
   }
 }
