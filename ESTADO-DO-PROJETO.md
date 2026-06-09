@@ -50,6 +50,10 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
   Apagar credenciais só em logout real (401) ou connectionReplaced (440).
 - **Dedup de mensagens** (evita resposta duplicada): por `msg.key.id` em memória +
   por `externalMessageId` no banco.
+- **Mensagens offline (durante deploy/reinício) NÃO se perdem:** o `messages.upsert`
+  processa `notify` (tempo real) E `append` (reentregues após reconexão), filtrando
+  `append` para as últimas 12h (evita ressuscitar histórico antigo numa sincronização).
+  A dedup garante que nada é respondido duas vezes.
 - **Proxy opcional** via env `PROXY_URL` (não usado atualmente — o IP do Railway funciona direto).
 
 ### Leitura de conta de luz (3 formatos)

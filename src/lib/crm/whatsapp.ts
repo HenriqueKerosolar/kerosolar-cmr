@@ -188,8 +188,21 @@ export async function startSession(accountId: string): Promise<void> {
     })
 
     sock.ev.on('messages.upsert', async (ev: any) => {
-      if (ev.type !== 'notify') return
+      // 'notify'  = mensagens novas em tempo real.
+      // 'append'  = mensagens reentregues após reconexão (ex.: chegaram enquanto o deploy
+      //             reiniciava o servidor). Precisamos processá-las pra NÃO PERDER lead —
+      //             mas só as RECENTES (últimas 12h), pra não "ressuscitar" histórico antigo
+      //             numa sincronização. A dedup (memória + banco) evita resposta duplicada.
+      const isNotify = ev.type === 'notify'
+      const isAppend = ev.type === 'append'
+      if (!isNotify && !isAppend) return
+      const cutoff = Date.now() / 1000 - 12 * 60 * 60 // 12h atrás (messageTimestamp é em segundos)
       for (const msg of ev.messages) {
+        if (isAppend) {
+          const tsRaw = msg.messageTimestamp
+          const ts = typeof tsRaw === 'number' ? tsRaw : (tsRaw?.toNumber ? tsRaw.toNumber() : Number(tsRaw) || 0)
+          if (ts && ts < cutoff) continue // histórico antigo → ignora
+        }
         try { await handleIncoming(accountId, msg) } catch (e) { console.error('[wa incoming]', e) }
       }
     })
