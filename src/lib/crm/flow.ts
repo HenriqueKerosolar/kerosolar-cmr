@@ -205,6 +205,18 @@ export async function processDueActions() {
 
   for (const a of due) {
     try {
+      // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
+      //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
+      //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.
+      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup') {
+        const ldw = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+        const janela = janelaDoFunil(ldw?.pipeline?.sendStartHour, ldw?.pipeline?.sendEndHour)
+        const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janela)
+        if (slot.getTime() > Date.now() + 2000) {
+          await prisma.scheduledAction.update({ where: { id: a.id }, data: { runAt: slot } })
+          continue
+        }
+      }
       if (a.type === 'no_reply') {
         await handleNoReply(a)
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})

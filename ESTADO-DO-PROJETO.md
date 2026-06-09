@@ -145,6 +145,13 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 - **Dia não útil** (fim de semana/feriado): trava determinística `ehDiaUtil` (em `engine.ts`)
   IMPEDE gravar. A IA primeiro oferece trocar por dia útil; se insistir, escala ao consultor
   (highPriority) sem agendar.
+- **⏰ Mensagens automáticas entre etapas só em horário comercial:** `flow_continue`,
+  `flow_noreply` e `budget_followup` passam pela janela (dia útil + 9h–18h do funil). Se vencerem
+  fora do horário, são reagendadas pro próximo horário válido (ex.: 9h do próximo dia útil).
+  Antes só `send_message` respeitava. (Gate no `processDueActions` em `flow.ts`.)
+- **Tarefa antes da Repescagem:** quando um lead que JÁ recebeu orçamento some e seria movido
+  pra Repescagem, o sistema cria uma TAREFA "📞 Orçamento sem retorno — retomar contato" e marca
+  `highPriority` (lead valioso não é arquivado sem um humano tentar). Em `handleFlowNoReply`.
 - **Confirmação:** (1) na hora — repete o resumo e só grava após o cliente confirmar;
   (2) lembrete — 1 dia antes + 2h antes ("passando para confirmar... você confirma?").
 

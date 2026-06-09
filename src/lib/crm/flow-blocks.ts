@@ -92,7 +92,18 @@ export async function handleFlowNoReply(action: { leadId: string; conversationId
     await setState(action.conversationId, null)
     if (nr.targetStageName) {
       const target = await prisma.stage.findFirst({ where: { name: { equals: nr.targetStageName, mode: 'insensitive' } } })
-      if (target) await moveLeadToStage(action.leadId, target.id, `Sem resposta — movido para "${target.name}".`)
+      if (target) {
+        // 📞 Lead que JÁ recebeu orçamento e sumiu é valioso → antes de "arquivar" na Repescagem,
+        //    cria uma TAREFA e marca prioridade pra um humano tentar retomar o contato.
+        const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+        if (cf.solar || cf.billValue || cf.consumoKwh) {
+          await prisma.lead.update({ where: { id: action.leadId }, data: { highPriority: true } }).catch(() => {})
+          await prisma.task.create({
+            data: { leadId: action.leadId, title: '📞 Orçamento sem retorno — retomar contato com o cliente', type: 'call', dueAt: new Date() },
+          }).catch(() => {})
+        }
+        await moveLeadToStage(action.leadId, target.id, `Sem resposta — movido para "${target.name}".`)
+      }
     }
   }
 }
