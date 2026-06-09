@@ -33,7 +33,11 @@ export async function createManualLead(data: {
   pipelineId: string; stageId: string; value?: number; startBot?: boolean
 }) {
   await verifySession()
-  const phone = data.phone?.replace(/\D/g, '') || null
+  const phoneRaw = data.phone?.replace(/\D/g, '') || null
+  // Normaliza com DDI 55 (número BR sem código do país não é entregável no WhatsApp)
+  const phone = phoneRaw
+    ? (phoneRaw.length <= 11 ? `55${phoneRaw}` : phoneRaw)
+    : null
   const name = data.name?.trim() || null
 
   // contato por telefone (cria se não existir)
@@ -63,13 +67,23 @@ export async function createManualLead(data: {
 
   // conversa (WhatsApp) pra poder atender pelo card
   if (phone) {
+    // Conta de WhatsApp para enviar: a conectada (preferência) ou a primeira cadastrada.
+    // Sem accountId a conversa não consegue despachar mensagens pelo WhatsApp.
+    const waAccount =
+      (await prisma.whatsappAccount.findFirst({ where: { status: 'connected' }, orderBy: { connectedAt: 'desc' } }))
+      ?? (await prisma.whatsappAccount.findFirst({ orderBy: { createdAt: 'asc' } }))
+    const accountId = waAccount?.id ?? null
+
     const existing = await prisma.conversation.findUnique({
       where: { channel_contactId: { channel: 'whatsapp', contactId: contact.id } },
     })
     if (!existing) {
-      await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead.id, externalId: phone } })
-    } else if (existing.leadId !== lead.id) {
-      await prisma.conversation.update({ where: { id: existing.id }, data: { leadId: lead.id } })
+      await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead.id, externalId: phone, accountId } })
+    } else {
+      await prisma.conversation.update({
+        where: { id: existing.id },
+        data: { leadId: lead.id, ...(existing.accountId ? {} : { accountId }) },
+      })
     }
   }
 
