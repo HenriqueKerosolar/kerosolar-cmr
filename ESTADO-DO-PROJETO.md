@@ -187,6 +187,10 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 
 - **Toggle IA por lead** (`lead-card-client.tsx`): botão "🤖 IA ativa · Desligar" /
   "👤 Manual · Ligar IA". Vale em qualquer etapa (todas as etapas têm IA ligada por padrão).
+- **Exportar / Limpar etapa** (botão "⬇️ Exportar / Limpar" na página de Leads): baixa um CSV
+  com os contatos da etapa (nome, telefone, e-mail, cidade, valor, consumo, datas — endpoint
+  `GET /api/crm/export?stageId=`) e tem uma "zona de risco" pra APAGAR os leads daquela etapa
+  (ação `deleteLeadsByStage` — remove leads/conversas/mensagens, MANTÉM os contatos). Pra salvar e limpar o banco.
 - **Anexar arquivo** no chat (📎): imagem/vídeo/PDF/doc/xls até 25 MB. Endpoint
   `POST /api/leads/[id]/send-media`; arquivos servidos por `GET /api/uploads/[name]`
   (salvos em `/data/uploads`).

@@ -166,6 +166,21 @@ export async function deleteLead(leadId: string) {
   revalidatePath('/leads')
 }
 
+/** Apaga TODOS os leads de uma etapa (e tudo ligado: conversas, mensagens, tarefas, notas,
+ *  agendamentos). Os CONTATOS são mantidos. Uso: limpar o banco depois de exportar a etapa. */
+export async function deleteLeadsByStage(stageId: string): Promise<number> {
+  await verifySession()
+  const ids = (await prisma.lead.findMany({ where: { stageId }, select: { id: true } })).map((l) => l.id)
+  if (!ids.length) return 0
+  await prisma.$transaction([
+    prisma.scheduledAction.deleteMany({ where: { leadId: { in: ids } } }),
+    prisma.conversation.deleteMany({ where: { leadId: { in: ids } } }), // cascata: mensagens
+    prisma.lead.deleteMany({ where: { id: { in: ids } } }),             // cascata: tarefas, notas
+  ])
+  revalidatePath('/leads')
+  return ids.length
+}
+
 export async function updateLeadValue(leadId: string, value: number) {
   await verifySession()
   await prisma.lead.update({ where: { id: leadId }, data: { value } })

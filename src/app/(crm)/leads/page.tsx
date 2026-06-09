@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { BroadcastButton } from './broadcast-button'
 import { NewLeadButton } from './new-lead-button'
 import { ImportButton } from './import-button'
+import { ExportButton } from './export-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,6 +51,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           <ImportButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
           <NewLeadButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
           <BroadcastButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
+          <ExportButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
         </div>
       </div>
 
