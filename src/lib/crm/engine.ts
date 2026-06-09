@@ -545,7 +545,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   if (solar) {
     if (solar.baixoConsumo) {
       kitMinimo = true
-      const kit = calcularSolarPorKwh(MINIMO_KIT_KWH)   // menor kit (300 kWh)
+      const kit = calcularSolarPorKwh(MINIMO_KIT_KWH)   // menor kit (250 kWh)
       estimate = `O consumo do cliente (~${consumoClienteKwh} kWh/mês) é abaixo de ${MINIMO_KIT_KWH} kWh. ` +
         `O orçamento usa o MENOR KIT disponível (${MINIMO_KIT_KWH} kWh). ` +
         `O orçamento formatado JÁ FOI ENVIADO — NÃO repita os números nem descreva a conta. ` +
@@ -571,10 +571,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         paybackAnos: solar.economiaAnual > 0 ? Math.round((MINIMO_KIT_PRECO / solar.economiaAnual) * 10) / 10 : 0,
         economiaImediata: Math.max(0, Math.round((solar.contaReais - menorParcela) * 100) / 100),
       }
-      // Se temos o valor real da fatura (ex: R$ 294 do PDF), preserva no orçamento
-      if (consumo.reais && consumo.reais >= 30 && consumo.reais < solar.contaReais) {
-        solar = { ...solar, contaReais: Math.round(consumo.reais) }
-      }
+      // OBS: no kit mínimo NÃO sobrescrevemos a conta pela do cliente — usamos os números do
+      // kit de 250 kWh (consistentes). Senão a economia ficaria MAIOR que a conta (ex.: conta
+      // R$120 com economia R$244). A IA explica que esse é o menor kit disponível.
     } else {
       estimate = resumoParaIA(solar)
     }
