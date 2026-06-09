@@ -17,6 +17,12 @@ tsconfig.tsbuildinfo
 # WhatsApp (Baileys) — sessões/credenciais sensíveis
 /wa-sessions/
 
+# Anexos enviados pelo chat (em dev ficam aqui; em prod vão para /data)
+/uploads/
+
+# Scripts temporários de diagnóstico
+/*.tmp.mjs
+
 # logs e SO
 *.log
 npm-debug.log*
