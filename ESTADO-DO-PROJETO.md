@@ -137,6 +137,10 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   **adicionar** manualmente respostas. Ações em `app/actions/learning.ts` (re-embeda ao editar/adicionar).
 
 ### Esteira de etapas (comportamentos configurados)
+- **Chegada — dois caminhos:** (1) quem NÃO respondeu (≤1 msg) → 10 min → "Não respondeu o anúncio";
+  (2) quem CONVERSOU mas não converteu (sem orçamento/sem rota) → após 2h de silêncio recebe um
+  follow-up ("quer que eu prepare seu orçamento?"), e se continuar mudo +2h → Repescagem.
+  Tipo de ação: `chegada_followup` (cancela no inbound; só horário comercial).
 - **Financiamento (coleta de dados):** quando o cliente quer financiar → IA pede os 5 dados
   (nome, CPF, nascimento, CEP, e-mail), confere (texto/documento) e só faz handoff quando completo.
   routeToStage = "Financiamento pedido de documentos". (A pausa automática no CPF foi removida.)

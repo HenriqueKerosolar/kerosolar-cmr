@@ -238,7 +238,7 @@ export async function processDueActions() {
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
       //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
       //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.
-      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity' || a.type === 'reengage') {
+      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity' || a.type === 'reengage' || a.type === 'chegada_followup') {
         const ldw = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
         const janela = janelaDoFunil(ldw?.pipeline?.sendStartHour, ldw?.pipeline?.sendEndHour)
         const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janela)
@@ -313,6 +313,29 @@ export async function processDueActions() {
           const saud = spHour < 12 ? 'Bom dia' : spHour < 18 ? 'Boa tarde' : 'Boa noite'
           const msg = (cfg?.value || DEFAULT_BUDGET_VALIDITY).replace(/\{SAUDACAO\}/g, saud)
           await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      if (a.type === 'chegada_followup') {
+        const lead = await prisma.lead.findUnique({ where: { id: a.leadId }, include: { contact: true } })
+        const stage = lead ? await prisma.stage.findUnique({ where: { id: lead.stageId } }) : null
+        const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+        const step = (a.payload as { step?: number })?.step ?? 1
+        // respondeu depois de armar? mudou de etapa? já tem orçamento? humano assumiu? → não aplica
+        const inboundDepois = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+        const naChegada = /chegada/i.test(stage?.name ?? '')
+        const aplica = lead && !lead.humanOnly && lead.aiEnabled && naChegada && inboundDepois === 0 && !cf.solar && !cf.billValue && !cf.consumoKwh
+        if (aplica) {
+          if (step === 1) {
+            const nome = lead.contact?.name?.split(' ')[0] ?? ''
+            const msg = `${nome ? nome + ', ' : ''}quer que eu já prepare seu orçamento? 😊 É só me mandar a foto da sua conta de luz, ou me dizer seu consumo médio em kWh ou o valor médio da conta.`
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+            await prisma.scheduledAction.create({ data: { leadId: a.leadId, conversationId: a.conversationId, stageId: a.stageId, type: 'chegada_followup', payload: { step: 2 } as object, runAt: new Date(Date.now() + 2 * 60 * 60 * 1000) } }).catch(() => {})
+          } else {
+            const target = await prisma.stage.findFirst({ where: { name: { equals: 'Repescagem', mode: 'insensitive' } } })
+            if (target) await moveLeadToStage(a.leadId, target.id, 'Conversou na Chegada mas não avançou — movido para Repescagem.')
+          }
         }
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue

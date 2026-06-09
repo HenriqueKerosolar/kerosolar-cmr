@@ -219,7 +219,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: now, resolvedAt: null } })
   await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: now } })
   // cliente respondeu → cancela checagens pendentes (sem-resposta e follow-up de orçamento)
-  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup'] }, done: false }, data: { done: true } })
+  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup'] }, done: false }, data: { done: true } })
 
   const base: IngestResult = {
     contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
@@ -893,6 +893,14 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     if (nr?.minutes && nr.minutes > 0) {
       const { scheduleNoReply } = await import('./flow-blocks')
       await scheduleNoReply(lead.id, conversation.id, lead.stageId).catch(() => {})
+    }
+    // CHEGADA: lead que CONVERSOU mas NÃO converteu (sem orçamento, sem mudar de etapa) →
+    // após 2h de silêncio manda follow-up; se continuar mudo, vai pra Repescagem (não pra "Não respondeu").
+    if (/chegada/i.test(stageNow?.name ?? '') && !presentBudget) {
+      await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: 'chegada_followup', done: false }, data: { done: true } })
+      await prisma.scheduledAction.create({
+        data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'chegada_followup', payload: { step: 1 } as object, runAt: new Date(Date.now() + 2 * 60 * 60 * 1000) },
+      }).catch(() => {})
     }
   }
 
