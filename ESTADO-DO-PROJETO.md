@@ -115,8 +115,11 @@ e valem em qualquer etapa / qualquer lead:
 - **Blocos de tempo nas etapas:** seletor minuto/hora/dia (componente `TimeInput` em
   `stage-flow-builder.tsx`). Internamente sempre armazenado em **minutos**.
 - **Scroll do chat:** auto-scroll só quando o operador já está perto do fim.
-- **Mensagem de migração:** enviada 1x por lead enquanto existir a config
-  `migration_warning` em `system_configs`. **Apagar essa config quando a migração terminar.**
+- **Mensagem de migração:** DESLIGADA em 2026-06-09 (config `migration_warning` apagada
+  do `system_configs`). Não é mais enviada. Para religar, recriar a config com a mensagem.
+- **Fora do horário (21h–06h):** quando o cliente escreve nesse intervalo, a IA pergunta
+  se quer começar agora ou deixar registrado pro horário comercial (a partir das 9h).
+  Entre 6h e 9h já atende normal. Lógica em `engine.ts` (`isAfterHours`).
 
 ### Lead manual
 - Ao criar lead manual com telefone: vincula a conta de WhatsApp conectada (`accountId`)
@@ -126,8 +129,7 @@ e valem em qualquer etapa / qualquer lead:
 
 ## 6. Pendências / TODO
 
-- [ ] **Desativar a mensagem de migração** quando a troca de sistema terminar
-      (apagar `migration_warning` em `system_configs`).
+- [x] ~~Desativar a mensagem de migração~~ — FEITO em 2026-06-09.
 - [ ] **WEBCHAT_ORIGIN** está `*` — restringir para `https://kerosolar.com.br`.
 - [ ] **Scripts das etapas** foram perdidos (só "Chegada" tem). Recriar os scripts de IA
       por etapa se desejado (Funis → expandir etapa → "Script de IA desta etapa").

@@ -305,7 +305,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   //       cliente quer só deixar registrado ou prosseguir com o atendimento agora.
   if (aiOn || stageAuto) {
     const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-    const isAfterHours = spHour >= 21 || spHour < 9
+    // Fora do horário: das 21h às 06h (antes das 6h e a partir das 21h). Entre 6h e 9h já atende normal.
+    const isAfterHours = spHour >= 21 || spHour < 6
     const norm = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const { dispatchOutbound } = await import('./flow')
 
@@ -335,7 +336,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         // primeira mensagem fora do horário → recepção + pergunta
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
         const cfg = await prisma.systemConfig.findUnique({ where: { key: 'after_hours_message' } })
-        const msg = (cfg?.value || `${saud}! 🌙 Recebi sua mensagem. Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua amanhã no horário comercial?`).replace(/\{SAUDACAO\}/g, saud)
+        const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua no horário comercial (a partir das 9h)?`).replace(/\{SAUDACAO\}/g, saud)
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
         return { ...base, reply: msg, aiHandled: true }
