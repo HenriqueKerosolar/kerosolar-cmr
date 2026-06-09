@@ -24,19 +24,31 @@ export async function extractPdfText(buf: Buffer): Promise<string> {
 export function parseBillText(raw: string): string {
   const brl = (s: string) => { const m = s.match(/r\$\s*([\d.,]+)/i); return m ? parseFloat(m[1].replace(/\./g,'').replace(',','.')) : null }
 
-  // 1) Consumo kWh
+  // 1) Consumo kWh — coleta candidatos e valida faixa realista (20 a 50.000 kWh).
+  // Contas de luz têm muitos números (código de instalação, barras) que não são consumo.
   let kwh: number | null = null
-  const quantMatch = raw.match(/quant\.?\s*\n?\s*(\d{2,4})\s*(?:\n|$)/i)
-  if (quantMatch) kwh = parseInt(quantMatch[1])
-  if (!kwh) { const m = raw.match(/([\d.]+)\s*kwh/i); if (m) kwh = parseFloat(m[1].replace('.','')) }
-  if (!kwh) { const m = raw.match(/kwh\D{0,10}?([\d.]+)/i); if (m) kwh = parseFloat(m[1].replace('.','')) }
-  if (!kwh) { const m = raw.match(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/\d{2}[^0-9]{0,20}(\d{3,4})/i); if (m) kwh = parseInt(m[1]) }
+  const noRange = (n: number) => n >= 20 && n <= 50000
+  const cands: number[] = []
+  const push = (s?: string) => { if (s) { const n = parseInt(s.replace(/\D/g, ''), 10); if (!isNaN(n)) cands.push(n) } }
+  push(raw.match(/quant\.?\s*\n?\s*(\d{2,4})\s*(?:\n|$)/i)?.[1])
+  push(raw.match(/consumo[^0-9]{0,30}?(\d{2,5})\s*kwh/i)?.[1])
+  push(raw.match(/(\d{2,5})\s*kwh/i)?.[1])
+  push(raw.match(/kwh\D{0,10}?(\d{2,5})/i)?.[1])
+  push(raw.match(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/\d{2}[^0-9]{0,20}(\d{3,4})/i)?.[1])
+  for (const c of cands) { if (noRange(c)) { kwh = c; break } }
 
-  // 2) Valor total a pagar
+  // 2) Valor total a pagar — valida faixa realista (R$ 30 a R$ 100.000)
   let valor: number | null = null
-  const valorMatch = raw.match(/(?:valor\s+a\s+pagar|total\s+a\s+pagar|r\$)\s*\n?\s*([\d.,]+)/i)
-  if (valorMatch) valor = parseFloat(valorMatch[1].replace(/\./g,'').replace(',','.'))
-  if (!valor) { const m = raw.match(/r\$\s*([\d.,]+)/i); if (m) valor = parseFloat(m[1].replace(/\./g,'').replace(',','.')) }
+  const valorOk = (n: number) => !isNaN(n) && n >= 30 && n <= 100000
+  const valorMatch = raw.match(/(?:valor\s+a\s+pagar|total\s+a\s+pagar)\s*\n?\s*r?\$?\s*([\d.,]+)/i)
+  if (valorMatch) { const v = parseFloat(valorMatch[1].replace(/\./g,'').replace(',','.')); if (valorOk(v)) valor = v }
+  if (!valor) {
+    // tenta todos os "R$ ..." e fica com o primeiro na faixa válida
+    for (const m of raw.matchAll(/r\$\s*([\d.,]+)/gi)) {
+      const v = parseFloat(m[1].replace(/\./g,'').replace(',','.'))
+      if (valorOk(v)) { valor = v; break }
+    }
+  }
 
   // 3) Tipo de ligação
   const tn = raw.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -72,5 +84,6 @@ export function parseBillText(raw: string): string {
  * Retorna true se encontrou dados de consumo em kWh.
  */
 export function isBillPdf(summary: string): boolean {
-  return /consumo:/i.test(summary)
+  // É conta de luz se extraiu consumo OU valor a pagar (alguns PDFs só dão um deles de forma confiável)
+  return /consumo:|valor a pagar:/i.test(summary)
 }
