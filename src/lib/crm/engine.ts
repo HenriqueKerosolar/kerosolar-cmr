@@ -344,6 +344,32 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
+  // 4.33) Cliente INICIAL em HORÁRIO COMERCIAL → manda a saudação COMPLETA, já pedindo a
+  //       conta / consumo (kWh ou R$). Fora do horário (21h–06h) o bloco acima já tratou
+  //       com a opção "agora ou depois". Só dispara no PRIMEIRO contato (ainda não respondemos)
+  //       e quando o cliente AINDA não informou consumo na mensagem.
+  if (aiOn || stageAuto) {
+    const spHourC = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+    const horarioComercial = spHourC >= 6 && spHourC < 21
+    const jaRespondemos = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })
+    const txtC = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const jaTemConsumo = /\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC)
+    if (horarioComercial && jaRespondemos === 0 && !jaTemConsumo && !lead.humanOnly) {
+      const saud = spHourC < 12 ? 'Bom dia' : spHourC < 18 ? 'Boa tarde' : 'Boa noite'
+      const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
+      const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`).replace(/\{SAUDACAO\}/g, saud)
+      const { dispatchOutbound } = await import('./flow')
+      await simularDigitacao(msg)
+      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+      const nrC = (currentStage?.flow as { noReply?: { minutes?: number } } | null)?.noReply
+      if (nrC?.minutes && nrC.minutes > 0 && !isSimulator) {
+        const { scheduleNoReply } = await import('./flow-blocks')
+        await scheduleNoReply(lead.id, conversation.id, lead.stageId).catch(() => {})
+      }
+      return { ...base, reply: msg, aiHandled: true }
+    }
+  }
+
   // 4.35) Reengajamento: cliente sumiu 10+ dias e voltou (e NÃO é humanOnly).
   //       Envia a mensagem de retorno E SEGUE o fluxo normal (a IA também responde).
   const prevLast = lead.lastMessageAt ? new Date(lead.lastMessageAt).getTime() : null

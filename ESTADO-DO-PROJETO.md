@@ -142,6 +142,11 @@ e valem em qualquer etapa / qualquer lead:
 - **Fora do horário (21h–06h):** quando o cliente escreve nesse intervalo, a IA pergunta
   se quer começar agora ou deixar registrado pro horário comercial (a partir das 9h).
   Entre 6h e 9h já atende normal. Lógica em `engine.ts` (`isAfterHours`).
+- **Saudação inicial em HORÁRIO COMERCIAL (6h–21h):** no PRIMEIRO contato, a IA manda a
+  saudação COMPLETA já pedindo a conta de luz / consumo em kWh / valor em R$ (mensagem
+  determinística, não vaga). Só dispara se ainda não respondemos e o cliente não informou
+  consumo. Configurável via `welcome_message` em `system_configs` (`{SAUDACAO}` = Bom dia/tarde/noite).
+  Fora do horário, em vez dela, vale o bloco "agora ou depois".
 
 ### Lead manual
 - Ao criar lead manual com telefone: vincula a conta de WhatsApp conectada (`accountId`)
