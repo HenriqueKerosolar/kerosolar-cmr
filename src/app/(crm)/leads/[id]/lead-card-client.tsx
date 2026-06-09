@@ -9,6 +9,17 @@ import {
 } from '@/app/actions/lead'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; createdAt: string }
+
+// Data e hora no horário de Brasília (DD/MM/AAAA HH:mm)
+function horaBrasilia(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    }).format(new Date(iso))
+  } catch { return '' }
+}
 type Stage = { id: string; name: string; color: string | null; isWon: boolean; isLost: boolean }
 type Task = { id: string; title: string; status: string; dueAt: string | null }
 type Note = { id: string; type: string; content: string; createdAt: string; author: { name: string } | null }
@@ -135,7 +146,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
 
         <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-auto p-4 space-y-3">
           {messages.map((m) => {
-            if (m.senderType === 'system') return <div key={m.id} className="text-center"><span className="text-[11px] text-[--muted-foreground] bg-[--muted]/50 rounded-full px-2 py-0.5">{m.content}</span></div>
+            if (m.senderType === 'system') return <div key={m.id} className="text-center"><span className="text-[11px] text-[--muted-foreground] bg-[--muted]/50 rounded-full px-2 py-0.5">{m.content} · {horaBrasilia(m.createdAt)}</span></div>
             const isIn = m.direction === 'inbound'
             return (
               <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
@@ -148,6 +159,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                       : <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs underline mb-1">📎 Abrir arquivo</a>
                   )}
                   <WhatsAppText text={m.content} />
+                  <div className={`text-[10px] mt-1 ${isIn ? 'text-[--muted-foreground]' : 'opacity-70'} text-right`}>{horaBrasilia(m.createdAt)}</div>
                 </div>
               </div>
             )
