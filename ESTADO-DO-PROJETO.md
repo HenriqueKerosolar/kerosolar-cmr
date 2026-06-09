@@ -70,6 +70,14 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
 
 Arquivos: `src/lib/crm/agent.ts` (prompt), `src/lib/crm/engine.ts` (orquestração).
 
+### ⛔ REGRAS UNIVERSAIS — NUNCA QUEBRAR
+Ficam no topo do `DEFAULT_SYSTEM` em `agent.ts`, acima de qualquer outra instrução,
+e valem em qualquer etapa / qualquer lead:
+1. **Nunca repetir uma mensagem** (nem a saudação nem qualquer texto já enviado).
+2. **Nunca chutar valor quando não entender** a conta/consumo — não envia número
+   nenhum, passa pro humano (`handoff: true`). Melhor não responder do que mandar valor errado.
+3. **Sempre educado(a) e cortês** em qualquer situação, mesmo com cliente grosseiro.
+
 - Prompt padrão em `DEFAULT_SYSTEM` (pode ser sobrescrito por `bot_prompt` no banco — hoje não há).
 - **Consumo:** foto, kWh e R$ são EQUIVALENTES — qualquer um basta; nunca insistir na foto
   se já tem o consumo. Assume o valor (não pede confirmação do número).
