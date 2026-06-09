@@ -269,7 +269,28 @@ async function handleIncoming(accountId: string, msg: any) {
     }
   }
 
-  if (!text.trim()) return
+  // Imagem (foto) → baixa e envia como base64 para a visão da IA ler (conta de luz, anúncio de painéis, etc.)
+  let imageBase64: string | undefined
+  let imageMediaType: string | undefined
+  const isImage = !!msg.message?.imageMessage
+  if (isImage) {
+    try {
+      const { downloadMediaMessage } = await import('@whiskeysockets/baileys') as any
+      const sess = sessions.get(accountId)
+      const buffer: Buffer = await downloadMediaMessage(
+        msg, 'buffer', {},
+        sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
+      )
+      imageBase64 = buffer.toString('base64')
+      imageMediaType = msg.message.imageMessage?.mimetype?.split(';')[0] || 'image/jpeg'
+      if (!displayText) displayText = '📷 Foto enviada'
+    } catch (e) {
+      console.error('[wa image]', e)
+    }
+  }
+
+  // Sem texto E sem imagem → nada a processar
+  if (!text.trim() && !imageBase64) return
 
   const phone = jid.split('@')[0]
   const name = msg.pushName || null
@@ -288,6 +309,8 @@ async function handleIncoming(accountId: string, msg: any) {
     accountId,
     pipelineId,
     externalMessageId: msg.key.id,
+    imageBase64,
+    imageMediaType,
   })
 
   // Se a IA respondeu, envia de volta pelo WhatsApp

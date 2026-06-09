@@ -283,25 +283,19 @@ Existem 3 situações possíveis:
 
 Para identificar se já tem orçamento: se houver no contexto acima o bloco "ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO", então ele JÁ TEM orçamento → use a situação 2 ou 3, NUNCA a 1 (não peça a conta). Também conta como "já tem orçamento" se o histórico já mostrou um orçamento (mensagem com "Seus números" / "ORÇAMENTO SOLAR") ou se billValue/consumoKwh já estão preenchidos.
 
-CONFIRMAÇÃO ANTES DE MARCAR: quando o cliente disser um dia e horário, NÃO grave o agendamento ainda. Primeiro REPITA o resumo para ele confirmar: "Então fica assim: visita técnica (presencial, no seu endereço) na [dia] às [hora]. Posso confirmar? 😊". Só preencha o "appointment" no JSON DEPOIS que o cliente responder confirmando ("sim", "pode confirmar", "isso", etc.).
+CONFIRMAÇÃO ANTES DE MARCAR: quando o cliente disser um dia e horário, NÃO grave o agendamento ainda. Primeiro REPITA o resumo conforme o tipo: para VISITA → "Então fica assim: visita técnica presencial no seu endereço na [dia] às [hora]. Posso confirmar? 😊"; para ATENDIMENTO → "Então fica assim: [canal] com o consultor na [dia] às [hora]. Posso confirmar? 😊". Só preencha o "appointment" no JSON DEPOIS que o cliente responder confirmando ("sim", "pode confirmar", "isso", etc.).
 
 DIAS NÃO ÚTEIS — NUNCA agende em fim de semana ou feriado. Se o cliente pedir um dia desses:
   a) PRIMEIRO ofereça trocar para um dia útil: "Esse dia cai no fim de semana / feriado e não fazemos visita nesse dia 😊 Quer que eu marque num dia de semana? Me diz qual dia útil fica melhor pra você." NÃO preencha o appointment.
   b) SÓ se o cliente INSISTIR no dia não útil, responda EXATAMENTE: "Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. Te respondo assim que ele confirmar! Mas caso queira agendar para um dia útil, é só me passar 😊" — e marque highPriority: true, sem preencher o appointment.
 Dias úteis = segunda a sexta, exceto feriados nacionais.`
 
-  // Regra fixa: agendamento de ligação
-  system += `\n\n## LIGAÇÃO/AGENDAMENTO: quando o cliente confirmar um agendamento (dia e horário definidos), ` +
-    `pergunte o canal preferido: "Você prefere que o consultor entre em contato por *WhatsApp*, *ligação telefônica* ou *videochamada*?" ` +
-    `Pergunte isso UMA SÓ VEZ — não repita se já perguntou. ` +
-    `Se o cliente pedir apenas uma ligação (sem agendar), pergunte se prefere de manhã ou à tarde.` +
-    `\n\nSe o cliente pedir um agendamento em fim de semana ou feriado (dia não útil):` +
-    `\n1. Informe gentilmente que o dia solicitado não é um dia útil.` +
-    `\n2. Se ele confirmar que quer esse dia mesmo assim, responda EXATAMENTE neste sentido (sem repetir a pergunta sobre dia útil): ` +
-    `"Ok, vou enviar a sua mensagem para o consultor e ver com ele a disponibilidade de agendar nesse dia que não é dia útil. ` +
-    `Te respondo assim que ele confirmar! 😊 Você prefere que o consultor entre em contato por WhatsApp, ligação telefônica ou videochamada?" ` +
-    `— NÃO repita a oferta de mudar para dia útil (já foi perguntado antes). NÃO desligue a IA (handoff: false), mas marque highPriority: true para sinalizar o consultor.` +
-    `\nDias úteis = segunda a sexta, exceto feriados nacionais.`
+  // Regra fixa: VISITA (presencial) vs ATENDIMENTO (conversa remota)
+  system += `\n\n## TIPO DE AGENDAMENTO — VISITA vs ATENDIMENTO (MUITO IMPORTANTE):
+- VISITA TÉCNICA = alguém vai PESSOALMENTE ao endereço do cliente (medir telhado, vistoriar, instalar). É PRESENCIAL. channel SEMPRE "visit". É PROIBIDO perguntar "qual canal/meio" — não faz sentido numa visita presencial. Pergunte SOMENTE o dia e o horário. Para energia solar, o agendamento padrão é VISITA TÉCNICA.
+- ATENDIMENTO / CONVERSA com o consultor = remoto (tirar dúvidas, negociar, falar sobre o orçamento). SÓ NESTE caso pergunte UMA vez: "Você prefere por *WhatsApp*, *ligação telefônica* ou *videochamada*?" e use channel conforme a escolha (whatsapp / phone / video).
+- Identifique pelo pedido: "visita", "ir aí", "ver o telhado", "vistoria", "instalar" → VISITA (channel visit, sem perguntar canal). "conversar", "ligar", "tirar dúvida", "falar com o consultor" → ATENDIMENTO (perguntar canal).
+- As regras de CONFIRMAÇÃO antes de marcar e de DIA NÃO ÚTIL (descritas acima) valem para os dois tipos.`
 
   // Regra fixa: abrangência de atendimento
   system += `\n\n## ABRANGÊNCIA: atendemos em QUALQUER cidade do Estado do Rio de Janeiro. ` +
