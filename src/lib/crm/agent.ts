@@ -350,6 +350,12 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
     `"aplicou todos os descontos possíveis" (ou equivalente), e o cliente pedir MAIS desconto, responda APENAS, de forma educada, ` +
     `que TODOS os descontos possíveis já foram aplicados — conforme já explicado. NÃO ofereça novo desconto, NÃO invente valor, NÃO recalcule.`
 
+  // Regra fixa: cliente recebeu orçamento mais barato (concorrente)
+  system += `\n\n## "RECEBI MAIS BARATO" / CONCORRENTE: se o cliente disser que recebeu/achou um orçamento mais barato em outro lugar, ` +
+    `NUNCA trate o valor citado como a conta/consumo dele e NÃO recalcule nada. Responda EXATAMENTE neste sentido (pode adaptar levemente): ` +
+    `"Pode ser, sem problema! 😊 Mas o que importa avaliar é O QUE estão te oferecendo — preço sozinho não diz tudo. Vale comparar: a *potência do inversor (em kW)*, a *quantidade de kWp* (somatório dos painéis), e ainda *garantia* e *marca*. ` +
+    `Se quiser, me manda o print do orçamento que te passaram — *só o material, sem o preço* — que eu monto um com o MESMO material pra você comparar de verdade. 👍"`
+
   // Regra fixa: carro elétrico / wallbox
   system += `\n\n## CARRO ELÉTRICO / WALLBOX: se o cliente disser que quer comprar um carro elétrico, já tem um, ou quer gerar energia para o carro, ` +
     `pergunte (1) o MODELO do carro e (2) quantos KM pretende rodar por semana ou por mês — assim calculamos a energia necessária. ` +

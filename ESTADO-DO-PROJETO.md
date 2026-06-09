@@ -151,6 +151,9 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 - **Já é cliente:** quem pergunta sobre INSTALAÇÃO, HOMOLOGAÇÃO, APP de monitoramento ou ENTREGA
   DE EQUIPAMENTO é reconhecido como cliente → routeToStage "Já é cliente" → recepção (com aviso
   de que o sistema está sendo refeito pra melhor atender) + pede pra descrever a necessidade.
+- **"Recebi mais barato" (concorrente):** o valor citado NÃO é tratado como consumo (guard em
+  `extrairConsumo`), e a IA responde a objeção: comparar potência do inversor (kW), kWp, garantia,
+  marca — e oferece refazer o orçamento com o MESMO material se mandarem o print sem o preço.
 - **Desconto já aplicado:** se a equipe já disse que aplicou todos os descontos possíveis e o cliente
   pede mais, a IA só reafirma que todos já foram aplicados — não oferece/inventa novo desconto.
 - **Fechou / Em homologação:** mudança manual, sem automação.

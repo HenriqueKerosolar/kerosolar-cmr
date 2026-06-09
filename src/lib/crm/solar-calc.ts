@@ -210,6 +210,9 @@ const KWH_POR_PAINEL = 60
 
 export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   const t = text.toLowerCase()
+  // ⚠️ Comparação com CONCORRENTE ("recebi um orçamento R$ X mais barato", "outra empresa")
+  // → o valor citado é o PREÇO do concorrente, NÃO o consumo/conta do cliente. Não extrai nada.
+  if (/mais barato|mais em conta|bem barato|concorrent|outra empresa|outro or[çc]amento|outro lugar/i.test(t)) return {}
   let kwh: number | undefined
   let reais: number | undefined
 
