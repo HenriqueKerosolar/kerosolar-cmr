@@ -210,7 +210,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       mediaUrl: input.mediaUrl ?? null, mediaType: input.mediaType ?? null,
     },
   })
-  await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: now } })
+  // Cliente escreveu → reabre a conversa no Inbox (zera o "fechado pelo operador")
+  await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: now, resolvedAt: null } })
   await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: now } })
   // cliente respondeu → cancela checagens pendentes (sem-resposta e follow-up de orçamento)
   await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup'] }, done: false }, data: { done: true } })

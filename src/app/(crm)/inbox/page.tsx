@@ -1,6 +1,7 @@
 import { verifySession } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
 import Link from 'next/link'
+import { resolveConversation } from '@/app/actions/lead'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,10 +25,14 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   })
 
   // "Precisa de humano": cliente recusou bot, atendente assumiu, ou IA não resolveu.
+  // Conversas FECHADAS pelo operador (resolvedAt) somem desta lista — voltam só quando
+  // o cliente manda nova mensagem (a IA reabre zerando o resolvedAt).
   const needsHuman = (conv: (typeof all)[number]) =>
-    conv.lead?.humanOnly === true ||
-    conv.lead?.aiEnabled === false ||
-    (conv.messages[0]?.direction === 'inbound' && !conv.messages[0]?.isRead)
+    !conv.resolvedAt && (
+      conv.lead?.humanOnly === true ||
+      conv.lead?.aiEnabled === false ||
+      (conv.messages[0]?.direction === 'inbound' && !conv.messages[0]?.isRead)
+    )
 
   const filtered = verTodas ? all : all.filter(needsHuman)
   // ⚡ Prioridade total no topo
@@ -51,31 +56,39 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           const last = conv.messages[0]
           const unread = !last?.isRead && last?.direction === 'inbound'
           return (
-            <Link key={conv.id} href={`/leads/${conv.leadId ?? ''}`}
-              className={`flex items-center gap-3 p-3 rounded-xl border border-[--border] bg-[--card] hover:shadow-sm transition ${unread ? 'ring-2 ring-[--ring]/40' : ''}`}>
-              <div className="w-10 h-10 rounded-full bg-[--primary]/20 text-[--primary] flex items-center justify-center font-bold text-sm shrink-0">
-                {conv.contact?.name?.[0]?.toUpperCase() ?? '?'}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  {conv.lead?.highPriority && <span title="Prioridade total">⚡</span>}
-                  <span className="font-medium text-sm truncate">{conv.contact?.name ?? conv.contact?.phone ?? 'Desconhecido'}</span>
-                  <span className="text-xs">{channelIcon[conv.channel] ?? '📱'}</span>
-                  {conv.lead && (
-                    <span className="text-[11px] px-1.5 py-0.5 rounded-full border border-[--border] ml-auto shrink-0"
-                      style={{ borderColor: conv.lead.stage.color ?? undefined }}>
-                      {conv.lead.stage.name}
-                    </span>
+            <div key={conv.id}
+              className={`relative flex items-center gap-2 p-3 rounded-xl border border-[--border] bg-[--card] hover:shadow-sm transition ${unread ? 'ring-2 ring-[--ring]/40' : ''}`}>
+              <Link href={`/leads/${conv.leadId ?? ''}`} className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 rounded-full bg-[--primary]/20 text-[--primary] flex items-center justify-center font-bold text-sm shrink-0">
+                  {conv.contact?.name?.[0]?.toUpperCase() ?? '?'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    {conv.lead?.highPriority && <span title="Prioridade total">⚡</span>}
+                    <span className="font-medium text-sm truncate">{conv.contact?.name ?? conv.contact?.phone ?? 'Desconhecido'}</span>
+                    <span className="text-xs">{channelIcon[conv.channel] ?? '📱'}</span>
+                    {conv.lead && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded-full border border-[--border] ml-auto shrink-0"
+                        style={{ borderColor: conv.lead.stage.color ?? undefined }}>
+                        {conv.lead.stage.name}
+                      </span>
+                    )}
+                  </div>
+                  {last && (
+                    <p className={`text-xs truncate ${unread ? 'text-[--foreground] font-medium' : 'text-[--muted-foreground]'}`}>
+                      {last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '👤 ') : ''}{last.content}
+                    </p>
                   )}
                 </div>
-                {last && (
-                  <p className={`text-xs truncate ${unread ? 'text-[--foreground] font-medium' : 'text-[--muted-foreground]'}`}>
-                    {last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '👤 ') : ''}{last.content}
-                  </p>
-                )}
-              </div>
-              {unread && <div className="w-2.5 h-2.5 rounded-full bg-[--primary] shrink-0" />}
-            </Link>
+                {unread && <div className="w-2.5 h-2.5 rounded-full bg-[--primary] shrink-0" />}
+              </Link>
+              <form action={resolveConversation.bind(null, conv.id)} className="shrink-0">
+                <button type="submit" title="Fechar conversa (remove do Inbox)"
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-[--border] hover:bg-[--accent] hover:border-emerald-400 transition whitespace-nowrap">
+                  ✓ Fechar
+                </button>
+              </form>
+            </div>
           )
         })}
         {conversations.length === 0 && (

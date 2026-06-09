@@ -221,6 +221,7 @@ model Conversation {
   externalId    String?
   aiEnabled     Boolean   @default(true)
   flowState     Json?     // estado do fluxo de blocos: { stageId, index, waitingField }
+  resolvedAt    DateTime? // operador "fechou" no Inbox → some da lista; volta a null quando o cliente escreve
   lastMessageAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

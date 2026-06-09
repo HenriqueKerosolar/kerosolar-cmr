@@ -137,6 +137,10 @@ e valem em qualquer etapa / qualquer lead:
 - **Blocos de tempo nas etapas:** seletor minuto/hora/dia (componente `TimeInput` em
   `stage-flow-builder.tsx`). Internamente sempre armazenado em **minutos**.
 - **Scroll do chat:** auto-scroll só quando o operador já está perto do fim.
+- **Fechar conversa no Inbox** (botão "✓ Fechar"): marca `conversation.resolvedAt` → some da
+  lista "Precisam de mim". Volta sozinha quando o cliente manda nova mensagem (a IA zera o
+  `resolvedAt` no `ingestMessage`). Ação `resolveConversation` em `actions/lead.ts`.
+- **Data/hora em cada mensagem do chat:** horário de Brasília (DD/MM/AAAA HH:mm), via `horaBrasilia`.
 - **Mensagem de migração:** DESLIGADA em 2026-06-09 (config `migration_warning` apagada
   do `system_configs`). Não é mais enviada. Para religar, recriar a config com a mensagem.
 - **Fora do horário (21h–06h):** quando o cliente escreve nesse intervalo, a IA pergunta

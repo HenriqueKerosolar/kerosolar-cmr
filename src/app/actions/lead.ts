@@ -121,6 +121,15 @@ export async function toggleLeadAi(leadId: string, enabled: boolean) {
   revalidatePath(`/leads/${leadId}`)
 }
 
+/** Fecha (resolve) uma conversa no Inbox — some da lista "Precisam de mim".
+ *  Volta a aparecer sozinha quando o cliente mandar uma nova mensagem. */
+export async function resolveConversation(conversationId: string) {
+  await verifySession()
+  await prisma.conversation.update({ where: { id: conversationId }, data: { resolvedAt: new Date() } })
+  await prisma.message.updateMany({ where: { conversationId, direction: 'inbound', isRead: false }, data: { isRead: true } })
+  revalidatePath('/inbox')
+}
+
 /** Move o lead para outra etapa (dispara a chamada da nova etapa). */
 export async function moveLeadStage(leadId: string, stageId: string) {
   await verifySession()
