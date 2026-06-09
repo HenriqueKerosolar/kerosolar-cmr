@@ -219,6 +219,7 @@ model Conversation {
   accountId     String?   // qual conta de WhatsApp recebeu/envia (multi-número)
   account       WhatsappAccount? @relation(fields: [accountId], references: [id])
   externalId    String?
+  chatJid       String?   // endereço COMPLETO do WhatsApp pra responder (ex: ...@s.whatsapp.net ou ...@lid)
   aiEnabled     Boolean   @default(true)
   flowState     Json?     // estado do fluxo de blocos: { stageId, index, waitingField }
   resolvedAt    DateTime? // operador "fechou" no Inbox → some da lista; volta a null quando o cliente escreve

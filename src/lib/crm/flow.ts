@@ -90,9 +90,10 @@ export async function dispatchOutbound(
 
   // Despacha pro canal de origem
   try {
-    if (conv.channel === 'whatsapp' && conv.accountId && conv.contact?.whatsappId) {
+    if (conv.channel === 'whatsapp' && conv.accountId && (conv.chatJid || conv.contact?.whatsappId)) {
       const wa = await import('./whatsapp')
-      const jid = conv.contact.whatsappId
+      // usa o endereço COMPLETO da conversa (ex: ...@lid) quando houver — senão o número do contato
+      const jid = (conv.chatJid && conv.chatJid.includes('@')) ? conv.chatJid : conv.contact!.whatsappId!
       const waId = media
         ? await wa.sendMedia(conv.accountId, jid, { url: media.url, type: media.type, caption: text })
         : await wa.sendText(conv.accountId, jid, text)

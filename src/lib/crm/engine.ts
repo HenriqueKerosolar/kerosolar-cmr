@@ -91,6 +91,7 @@ function channelIdField(ch: Channel): 'whatsappId' | 'instagramId' | 'facebookId
 export type IngestInput = {
   channel: Channel
   externalId: string
+  chatJid?: string               // endereço completo do WhatsApp (ex: ...@lid) pra responder no lugar certo
   text: string
   displayText?: string           // texto exibido no chat (substitui `text` na gravação); usado p/ PDF/imagem
   name?: string | null
@@ -150,10 +151,14 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   })
   if (!conversation) {
     conversation = await prisma.conversation.create({
-      data: { channel, contactId: contact.id, externalId, accountId: input.accountId ?? null },
+      data: { channel, contactId: contact.id, externalId, chatJid: input.chatJid ?? null, accountId: input.accountId ?? null },
     })
-  } else if (input.accountId && conversation.accountId !== input.accountId) {
-    conversation = await prisma.conversation.update({ where: { id: conversation.id }, data: { accountId: input.accountId } })
+  } else {
+    // mantém accountId e o endereço completo (chatJid) atualizados — chatJid garante a resposta no JID certo (LID)
+    const upd: Record<string, unknown> = {}
+    if (input.accountId && conversation.accountId !== input.accountId) upd.accountId = input.accountId
+    if (input.chatJid && input.chatJid.includes('@') && conversation.chatJid !== input.chatJid) upd.chatJid = input.chatJid
+    if (Object.keys(upd).length) conversation = await prisma.conversation.update({ where: { id: conversation.id }, data: upd })
   }
 
   // 3) Lead

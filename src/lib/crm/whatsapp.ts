@@ -407,6 +407,7 @@ async function handleIncoming(accountId: string, msg: any) {
   const result = await ingestMessage({
     channel: 'whatsapp',
     externalId: phone,
+    chatJid: jid,
     text: text.trim(),
     displayText,
     name,
