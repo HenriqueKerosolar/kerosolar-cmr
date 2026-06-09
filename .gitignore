@@ -23,6 +23,10 @@ tsconfig.tsbuildinfo
 # Scripts temporários de diagnóstico
 /*.tmp.mjs
 
+# Materiais de marketing / geradores (não versionar)
+/*.pptx
+/gerar-apresentacao.cjs
+
 # logs e SO
 *.log
 npm-debug.log*

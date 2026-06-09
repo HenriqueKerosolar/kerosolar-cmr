@@ -40,7 +40,7 @@ export function ExportButton({ stages }: { stages: Stage[] }) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
           <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-[--border]">
               <h2 className="font-bold text-lg">⬇️ Exportar / Limpar etapa</h2>
