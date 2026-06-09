@@ -12,8 +12,20 @@ import { numeroNaLista } from './lists'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string> }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>> }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
+
+// 🔒 FILA POR CONVERSA: processa UMA mensagem por vez por número (jid). Sem isso, 2 mensagens
+// que chegam quase juntas (ex.: "Olá" + "Oi") são processadas em paralelo e cada uma vê
+// "ainda não respondi" → manda a saudação 2-3x. A fila garante ordem e evita duplicação.
+const chains: Map<string, Promise<unknown>> = (g.__waChains ??= new Map())
+function serialPorJid(jid: string, fn: () => Promise<void>): Promise<void> {
+  const prev = chains.get(jid) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  chains.set(jid, next)
+  next.finally(() => { if (chains.get(jid) === next) chains.delete(jid) })
+  return next
+}
 
 // Dedup em memória: IDs de mensagens já processadas (evita resposta duplicada
 // quando o Baileys dispara messages.upsert 2x para a mesma mensagem).
@@ -214,7 +226,9 @@ export async function startSession(accountId: string): Promise<void> {
           const ts = typeof tsRaw === 'number' ? tsRaw : (tsRaw?.toNumber ? tsRaw.toNumber() : Number(tsRaw) || 0)
           if (ts && ts < cutoff) continue // histórico antigo → ignora
         }
-        try { await handleIncoming(accountId, msg) } catch (e) { console.error('[wa incoming]', e) }
+        // FILA por conversa: serializa o processamento por número (evita saudação duplicada)
+        const jidKey = msg.key?.remoteJid || 'sem-jid'
+        await serialPorJid(jidKey, () => handleIncoming(accountId, msg).catch((e) => console.error('[wa incoming]', e)))
       }
     })
 

@@ -9,9 +9,9 @@ export const FATOR_CONVERSAO = 20.87      // valor do sistema = conta × 20,87
 export const ECONOMIA_PERCENT_PADRAO = 80 // % de economia (70–85)
 export const REAJUSTE_PADRAO = 8          // reajuste anual da energia (%)
 export const TARIFA_KWH = 1.22            // R$ por kWh — usado p/ comunicar "atende conta de ~R$ (kWh × 1,22)"
-export const MINIMO_KWH = 250             // abaixo disso oferecemos o kit mínimo (250 kWh)
-export const MINIMO_KIT_KWH = 250         // menor kit que a Kerosolar oferece
-export const MINIMO_KIT_PRECO = 7670      // preço fixo do kit mínimo (R$ 7.670,00) — confirmar p/ 250 kWh
+export const MINIMO_KWH = 250             // abaixo disso (consumo < 250) oferecemos o kit mínimo
+export const MINIMO_KIT_KWH = 300         // menor kit que a Kerosolar oferece (300 kWh)
+export const MINIMO_KIT_PRECO = 7670      // preço fixo do kit mínimo de 300 kWh (R$ 7.670,00)
 
 // 🔒 FAIXAS REALISTAS — trava de segurança contra valor absurdo (código de barras /
 // nº de instalação do PDF, erro de OCR). Fora disso NÃO calculamos orçamento.

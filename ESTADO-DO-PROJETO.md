@@ -79,9 +79,12 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
   (endereço completo, ex. `...@lid`) e o `dispatchOutbound` responde nele — antes ia pro `@s.whatsapp.net`
   errado e não entregava. Auto-corrige no próximo inbound do cliente.
 - **1 painel/placa/módulo = 60 kWh** (5 painéis = 300 kWh, 10 = 600 kWh...).
-- **Consumo mínimo = 250 kWh.** Abaixo disso → kit mínimo (250 kWh, R$ 7.670). Os números
+- **Consumo mínimo = 250 kWh** (limite). Abaixo disso → menor kit = **300 kWh, R$ 7.670**. Os números
   exibidos são os DO KIT (conta/economia consistentes) — não mistura com a conta real do cliente
   (evita "economia > conta"). A IA explica que é o menor kit disponível.
+- **Fila por conversa (anti-duplicação):** `serialPorJid` em `whatsapp.ts` processa UMA mensagem
+  por vez por número. Sem isso, 2 mensagens quase simultâneas ("Olá"+"Oi") eram processadas em
+  paralelo e a saudação saía 2-3x. Agora a 2ª vê que já respondemos e não repete.
 - **Equivalência kWh ↔ R$:** valor da conta ≈ kWh × 1,22.
 - **Validação de faixa** (em `pdf-utils.ts`): consumo só 20–50.000 kWh; valor só
   R$ 30–100.000. Descarta código de barras/instalação que o PDF traz.
