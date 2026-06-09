@@ -239,9 +239,11 @@ async function runFrom(leadId: string, conversationId: string, stageId: string, 
   await scheduleNoReply(leadId, conversationId, stageId, isSimulator)
 }
 
-/** Substitui variáveis ({nome}) no texto. */
+/** Substitui variáveis no texto: {nome} (1º nome do contato) e {SAUDACAO} (Bom dia/tarde/noite). */
 async function fill(text: string, leadId: string): Promise<string> {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
   const nome = lead?.contact?.name?.split(' ')[0] ?? ''
-  return (text || '').replace(/\{nome\}/gi, nome)
+  const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+  const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+  return (text || '').replace(/\{nome\}/gi, nome).replace(/\{saudacao\}/gi, saud)
 }
