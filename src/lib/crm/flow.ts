@@ -105,6 +105,17 @@ export async function dispatchOutbound(
     }
   } catch (e) {
     console.error('[flow dispatch]', e)
+    // 🔁 Envio falhou (ex.: WhatsApp reiniciando/caído). NÃO perde a mensagem: re-enfileira
+    // pra reentregar quando a conexão voltar — sem criar nova mensagem no chat (não duplica).
+    if (conv.channel === 'whatsapp' && conv.leadId) {
+      await prisma.scheduledAction.create({
+        data: {
+          leadId: conv.leadId, conversationId, stageId: null, type: 'redeliver',
+          payload: { text, mediaUrl: media?.url ?? null, mediaType: media?.type ?? null, attempts: 0 } as object,
+          runAt: new Date(Date.now() + 30000),
+        },
+      }).catch(() => {})
+    }
   }
 }
 
@@ -227,6 +238,29 @@ export async function processDueActions() {
       if (a.type === 'appointment_reminder') {
         await handleAppointmentReminder(a)
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      // 🔁 Reentrega de mensagem que falhou (WhatsApp estava caído). NÃO cria nova mensagem
+      // no chat — só reenvia o texto/mídia. Tenta a cada 1 min por ~20 min; depois desiste.
+      if (a.type === 'redeliver') {
+        const p = (a.payload as { text?: string; mediaUrl?: string | null; mediaType?: 'image' | 'video' | 'document' | null; attempts?: number }) ?? {}
+        const attempts = p.attempts ?? 0
+        const conv = await prisma.conversation.findUnique({ where: { id: a.conversationId }, include: { contact: true } })
+        let ok = false
+        try {
+          if (conv?.channel === 'whatsapp' && conv.accountId && conv.contact?.whatsappId) {
+            const wa = await import('./whatsapp')
+            const jid = conv.contact.whatsappId
+            if (p.mediaUrl) await wa.sendMedia(conv.accountId, jid, { url: p.mediaUrl, type: p.mediaType ?? 'image', caption: p.text })
+            else if (p.text) await wa.sendText(conv.accountId, jid, p.text)
+            ok = true
+          }
+        } catch { ok = false }
+        if (ok || attempts >= 20) {
+          await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        } else {
+          await prisma.scheduledAction.update({ where: { id: a.id }, data: { runAt: new Date(Date.now() + 60000), payload: { ...p, attempts: attempts + 1 } as object } }).catch(() => {})
+        }
         continue
       }
       if (a.type !== 'send_message') {
@@ -394,7 +428,13 @@ async function handleAppointmentReminder(a: { leadId: string; conversationId: st
 
 /** Inicia o poller único (sobrevive ao HMR via global). */
 export function startScheduler() {
-  const g = globalThis as unknown as { __crmScheduler?: NodeJS.Timeout }
+  const g = globalThis as unknown as { __crmScheduler?: NodeJS.Timeout; __crmSchedulerRunning?: boolean }
   if (g.__crmScheduler) return
-  g.__crmScheduler = setInterval(() => { processDueActions().catch(() => {}) }, 15000)
+  g.__crmScheduler = setInterval(() => {
+    // Evita rodadas CONCORRENTES: se a anterior ainda está rodando (delays de digitação
+    // podem passar de 15s), pula esta — senão duas rodadas processam a mesma ação e DUPLICAM.
+    if (g.__crmSchedulerRunning) return
+    g.__crmSchedulerRunning = true
+    processDueActions().catch(() => {}).finally(() => { g.__crmSchedulerRunning = false })
+  }, 15000)
 }

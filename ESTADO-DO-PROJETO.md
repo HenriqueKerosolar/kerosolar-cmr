@@ -93,6 +93,12 @@ e valem em qualquer etapa / qualquer lead:
   última que enviamos na conversa → mata follow-up/saudação duplicados.
 - `engine.ts` (anti-loop): se a IA for responder EXATAMENTE o que já respondeu por último,
   ela está travada → em vez de repetir, **passa pro humano** (IA desligada + tarefa + highPriority).
+- **Poller sem rodadas concorrentes** (`startScheduler`): flag `__crmSchedulerRunning` impede
+  duas rodadas ao mesmo tempo (delays de digitação passavam de 15s e processavam a mesma ação
+  2x → DUPLICAVA). Essa era a causa de mensagem de fluxo duplicada no mesmo segundo.
+- **Reentrega automática** (`dispatchOutbound` + ação `redeliver`): se o envio falhar porque o
+  WhatsApp está caído/reiniciando, a mensagem NÃO se perde — é re-enfileirada e reentregue quando
+  a conexão volta (tenta a cada 1 min por ~20 min). NÃO cria mensagem nova no chat (não duplica).
 
 - Prompt padrão em `DEFAULT_SYSTEM` (pode ser sobrescrito por `bot_prompt` no banco — hoje não há).
 - **Consumo:** foto, kWh e R$ são EQUIVALENTES — qualquer um basta; nunca insistir na foto
