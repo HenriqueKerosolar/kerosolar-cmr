@@ -12,6 +12,7 @@ const NAV = [
   { href: '/meta',          icon: '📷', label: 'Insta/Face' },
   { href: '/agenda',        icon: '📅', label: 'Agenda' },
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },
+  { href: '/aprendizado',   icon: '🧠', label: 'Aprendizado' },
   { href: '/configuracoes', icon: '⚙️', label: 'Config' },
 ]
 

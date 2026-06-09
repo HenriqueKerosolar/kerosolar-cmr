@@ -126,6 +126,8 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   parecidas no prompt como **referência** — a IA responde no mesmo sentido, adaptando.
 - Filtros: ignora respostas curtas/genéricas (ok, bom dia…) e mídia. Não duplica pares.
 - Requer chave **OpenAI** (a mesma do áudio). Sem ela, a busca semântica simplesmente não injeta nada.
+- **Tela de gestão** em `/aprendizado` (menu "🧠 Aprendizado"): ver, **editar**, **apagar** e
+  **adicionar** manualmente respostas. Ações em `app/actions/learning.ts` (re-embeda ao editar/adicionar).
 
 ### Agendamento — VISITA vs ATENDIMENTO
 - **VISITA TÉCNICA** = ida presencial ao endereço do cliente. `channel: "visit"`.
