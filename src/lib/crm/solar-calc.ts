@@ -190,6 +190,8 @@ ${planos}
 
 ✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.
 
+📄 *Pra um orçamento 100% certo, o ideal é a sua conta de luz* — o cálculo é feito pela *média anual de kWh* (e não por um mês só). Se ainda não enviou, me manda a conta (foto ou PDF) que sai perfeito! E se quiser uma marca específica de painel/inversor, é só falar 😊
+
 _Valores podem variar conforme o projeto e a aprovação de crédito._`
   )
 }
