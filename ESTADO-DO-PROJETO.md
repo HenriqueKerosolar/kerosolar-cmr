@@ -71,6 +71,13 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
 - **⌨️ Texto** → kWh, valor em R$, ou nº de painéis.
 
 ### Regras de cálculo
+- **Média anual pela conta:** quando a foto/PDF da conta traz o HISTÓRICO de consumo (tabela de
+  vários meses), a IA de visão soma todos os meses e divide → usa a MÉDIA ANUAL (não um mês só).
+- **Não reenvia orçamento quase idêntico:** só (re)apresenta o orçamento se o consumo mudar > 5%
+  (ou > 20 kWh) em relação ao anterior — evita repetir orçamento quando a conta confirma o mesmo consumo.
+- **Entrega em contatos LID** (número longo, privacidade do WhatsApp): a conversa guarda o `chatJid`
+  (endereço completo, ex. `...@lid`) e o `dispatchOutbound` responde nele — antes ia pro `@s.whatsapp.net`
+  errado e não entregava. Auto-corrige no próximo inbound do cliente.
 - **1 painel/placa/módulo = 60 kWh** (5 painéis = 300 kWh, 10 = 600 kWh...).
 - **Equivalência kWh ↔ R$:** valor da conta ≈ kWh × 1,22.
 - **Validação de faixa** (em `pdf-utils.ts`): consumo só 20–50.000 kWh; valor só
