@@ -108,6 +108,10 @@ e valem em qualquer etapa / qualquer lead:
 - **Documentos recebidos do cliente** (foto/PDF) são salvos em `/data/uploads` e
   gravados como `mediaUrl` na mensagem → aparecem clicáveis no chat (imagem inline
   ou link "📎 Abrir arquivo"). Vale só para anexos recebidos a partir de 2026-06-09.
+- **Nada é apagado quando o cliente apaga no WhatsApp.** Mídia recebida já está copiada
+  no nosso servidor (persiste mesmo se o cliente apagar no celular dele). Quando o cliente
+  faz "apagar para todos", o sistema NÃO remove a mensagem do banco — só prefixa o conteúdo
+  com "🚫 (cliente apagou esta mensagem)" (tratamento de REVOKE no `handleIncoming`).
 - **Blocos de tempo nas etapas:** seletor minuto/hora/dia (componente `TimeInput` em
   `stage-flow-builder.tsx`). Internamente sempre armazenado em **minutos**.
 - **Scroll do chat:** auto-scroll só quando o operador já está perto do fim.

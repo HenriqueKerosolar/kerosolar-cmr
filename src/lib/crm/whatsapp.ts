@@ -205,6 +205,26 @@ async function handleIncoming(accountId: string, msg: any) {
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
 
+  // Cliente apagou uma mensagem ("apagar para todos"). NÃO removemos nada do nosso
+  // banco — só marcamos a mensagem original como apagada, mantendo o conteúdo visível.
+  const proto = msg.message?.protocolMessage
+  if (proto && (proto.type === 0 || proto.type === 'REVOKE')) {
+    const deletedId: string | undefined = proto.key?.id
+    if (deletedId) {
+      try {
+        const orig = await prisma.message.findFirst({ where: { externalId: deletedId } })
+        if (orig && !orig.content.startsWith('🚫')) {
+          await prisma.message.update({
+            where: { id: orig.id },
+            data: { content: `🚫 (cliente apagou esta mensagem) ${orig.content}` },
+          })
+          console.log('[wa revoke] mensagem marcada como apagada pelo cliente:', deletedId)
+        }
+      } catch (e) { console.error('[wa revoke]', e) }
+    }
+    return
+  }
+
   // Dedup em memória por ID da mensagem — barra eventos duplicados do mesmo processo
   const msgId: string | undefined = msg.key?.id
   if (msgId) {
