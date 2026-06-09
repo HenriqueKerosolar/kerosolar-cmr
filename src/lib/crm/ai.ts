@@ -205,6 +205,19 @@ export async function embedText(cfg: AiConfig, text: string): Promise<number[] |
   } catch { return null }
 }
 
+/** Reescreve uma mensagem com OUTRAS palavras, mantendo o MESMO sentido (para variar
+ *  o disparo por lead — evita mandar tudo idêntico). Retorna a base se falhar. */
+export async function varyMessage(cfg: AiConfig, baseText: string): Promise<string> {
+  if (!cfg.provider || !baseText.trim()) return baseText
+  const system = `Você reescreve mensagens de WhatsApp com OUTRAS palavras, mantendo EXATAMENTE o mesmo sentido, tom amigável e TODAS as informações (nomes, valores, ofertas, prazos). ` +
+    `Pode variar a saudação e a ordem das frases. NÃO invente nada novo, NÃO tire informação, NÃO use aspas. Mantenha curto (estilo WhatsApp). Responda SOMENTE com a mensagem reescrita.`
+  try {
+    const out = await chat(cfg, system, [{ role: 'user', content: baseText }], 400)
+    const t = (out || '').trim()
+    return t || baseText
+  } catch { return baseText }
+}
+
 /** Similaridade de cosseno entre dois vetores (0 a 1). */
 export function cosineSim(a: number[], b: number[]): number {
   if (!a?.length || !b?.length || a.length !== b.length) return 0

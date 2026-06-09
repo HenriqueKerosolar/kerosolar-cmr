@@ -140,6 +140,23 @@ export async function enterStage(leadId: string, stageId: string) {
 
   const isSimulator = conv.channel === 'simulator'
 
+  // 🔁 REPESCAGEM e a escada "X DIAS DEPOIS": gera uma mensagem de reengajamento
+  //    PERSONALIZADA (IA, com base na etapa de origem + contexto da conversa) tentando trazer
+  //    o cliente de volta. Repescagem dispara na hora; "15 dias depois" espera 15 dias, etc.
+  //    Depois, sem resposta em 24h, segue pra próxima etapa da escada (noReply da etapa).
+  {
+    const isRepescagem = /repescagem/i.test(stage.name)
+    const diasMatch = stage.name.match(/(\d+)\s*dias?\s*depois/i)
+    if (!isSimulator && (isRepescagem || diasMatch)) {
+      const dias = diasMatch ? parseInt(diasMatch[1], 10) : 0
+      await prisma.scheduledAction.updateMany({ where: { leadId, type: 'reengage', done: false }, data: { done: true } })
+      await prisma.scheduledAction.create({
+        data: { leadId, conversationId: conv.id, stageId, type: 'reengage', payload: {} as object, runAt: new Date(Date.now() + dias * 24 * 60 * 60 * 1000) },
+      }).catch(() => {})
+      return
+    }
+  }
+
   // 📅 Etapas de ORÇAMENTO: agenda o lembrete de validade (1 dia depois) — "orçamento válido
   //    por 3 dias". Vale pras duas etapas ("Recebeu orçamento automático" e "...manual").
   if (!isSimulator && /or[çc]amento/i.test(stage.name)) {
@@ -217,7 +234,7 @@ export async function processDueActions() {
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
       //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
       //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.
-      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity') {
+      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity' || a.type === 'reengage') {
         const ldw = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
         const janela = janelaDoFunil(ldw?.pipeline?.sendStartHour, ldw?.pipeline?.sendEndHour)
         const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janela)
@@ -296,12 +313,29 @@ export async function processDueActions() {
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
+      if (a.type === 'reengage') {
+        const ld = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { humanOnly: true, status: true } })
+        if (ld && !ld.humanOnly && ld.status === 'open') {
+          const { gerarMensagemReengajamento } = await import('./reengage')
+          const msg = await gerarMensagemReengajamento(a.leadId, a.conversationId)
+          if (msg) {
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+            // arma o "sem resposta" da etapa (Repescagem → 15 dias depois em 24h)
+            if (a.stageId) {
+              const { scheduleNoReply } = await import('./flow-blocks')
+              await scheduleNoReply(a.leadId, a.conversationId, a.stageId).catch(() => {})
+            }
+          }
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
       if (a.type !== 'send_message') {
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
 
-      const p = (a.payload as { text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document' }) ?? {}
+      const p = (a.payload as { text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document'; vary?: boolean }) ?? {}
       // Lead pediu bloqueio total? cancela
       const ld = await prisma.lead.findUnique({
         where: { id: a.leadId },
@@ -318,9 +352,14 @@ export async function processDueActions() {
         cursor = slot.getTime() + tempoDigitacaoMs(p.text ?? '')
         continue
       }
-      // dentro da janela e na vez → envia
-      await dispatchOutbound(a.conversationId, p.text ?? '', p.mediaUrl ? { url: p.mediaUrl, type: p.mediaType ?? 'image' } : undefined)
-      cursor = Date.now() + tempoDigitacaoMs(p.text ?? '')
+      // dentro da janela e na vez → envia (se vary=true, gera uma VARIAÇÃO da mensagem por lead)
+      let textoFinal = p.text ?? ''
+      if (p.vary && textoFinal.trim()) {
+        const { loadAiConfig, varyMessage } = await import('./ai')
+        textoFinal = await varyMessage(await loadAiConfig(), textoFinal)
+      }
+      await dispatchOutbound(a.conversationId, textoFinal, p.mediaUrl ? { url: p.mediaUrl, type: p.mediaType ?? 'image' } : undefined)
+      cursor = Date.now() + tempoDigitacaoMs(textoFinal)
       await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
     } catch (e) {
       console.error('[flow processDue]', e)
@@ -445,7 +484,7 @@ async function handleAppointmentReminder(a: { leadId: string; conversationId: st
   await prisma.task.create({
     data: {
       leadId: appt.leadId,
-      title: `🔔 LEMBRETE: ${channelLabelTask} com ${appt.lead.contact?.name ?? appt.lead.title} às ${hora} (${data}) — em 2h`,
+      title: `🔔 LEMBRETE: ${channelLabelTask} com ${appt.lead.contact?.name ?? appt.lead.title} às ${hora} (${data}) — confirmar com o cliente`,
       type: 'call',
       dueAt: appt.scheduledAt,
     },

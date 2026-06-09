@@ -462,37 +462,11 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
-  // ── Documentos de financiamento: CPF no texto OU foto de identidade ──────────
-  // Se o cliente enviar CPF, RG, CNH ou dados pessoais → move para etapa de financiamento e avisa humano
-  const cpfNoTexto = /\b\d{3}\.?\d{3}\.?\d{3}[-–]?\d{2}\b/.test(text)
-  const fotoIdentidade = billData?.isIdentityDoc === true
-  if ((cpfNoTexto || fotoIdentidade) && !lead.humanOnly) {
-    const FINANCING_STAGE = 'Financiamento - Pedido de Documentos'
-    const targetStage = pipeline.stages.find((s) => norm(s.name) === norm(FINANCING_STAGE))
-
-    const reply = 'Recebi seus dados! ✅ Já estou encaminhando para nosso consultor dar continuidade ao processo de financiamento. Em breve ele entrará em contato com você 😊'
-
-    const leadUpd: Prisma.LeadUncheckedUpdateInput = { highPriority: true, aiEnabled: false }
-    if (targetStage && targetStage.id !== lead.stageId) {
-      leadUpd.stageId = targetStage.id
-      await prisma.note.create({ data: { leadId: lead.id, type: 'stage_change', content: `IA moveu para "${FINANCING_STAGE}" — documentos/dados de financiamento recebidos.` } })
-    }
-    await prisma.lead.update({ where: { id: lead.id }, data: leadUpd })
-    await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
-    await prisma.task.create({ data: { leadId: lead.id, title: '📋 FINANCIAMENTO: documentos recebidos — verificar crédito', type: 'call', dueAt: now } })
-    await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: cpfNoTexto ? 'CPF/dados pessoais recebidos — encaminhado para financiamento.' : 'Foto de documento de identidade recebida — encaminhado para financiamento.' } })
-
-    await simularDigitacao(reply)
-    await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: reply } })
-    await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } })
-
-    if (targetStage) {
-      const { enterStage } = await import('./flow')
-      await enterStage(lead.id, targetStage.id).catch(() => {})
-    }
-
-    return { ...base, reply, aiHandled: true, handoff: true, stage: targetStage?.name ?? base.stage }
-  }
+  // ── Financiamento: a COLETA dos dados (nome, CPF, nascimento, CEP, e-mail) é guiada
+  //    pela IA (ver seção "FINANCIAMENTO — COLETA DE DADOS" no prompt). A IA move pra etapa
+  //    "Financiamento pedido de documentos" (routeToStage), confere os dados (texto ou
+  //    documento) e só faz handoff pro consultor quando os 5 dados estão completos.
+  //    Por isso NÃO pausamos a IA automaticamente ao detectar um CPF aqui.
 
   // ── Aceitação de orçamento: cliente confirma que quer prosseguir ─────────────
   // Dispara quando o lead já tem orçamento calculado E a mensagem indica aceitação.
@@ -505,8 +479,12 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   const aceitouOrcamento = temOrcamento && /\b(aceito|aceitar|fechei|vou fechar|quero fechar|topei|vamos fechar|bora fechar|fechado|quero o sistema|quero instalar|quero contratar|quero assinar|me manda o contrato|quero o contrato|pode fechar|pode comecar|quero prosseguir)\b/.test(txtNormAceit)
 
   if (aceitouOrcamento && !lead.humanOnly) {
-    const FINANCING_STAGE = 'Financiamento - Pedido de Documentos'
-    const targetStage = pipeline.stages.find((s) => norm(s.name) === norm(FINANCING_STAGE))
+    const FINANCING_STAGE = 'Financiamento pedido de documentos'
+    // Casamento ROBUSTO: etapa de "financiamento" + "pedido/documento" (não depende de traço/maiúscula)
+    const targetStage = pipeline.stages.find((s) => {
+      const n = norm(s.name)
+      return n.includes('financiamento') && (n.includes('pedido') || n.includes('documento'))
+    })
 
     const reply = 'Ótimo! 🎉 Que boa notícia! Confirmei aqui que está tudo certo com o orçamento — obrigado pela confiança! Vou encaminhar agora para nosso consultor dar início ao processo. Em breve ele entrará em contato com você para os próximos passos 😊'
 
@@ -840,7 +818,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         // Confirmação 1 dia antes + lembrete 2h antes (só agenda se houver tempo — desativado no simulador)
         if (!isSimulator) {
           const confirmAt = new Date(apptDate.getTime() - 24 * 60 * 60 * 1000)  // 1 dia antes: pede confirmação
-          const reminderAt = new Date(apptDate.getTime() - 2 * 60 * 60 * 1000)  // 2h antes: lembrete final
+          const reminderAt = new Date(apptDate.getTime() - 3 * 60 * 60 * 1000)  // 3h antes: lembrete final
           for (const runAt of [confirmAt, reminderAt]) {
             if (runAt > now) {
               await prisma.scheduledAction.create({

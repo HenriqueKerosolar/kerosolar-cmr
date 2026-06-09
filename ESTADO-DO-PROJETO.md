@@ -129,6 +129,24 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 - **Tela de gestão** em `/aprendizado` (menu "🧠 Aprendizado"): ver, **editar**, **apagar** e
   **adicionar** manualmente respostas. Ações em `app/actions/learning.ts` (re-embeda ao editar/adicionar).
 
+### Esteira de etapas (comportamentos configurados)
+- **Financiamento (coleta de dados):** quando o cliente quer financiar → IA pede os 5 dados
+  (nome, CPF, nascimento, CEP, e-mail), confere (texto/documento) e só faz handoff quando completo.
+  routeToStage = "Financiamento pedido de documentos". (A pausa automática no CPF foi removida.)
+- **Financiamento Aprovado:** ao chegar → parabeniza + pede documento + oferece agendar vistoria.
+  Ao agendar a vistoria → routeToStage "Vistoria agendada". Horário fora do comercial → "verifico com o vistoriador".
+- **Vistoria agendada:** fica parada (mudança manual). Lembretes vêm do agendamento: 1 dia antes + 3h antes.
+- **Finalizado:** ao chegar lembra de enviar as 2 contas (após troca do medidor, 2º mês); cobra em ~60 dias + 24h.
+- **Já é cliente:** recepção + pede pra descrever a necessidade (IA usa o script de pós-venda).
+- **Fechou / Em homologação:** mudança manual, sem automação.
+- **Repescagem + escada (15/30/60/90/180 dias depois):** mensagem de reengajamento PERSONALIZADA
+  gerada pela IA (`reengage.ts`) — usa a etapa de origem + contexto + tempo decorrido, mostrando o
+  prejuízo da inação, sempre educada. Cada etapa espera seu prazo, reengaja, e sem resposta em 24h
+  vai pra próxima; 180 dias → "Leads adquiridos".
+- **Leads adquiridos (listas de transmissão):** botão "Disparar" → escolhe etapa, segmenta por TEMPO
+  NA PLATAFORMA (de X a Y dias), ordem (antigos/novos), limite de leads, intervalo entre envios, e
+  opção de **variar a mensagem** (IA reescreve por lead — `varyMessage`). Respeita horário comercial.
+
 ### Agendamento — VISITA vs ATENDIMENTO
 - **VISITA TÉCNICA** = ida presencial ao endereço do cliente. `channel: "visit"`.
   **NUNCA perguntar canal.** Só dia e horário. (É o padrão para solar.)
