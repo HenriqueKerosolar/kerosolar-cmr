@@ -239,16 +239,16 @@ async function handleIncoming(accountId: string, msg: any) {
           msg, 'buffer', {},
           sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
         )
-        // Extrai texto do PDF com pdf-parse (JS puro — não depende de binário do SO)
+        // Extrai texto do PDF com unpdf (serverless — sem worker nativo, funciona no Railway)
         let pdfText = ''
         try {
-          const { PDFParse } = await import('pdf-parse') as any
-          const parser = new PDFParse({ data: new Uint8Array(buffer) })
-          const result = await parser.getText()
-          pdfText = (result?.text ?? '').trim().slice(0, 3000)
-          await parser.destroy?.().catch?.(() => {})
+          const { extractText, getDocumentProxy } = await import('unpdf')
+          const pdf = await getDocumentProxy(new Uint8Array(buffer))
+          const { text: pdfRaw } = await extractText(pdf, { mergePages: true })
+          pdfText = (Array.isArray(pdfRaw) ? pdfRaw.join('\n') : pdfRaw ?? '').trim().slice(0, 3000)
+          console.log('[wa pdf] extraído', pdfText.length, 'chars')
         } catch (e) {
-          console.error('[wa pdf-parse]', e)
+          console.error('[wa pdf] erro:', e)
         }
         if (pdfText) {
           const { parseBillText, isBillPdf } = await import('./pdf-utils')
@@ -263,7 +263,7 @@ async function handleIncoming(accountId: string, msg: any) {
           }
         } else {
           // PDF sem texto extraível (provavelmente escaneado/imagem) → instrui a IA
-          text = '[O cliente enviou um PDF que não pôde ser lido automaticamente. Se ele ainda não tem orçamento, peça gentilmente o consumo médio em kWh ou o valor médio da conta, ou que reenvie como foto. Se já tem orçamento, siga normalmente.]'
+          text = '[O cliente enviou um PDF que não pôde ser lido automaticamente. NUNCA peça senha (não usamos senha). Se ele ainda não tem orçamento, peça gentilmente o consumo médio em kWh ou o valor médio da conta, ou que reenvie como FOTO. Se já tem orçamento, siga normalmente.]'
           displayText = '📄 PDF enviado (não foi possível ler o conteúdo)'
         }
       }
