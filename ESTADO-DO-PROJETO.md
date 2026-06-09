@@ -55,6 +55,10 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
   `append` para as últimas 12h (evita ressuscitar histórico antigo numa sincronização).
   A dedup garante que nada é respondido duas vezes.
 - **Proxy opcional** via env `PROXY_URL` (não usado atualmente — o IP do Railway funciona direto).
+- **Respostas do operador pelo APP do WhatsApp são capturadas** (`registrarMensagemOperador`):
+  se o atendente responde direto pelo celular/WhatsApp Web (fora do CRM), a mensagem e os
+  ARQUIVOS aparecem no chat do CRM como "👤 Você". A IA NÃO é desligada (segue trabalhando).
+  Dedup: ids enviados pelo próprio CRM ficam em `sentByCrm` e são ignorados (não duplica).
 
 ### Leitura de conta de luz (3 formatos)
 - **📷 Foto/imagem** → `extractBillFromImage` (visão da IA) lê kWh, valor ou nº de painéis.

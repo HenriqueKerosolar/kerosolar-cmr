@@ -11,12 +11,22 @@ import { loadAiConfig, transcribeAudio } from './ai'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string> }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string> }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
 
 // Dedup em memória: IDs de mensagens já processadas (evita resposta duplicada
 // quando o Baileys dispara messages.upsert 2x para a mesma mensagem).
 const seenMsgs: Set<string> = (g.__waSeenMsgs ??= new Set())
+
+// IDs de mensagens que o PRÓPRIO CRM enviou (via sendText/sendMedia). Quando elas
+// voltam como "fromMe" no upsert, ignoramos — assim só capturamos o que o operador
+// digitou DIRETO no app do WhatsApp (essas sim são registradas no CRM).
+const sentByCrm: Set<string> = (g.__waSentByCrm ??= new Set())
+function markSentByCrm(id?: string) {
+  if (!id) return
+  sentByCrm.add(id)
+  if (sentByCrm.size > 1000) { for (const x of sentByCrm) { sentByCrm.delete(x); if (sentByCrm.size <= 800) break } }
+}
 
 // Em produção Railway usa volume persistente em /data; em dev usa pasta local
 const SESSIONS_DIR = fs.existsSync('/data')
@@ -214,9 +224,18 @@ export async function startSession(accountId: string): Promise<void> {
 }
 
 async function handleIncoming(accountId: string, msg: any) {
-  if (msg.key.fromMe) return
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
+
+  // Mensagem enviada por NÓS (fromMe).
+  if (msg.key.fromMe) {
+    // Se foi o próprio CRM que mandou (IA/automação), já está salva → ignora.
+    if (msg.key?.id && sentByCrm.has(msg.key.id)) return
+    // Senão, é o OPERADOR respondendo direto pelo app do WhatsApp → registra no CRM
+    // (mostra a resposta aqui e salva os arquivos). NÃO desliga a IA.
+    try { await registrarMensagemOperador(accountId, msg, jid) } catch (e) { console.error('[wa fromMe]', e) }
+    return
+  }
 
   // Cliente apagou uma mensagem ("apagar para todos"). NÃO removemos nada do nosso
   // banco — só marcamos a mensagem original como apagada, mantendo o conteúdo visível.
@@ -389,12 +408,73 @@ async function handleIncoming(accountId: string, msg: any) {
   }
 }
 
+/** Registra no CRM uma mensagem que o OPERADOR enviou DIRETO pelo app do WhatsApp.
+ *  Mostra a resposta aqui (como "👤 Você") e salva os arquivos. NÃO desliga a IA. */
+async function registrarMensagemOperador(accountId: string, msg: any, jid: string) {
+  const m = msg.message || {}
+  let text: string =
+    m.conversation || m.extendedTextMessage?.text ||
+    m.imageMessage?.caption || m.videoMessage?.caption || m.documentMessage?.caption || ''
+
+  let mediaUrl: string | undefined
+  let mediaType: 'image' | 'video' | 'document' | undefined
+
+  const isImage = !!m.imageMessage, isVideo = !!m.videoMessage, isDoc = !!m.documentMessage
+  const isAudio = !!(m.audioMessage || m.pttMessage)
+  if (isImage || isVideo || isDoc || isAudio) {
+    try {
+      const { downloadMediaMessage } = await import('@whiskeysockets/baileys') as any
+      const sess = sessions.get(accountId)
+      const buffer: Buffer = await downloadMediaMessage(msg, 'buffer', {}, sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {})
+      let ext = '.bin'
+      if (isImage) { const mt = m.imageMessage?.mimetype || ''; ext = mt.includes('png') ? '.png' : mt.includes('webp') ? '.webp' : '.jpg'; mediaType = 'image' }
+      else if (isVideo) { ext = '.mp4'; mediaType = 'video' }
+      else if (isAudio) { ext = '.ogg'; mediaType = 'document' }
+      else { const fn = m.documentMessage?.fileName || ''; const dot = fn.lastIndexOf('.'); ext = dot >= 0 ? fn.slice(dot) : (m.documentMessage?.mimetype?.includes('pdf') ? '.pdf' : '.bin'); mediaType = 'document' }
+      mediaUrl = salvarMidiaRecebida(buffer, ext) ?? undefined
+      if (!text) text = isImage ? '📷 Foto enviada' : isVideo ? '🎥 Vídeo enviado' : isAudio ? '🎤 Áudio enviado' : '📎 Documento enviado'
+    } catch (e) { console.error('[wa fromMe media]', e) }
+  }
+
+  if (!text && !mediaUrl) return // nada a registrar (edição/reação/etc.)
+
+  const phone = jid.split('@')[0]
+  let contact = await prisma.contact.findFirst({ where: { OR: [{ phone }, { whatsappId: phone }] } })
+  if (!contact) contact = await prisma.contact.create({ data: { phone, whatsappId: phone } })
+
+  let conversation = await prisma.conversation.findFirst({ where: { channel: 'whatsapp', contactId: contact.id }, orderBy: { lastMessageAt: 'desc' } })
+  if (!conversation) {
+    // operador iniciou uma conversa nova pelo app → cria lead na 1ª etapa pra ficar registrado
+    const pipeline = await prisma.pipeline.findFirst({ orderBy: { createdAt: 'asc' }, include: { stages: { orderBy: { sortOrder: 'asc' }, take: 1 } } })
+    const stageId = pipeline?.stages?.[0]?.id
+    const lead = pipeline && stageId ? await prisma.lead.create({ data: { title: contact.name || phone, pipelineId: pipeline.id, stageId, contactId: contact.id, source: 'whatsapp' } }) : null
+    conversation = await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead?.id ?? null, externalId: phone, accountId } })
+  }
+
+  // dedup: não grava 2x a mesma mensagem
+  if (msg.key?.id) {
+    const ja = await prisma.message.findFirst({ where: { conversationId: conversation.id, externalId: msg.key.id }, select: { id: true } })
+    if (ja) return
+  }
+
+  await prisma.message.create({
+    data: {
+      conversationId: conversation.id, direction: 'outbound', senderType: 'human',
+      content: text || '[arquivo]', externalId: msg.key?.id ?? null,
+      mediaUrl: mediaUrl ?? null, mediaType: mediaType ?? null,
+    },
+  })
+  await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } })
+  if (conversation.leadId) await prisma.lead.update({ where: { id: conversation.leadId }, data: { lastMessageAt: new Date() } }).catch(() => {})
+}
+
 /** Envia mensagem de texto. */
 export async function sendText(accountId: string, jid: string, text: string): Promise<void> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
-  await sess.sock.sendMessage(fullJid, { text })
+  const sent = await sess.sock.sendMessage(fullJid, { text })
+  markSentByCrm(sent?.key?.id)
 }
 
 /** Envia mídia (imagem, vídeo, documento) por URL. */
@@ -406,7 +486,8 @@ export async function sendMedia(accountId: string, jid: string, opts: { url: str
     opts.type === 'image'    ? { image: { url: opts.url }, caption: opts.caption } :
     opts.type === 'video'    ? { video: { url: opts.url }, caption: opts.caption } :
                                { document: { url: opts.url }, fileName: opts.fileName ?? 'arquivo', caption: opts.caption }
-  await sess.sock.sendMessage(fullJid, payload)
+  const sent = await sess.sock.sendMessage(fullJid, payload)
+  markSentByCrm(sent?.key?.id)
 }
 
 export async function disconnect(accountId: string): Promise<void> {
