@@ -356,33 +356,33 @@ export function getLiveStatus(accountId: string): { status: string; qr: string |
 }
 
 /**
- * No startup:
- * - Contas "connected" → tenta reconectar (sessão persistida em disco)
- * - Contas "connecting" / "qr" → reseta para "disconnected" (QR expirou, usuário precisa reconectar manualmente)
+ * No startup, reconecta TODA conta que tenha sessão salva no disco
+ * (creds.json), independente do status no banco — assim uma conta que
+ * caiu para "qr"/"connecting" mas ainda tem credenciais volta sozinha,
+ * sem precisar escanear o QR de novo. Contas sem credenciais são
+ * resetadas para "disconnected".
  * Chamado via instrumentation.ts.
  */
 export async function reconnectAllOnStartup(): Promise<void> {
   try {
-    // Reseta contas presas em connecting/qr (QR expirado, não vale reconectar automaticamente)
-    const stuck = await prisma.whatsappAccount.updateMany({
-      where: { status: { in: ['connecting', 'qr'] } },
-      data: { status: 'disconnected', qr: null },
-    })
-    if (stuck.count > 0) {
-      console.log(`[wa] ${stuck.count} conta(s) em qr/connecting resetadas para disconnected`)
-    }
-
-    // Só tenta reconectar as que estavam efetivamente conectadas
     const accounts = await prisma.whatsappAccount.findMany({
-      where: { status: 'connected' },
+      where: { status: { in: ['connected', 'connecting', 'qr'] } },
     })
-    if (accounts.length === 0) return
-    console.log(`[wa] Reconectando ${accounts.length} conta(s) no startup…`)
+    let reconectar = 0
     for (const acc of accounts) {
-      // pequeno delay entre cada conta para não sobrecarregar
-      await new Promise((r) => setTimeout(r, 2000))
-      startSession(acc.id).catch((e) => console.error(`[wa] startup reconnect ${acc.id}:`, e))
+      const temCreds = fs.existsSync(path.join(SESSIONS_DIR, acc.id, 'creds.json'))
+      if (temCreds) {
+        reconectar++
+        await new Promise((r) => setTimeout(r, 2000))
+        console.log(`[wa] reconectando ${acc.id} (sessão salva encontrada)`)
+        startSession(acc.id).catch((e) => console.error(`[wa] startup reconnect ${acc.id}:`, e))
+      } else {
+        // sem credenciais salvas → não dá pra reconectar sem QR
+        await setStatus(acc.id, { status: 'disconnected', qr: null })
+        console.log(`[wa] ${acc.id} sem sessão salva — resetado para disconnected`)
+      }
     }
+    if (reconectar > 0) console.log(`[wa] Reconectando ${reconectar} conta(s) no startup…`)
   } catch (e) {
     console.error('[wa] reconnectAllOnStartup error:', e)
   }
