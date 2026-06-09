@@ -100,7 +100,10 @@ export async function extractBillFromImage(
 ): Promise<{ kwh: number | null; valor: number | null; paineis: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean }> {
   const fallback = { kwh: null, valor: null, paineis: null, medidor: null, distribuidora: null, isIdentityDoc: false }
   const prompt = `Você é um leitor de documentos e imagens. Analise a imagem e extraia:
-1. consumo/geração em kWh — de conta de luz (consumo médio mensal) OU de anúncio/kit de energia solar (ex: "geração média de 300 kWh/mês")
+1. consumo em kWh — REGRA IMPORTANTE:
+   • Se a conta tiver um HISTÓRICO DE CONSUMO (tabela com vários meses — ex.: "CONSUMO/kWh", "CONSUMO FATURADO", lista de MAI/26, ABR/26, ...), some o consumo de TODOS os meses visíveis e divida pela quantidade de meses → retorne essa MÉDIA (a média anual) arredondada. NUNCA use só o mês mais recente nem só um mês.
+   • Se aparecer só um valor de consumo (um mês), retorne esse valor.
+   • Também serve geração de anúncio/kit de energia solar (ex.: "geração média de 300 kWh/mês").
 2. valor total a pagar em R$ — SOMENTE se for conta de luz/energia (NÃO use o preço de um anúncio/kit aqui)
 3. paineis: quantidade de painéis/placas/módulos solares que a imagem indica (ex: anúncio "5 PAINÉIS DE 540 W" → 5). null se não houver.
 4. tipo de medidor/ligação: "monofásico", "bifásico" ou "trifásico" — SOMENTE se for conta de luz

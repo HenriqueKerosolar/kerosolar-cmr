@@ -745,7 +745,12 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // Orçamento NOVO calculado nesta interação → envia o orçamento DETERMINÍSTICO.
   // Inclui o kit mínimo (300 kWh): sempre mostra o orçamento formatado, nunca deixa a IA descrever.
   const consumoAntes = typeof cf.consumoKwh === 'number' ? cf.consumoKwh : null
-  const presentBudget = !!solar && solar.consumoKwh !== consumoAntes
+  // Só (re)apresenta o orçamento se for o PRIMEIRO ou se o consumo mudou de forma RELEVANTE
+  // (> 5% ou > 20 kWh). Evita reenviar um orçamento quase idêntico (ex.: 538 → 531) quando o
+  // cliente manda a conta confirmando praticamente o mesmo consumo.
+  const mudancaRelevante = consumoAntes == null
+    || Math.abs((solar?.consumoKwh ?? 0) - consumoAntes) > Math.max(20, consumoAntes * 0.05)
+  const presentBudget = !!solar && mudancaRelevante
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
