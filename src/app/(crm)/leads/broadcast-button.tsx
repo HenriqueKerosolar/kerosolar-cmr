@@ -48,10 +48,10 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
-          <div className="bg-[--card] rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             {/* Cabeçalho */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[--border] sticky top-0 bg-[--card] rounded-t-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[--border] sticky top-0 bg-white dark:bg-zinc-900 rounded-t-2xl">
               <h2 className="font-bold text-lg">📣 Lista de transmissão</h2>
               <button onClick={() => setOpen(false)} className="w-8 h-8 rounded-lg hover:bg-[--accent] text-[--muted-foreground] text-lg leading-none">×</button>
             </div>
@@ -123,7 +123,7 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
             </div>
 
             {/* Rodapé */}
-            <div className="flex gap-2 justify-end px-6 py-4 border-t border-[--border] sticky bottom-0 bg-[--card] rounded-b-2xl">
+            <div className="flex gap-2 justify-end px-6 py-4 border-t border-[--border] sticky bottom-0 bg-white dark:bg-zinc-900 rounded-b-2xl">
               <button onClick={() => setOpen(false)} className="px-4 py-2 text-sm rounded-lg border border-[--border] hover:bg-[--accent]">Fechar</button>
               <button onClick={send} disabled={sending || !text.trim()}
                 className="px-5 py-2 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">

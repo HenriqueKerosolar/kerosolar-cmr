@@ -39,8 +39,8 @@ export function NewLeadButton({ pipelineId, stages }: { pipelineId: string; stag
       </button>
 
       {open && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
-          <div className="bg-[--card] rounded-2xl p-5 w-full max-w-sm space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpen(false)}>
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-5 w-full max-w-sm space-y-3" onClick={(e) => e.stopPropagation()}>
             <h2 className="font-bold text-lg">Novo lead</h2>
 
             <div>

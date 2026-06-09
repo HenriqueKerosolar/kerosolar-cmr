@@ -129,8 +129,8 @@ export function WhatsappClient() {
 
       {/* Modal QR */}
       {qrFor && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setQrFor(null); load() }}>
-          <div className="bg-[--card] rounded-2xl p-6 max-w-sm w-full text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { setQrFor(null); load() }}>
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-6 max-w-sm w-full text-center space-y-4" onClick={(e) => e.stopPropagation()}>
             <h2 className="font-bold text-lg">Conectar WhatsApp</h2>
             {qrStatus === 'connected' ? (
               <div className="py-8"><div className="text-5xl mb-2">✅</div><p className="font-medium">Conectado com sucesso!</p></div>
