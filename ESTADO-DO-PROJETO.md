@@ -185,6 +185,10 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 
 ## 5. Controles do CRM
 
+- **🏠 Painel de controle** (`/painel`, tela inicial): visão geral — leads abertos/novos hoje/em
+  atendimento/ganhos/fila de disparo, funil por etapa (barras), próximos agendamentos, tarefas
+  pendentes, eficiência 30d e atalhos. É o primeiro item do menu e o redirect padrão de `/`.
+
 - **Toggle IA por lead** (`lead-card-client.tsx`): botão "🤖 IA ativa · Desligar" /
   "👤 Manual · Ligar IA". Vale em qualquer etapa (todas as etapas têm IA ligada por padrão).
 - **Exportar / Limpar etapa** (botão "⬇️ Exportar / Limpar" na página de Leads): baixa um CSV
