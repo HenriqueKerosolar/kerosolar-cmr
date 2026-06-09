@@ -62,6 +62,8 @@ export async function createManualLead(data: {
       stageId: data.stageId,
       contactId: contact.id,
       value: data.value ?? 0,
+      // Lead manual com telefone é atendível pelo WhatsApp → mostra o selo verde no card
+      source: phone ? 'whatsapp' : 'manual',
     },
   })
 

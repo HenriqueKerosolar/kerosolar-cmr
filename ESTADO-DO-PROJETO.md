@@ -124,6 +124,10 @@ e valem em qualquer etapa / qualquer lead:
 ### Lead manual
 - Ao criar lead manual com telefone: vincula a conta de WhatsApp conectada (`accountId`)
   e normaliza o número com **DDI 55**. Sem isso a mensagem não vai pro WhatsApp.
+- Lead manual com telefone nasce com `source = 'whatsapp'` → mostra o **selo verde**
+  no card do funil. Sem telefone → `source = 'manual'`.
+- O envio usa `contact.whatsappId` (não o `externalId` da conversa). O selo verde é só
+  visual (depende de `lead.source`) — não significa que o envio está ligado/desligado.
 
 ---
 
