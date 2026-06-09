@@ -149,6 +149,10 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   `flow_noreply` e `budget_followup` passam pela janela (dia útil + 9h–18h do funil). Se vencerem
   fora do horário, são reagendadas pro próximo horário válido (ex.: 9h do próximo dia útil).
   Antes só `send_message` respeitava. (Gate no `processDueActions` em `flow.ts`.)
+- **Lembrete de validade do orçamento (1 dia depois):** ao entrar numa etapa de orçamento
+  (nome com "orçamento"), agenda `budget_validity` p/ +24h → manda "{SAUDACAO}! …orçamentos
+  ficam ativos por 3 dias…nova cotação pode ter reajuste". Configurável: `budget_validity_message`.
+  Etapas de orçamento movem pra Repescagem aos 3 dias (noReply 4320 min), alinhado à validade.
 - **Tarefa antes da Repescagem:** quando um lead que JÁ recebeu orçamento some e seria movido
   pra Repescagem, o sistema cria uma TAREFA "📞 Orçamento sem retorno — retomar contato" e marca
   `highPriority` (lead valioso não é arquivado sem um humano tentar). Em `handleFlowNoReply`.

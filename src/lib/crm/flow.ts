@@ -140,6 +140,15 @@ export async function enterStage(leadId: string, stageId: string) {
 
   const isSimulator = conv.channel === 'simulator'
 
+  // 📅 Etapas de ORÇAMENTO: agenda o lembrete de validade (1 dia depois) — "orçamento válido
+  //    por 3 dias". Vale pras duas etapas ("Recebeu orçamento automático" e "...manual").
+  if (!isSimulator && /or[çc]amento/i.test(stage.name)) {
+    await prisma.scheduledAction.updateMany({ where: { leadId, type: 'budget_validity', done: false }, data: { done: true } })
+    await prisma.scheduledAction.create({
+      data: { leadId, conversationId: conv.id, stageId, type: 'budget_validity', payload: {} as object, runAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+    }).catch(() => {})
+  }
+
   // Se a etapa usa o construtor de BLOCOS, executa o fluxo de blocos e encerra aqui.
   if (flow.blocks && flow.blocks.length) {
     const { startBlockFlow } = await import('./flow-blocks')
@@ -208,7 +217,7 @@ export async function processDueActions() {
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
       //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
       //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.
-      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup') {
+      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity') {
         const ldw = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
         const janela = janelaDoFunil(ldw?.pipeline?.sendStartHour, ldw?.pipeline?.sendEndHour)
         const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janela)
@@ -275,6 +284,18 @@ export async function processDueActions() {
         }
         continue
       }
+      if (a.type === 'budget_validity') {
+        const ldv = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { humanOnly: true, status: true } })
+        if (ldv && !ldv.humanOnly && ldv.status === 'open') {
+          const cfg = await prisma.systemConfig.findUnique({ where: { key: 'budget_validity_message' } })
+          const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+          const saud = spHour < 12 ? 'Bom dia' : spHour < 18 ? 'Boa tarde' : 'Boa noite'
+          const msg = (cfg?.value || DEFAULT_BUDGET_VALIDITY).replace(/\{SAUDACAO\}/g, saud)
+          await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
       if (a.type !== 'send_message') {
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
@@ -312,6 +333,13 @@ const DEFAULT_BUDGET_FOLLOWUP =
   '{nome}, ficou com alguma dúvida sobre o orçamento? 😊 Se quiser um orçamento mais personalizado e preciso, ' +
   'posso agendar uma conversa com nosso Consultor especialista — em geral o valor fica ainda melhor! ' +
   'Quer que eu agende, ou prefere que eu te transfira agora para o Consultor?'
+
+// Lembrete de validade do orçamento — enviado 1 dia depois (configurável em system_configs: budget_validity_message)
+const DEFAULT_BUDGET_VALIDITY =
+  '{SAUDACAO}! Passando só pra lembrar 😊 Os orçamentos que enviamos ficam *ativos na nossa plataforma por 3 dias* ' +
+  'a partir da data em que você recebeu. Depois disso eles saem do sistema e é preciso fazer uma *nova cotação* — ' +
+  'e nesse novo pedido o valor pode mudar (por exemplo, se o modelo/marca não estiver mais disponível para cotação, ' +
+  'ou por algum reajuste de preço). Se quiser seguir com a sua, é só me avisar que eu te ajudo! 🌞'
 
 /**
  * Follow-up do orçamento (~90s após o orçamento automático):
