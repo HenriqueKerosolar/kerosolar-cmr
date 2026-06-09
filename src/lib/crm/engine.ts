@@ -100,6 +100,8 @@ export type IngestInput = {
   accountId?: string | null
   imageBase64?: string           // imagem enviada pelo cliente (conta de luz, foto etc.)
   imageMediaType?: string
+  mediaUrl?: string | null       // anexo do cliente salvo (para visualizar no chat)
+  mediaType?: 'image' | 'video' | 'document' | null
 }
 
 export type IngestResult = {
@@ -202,7 +204,11 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // 4) Mensagem recebida
   const now = new Date()
   await prisma.message.create({
-    data: { conversationId: conversation.id, direction: 'inbound', senderType: 'contact', content: input.displayText ?? text, externalId: input.externalMessageId ?? null },
+    data: {
+      conversationId: conversation.id, direction: 'inbound', senderType: 'contact',
+      content: input.displayText ?? text, externalId: input.externalMessageId ?? null,
+      mediaUrl: input.mediaUrl ?? null, mediaType: input.mediaType ?? null,
+    },
   })
   await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: now } })
   await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: now } })

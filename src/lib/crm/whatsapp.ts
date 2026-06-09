@@ -22,6 +22,24 @@ const seenMsgs: Set<string> = (g.__waSeenMsgs ??= new Set())
 const SESSIONS_DIR = fs.existsSync('/data')
   ? '/data/wa-sessions'
   : path.join(process.cwd(), 'wa-sessions')
+const UPLOADS_DIR = fs.existsSync('/data')
+  ? '/data/uploads'
+  : path.join(process.cwd(), 'uploads')
+
+/** Salva um anexo recebido do cliente e devolve a URL pública (servida por /api/uploads/[name]). */
+function salvarMidiaRecebida(buffer: Buffer, ext: string): string | null {
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+    const safeExt = (ext || '').replace(/[^a-zA-Z0-9.]/g, '') || '.bin'
+    const name = `in_${Date.now()}_${Math.round(buffer.length % 100000)}${safeExt.startsWith('.') ? safeExt : '.' + safeExt}`
+    fs.writeFileSync(path.join(UPLOADS_DIR, name), buffer)
+    const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || ''
+    return `${base}/api/uploads/${name}`
+  } catch (e) {
+    console.error('[wa] salvarMidiaRecebida erro:', e)
+    return null
+  }
+}
 
 const silentLogger: any = {
   level: 'error',
@@ -204,6 +222,9 @@ async function handleIncoming(accountId: string, msg: any) {
     ''
 
   let displayText: string | undefined
+  // Anexo do cliente salvo para visualização no chat
+  let mediaUrl: string | undefined
+  let mediaType: 'image' | 'video' | 'document' | undefined
 
   // Áudio / PTT → transcreve via OpenAI Whisper
   const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage)
@@ -239,6 +260,9 @@ async function handleIncoming(accountId: string, msg: any) {
           msg, 'buffer', {},
           sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
         )
+        // Guarda o PDF para o operador visualizar no chat
+        mediaUrl = salvarMidiaRecebida(buffer, '.pdf') ?? undefined
+        mediaType = 'document'
         // Extrai texto do PDF com unpdf (serverless — sem worker nativo, funciona no Railway)
         let pdfText = ''
         try {
@@ -287,8 +311,13 @@ async function handleIncoming(accountId: string, msg: any) {
         msg, 'buffer', {},
         sess ? { reuploadRequest: sess.sock.updateMediaMessage } : {},
       )
+      const mime = msg.message.imageMessage?.mimetype?.split(';')[0] || 'image/jpeg'
       imageBase64 = buffer.toString('base64')
-      imageMediaType = msg.message.imageMessage?.mimetype?.split(';')[0] || 'image/jpeg'
+      imageMediaType = mime
+      // Guarda a foto para o operador visualizar no chat
+      const imgExt = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : '.jpg'
+      mediaUrl = salvarMidiaRecebida(buffer, imgExt) ?? undefined
+      mediaType = 'image'
       if (!displayText) displayText = '📷 Foto enviada'
     } catch (e) {
       console.error('[wa image]', e)
@@ -317,6 +346,8 @@ async function handleIncoming(accountId: string, msg: any) {
     externalMessageId: msg.key.id,
     imageBase64,
     imageMediaType,
+    mediaUrl,
+    mediaType,
   })
 
   // Se a IA respondeu, envia de volta pelo WhatsApp
