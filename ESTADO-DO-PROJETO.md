@@ -97,6 +97,9 @@ Arquivos: `src/lib/crm/agent.ts` (prompt), `src/lib/crm/engine.ts` (orquestraç�
 - **Anexar arquivo** no chat (📎): imagem/vídeo/PDF/doc/xls até 25 MB. Endpoint
   `POST /api/leads/[id]/send-media`; arquivos servidos por `GET /api/uploads/[name]`
   (salvos em `/data/uploads`).
+- **Documentos recebidos do cliente** (foto/PDF) são salvos em `/data/uploads` e
+  gravados como `mediaUrl` na mensagem → aparecem clicáveis no chat (imagem inline
+  ou link "📎 Abrir arquivo"). Vale só para anexos recebidos a partir de 2026-06-09.
 - **Blocos de tempo nas etapas:** seletor minuto/hora/dia (componente `TimeInput` em
   `stage-flow-builder.tsx`). Internamente sempre armazenado em **minutos**.
 - **Scroll do chat:** auto-scroll só quando o operador já está perto do fim.
