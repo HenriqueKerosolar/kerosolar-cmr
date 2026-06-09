@@ -286,7 +286,7 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
 - Se você apresentou um ORÇAMENTO calculado automaticamente → routeToStage = "Recebeu orçamento automático".
 - Se o cliente quiser TENTAR O FINANCIAMENTO ou saber se tem crédito liberado → routeToStage = "Financiamento pedido de documentos".
 - Se você AGENDOU/CONFIRMOU uma VISTORIA / visita técnica (o cliente confirmou dia e horário) → routeToStage = "Vistoria agendada".
-- Se o cliente disser que JÁ É CLIENTE / já instalou com a gente → routeToStage = "Já é cliente".`
+- Se o cliente disser que JÁ É CLIENTE / já instalou com a gente, OU perguntar sobre INSTALAÇÃO (status/agendamento da instalação), HOMOLOGAÇÃO, o APP/APLICATIVO de monitoramento, ou ENTREGA DE EQUIPAMENTO → ele JÁ É CLIENTE → routeToStage = "Já é cliente". Nesse caso, a etapa já manda a recepção completa — então a sua "reply" pode ser curta e calorosa (ex.: "Claro, vou te ajudar! 😊"), sem repetir a saudação.`
 
   // Regra fixa: spam / ofertas de produtos/serviços para nós
   system += `\n\n## OFERTAS/SPAM (alguém querendo VENDER algo PARA a Kerosolar):
@@ -344,6 +344,11 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
   // Regra fixa: abrangência de atendimento
   system += `\n\n## ABRANGÊNCIA: atendemos em QUALQUER cidade do Estado do Rio de Janeiro. ` +
     `Se o cliente perguntar se atendemos a cidade dele (no RJ) ou em todo o estado, confirme que SIM, atendemos todo o Estado do Rio de Janeiro.`
+
+  // Regra fixa: desconto já aplicado
+  system += `\n\n## DESCONTO JÁ APLICADO: se no HISTÓRICO acima a equipe (atendente humano ou você) já disse que ` +
+    `"aplicou todos os descontos possíveis" (ou equivalente), e o cliente pedir MAIS desconto, responda APENAS, de forma educada, ` +
+    `que TODOS os descontos possíveis já foram aplicados — conforme já explicado. NÃO ofereça novo desconto, NÃO invente valor, NÃO recalcule.`
 
   // Regra fixa: carro elétrico / wallbox
   system += `\n\n## CARRO ELÉTRICO / WALLBOX: se o cliente disser que quer comprar um carro elétrico, já tem um, ou quer gerar energia para o carro, ` +

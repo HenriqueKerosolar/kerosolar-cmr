@@ -148,7 +148,11 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   Ao agendar a vistoria → routeToStage "Vistoria agendada". Horário fora do comercial → "verifico com o vistoriador".
 - **Vistoria agendada:** fica parada (mudança manual). Lembretes vêm do agendamento: 1 dia antes + 3h antes.
 - **Finalizado:** ao chegar lembra de enviar as 2 contas (após troca do medidor, 2º mês); cobra em ~60 dias + 24h.
-- **Já é cliente:** recepção + pede pra descrever a necessidade (IA usa o script de pós-venda).
+- **Já é cliente:** quem pergunta sobre INSTALAÇÃO, HOMOLOGAÇÃO, APP de monitoramento ou ENTREGA
+  DE EQUIPAMENTO é reconhecido como cliente → routeToStage "Já é cliente" → recepção (com aviso
+  de que o sistema está sendo refeito pra melhor atender) + pede pra descrever a necessidade.
+- **Desconto já aplicado:** se a equipe já disse que aplicou todos os descontos possíveis e o cliente
+  pede mais, a IA só reafirma que todos já foram aplicados — não oferece/inventa novo desconto.
 - **Fechou / Em homologação:** mudança manual, sem automação.
 - **Repescagem + escada (15/30/60/90/180 dias depois):** mensagem de reengajamento PERSONALIZADA
   gerada pela IA (`reengage.ts`) — usa a etapa de origem + contexto + tempo decorrido, mostrando o
