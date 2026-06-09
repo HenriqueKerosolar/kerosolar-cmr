@@ -116,6 +116,17 @@ e valem em qualquer etapa / qualquer lead:
 - **"quero financiar" NÃO é aceitação** — a IA explica/coleta dados. Aceitação só com
   termos explícitos (aceito, quero fechar, quero contratar, pode fechar...).
 
+### 📚 Aprendizado com as respostas do operador (base de conhecimento)
+Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim`).
+- Toda vez que o operador responde (pelo CRM em `sendManualMessage` OU pelo app do WhatsApp em
+  `registrarMensagemOperador`), o sistema guarda o par **pergunta do cliente → resposta dada**,
+  com o **embedding** da pergunta (OpenAI `text-embedding-3-small`).
+- Quando entra uma mensagem nova (e NÃO é entrega de orçamento), `buscarConhecimento` embeda a
+  pergunta, compara por **similaridade de cosseno** (≥ 0,82) e injeta as 1–3 respostas mais
+  parecidas no prompt como **referência** — a IA responde no mesmo sentido, adaptando.
+- Filtros: ignora respostas curtas/genéricas (ok, bom dia…) e mídia. Não duplica pares.
+- Requer chave **OpenAI** (a mesma do áudio). Sem ela, a busca semântica simplesmente não injeta nada.
+
 ### Agendamento — VISITA vs ATENDIMENTO
 - **VISITA TÉCNICA** = ida presencial ao endereço do cliente. `channel: "visit"`.
   **NUNCA perguntar canal.** Só dia e horário. (É o padrão para solar.)

@@ -415,6 +415,7 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
   let text: string =
     m.conversation || m.extendedTextMessage?.text ||
     m.imageMessage?.caption || m.videoMessage?.caption || m.documentMessage?.caption || ''
+  const textoDigitado = text  // texto REAL digitado pelo operador (sem placeholder de mídia)
 
   let mediaUrl: string | undefined
   let mediaType: 'image' | 'video' | 'document' | undefined
@@ -466,6 +467,12 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
   })
   await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } })
   if (conversation.leadId) await prisma.lead.update({ where: { id: conversation.leadId }, data: { lastMessageAt: new Date() } }).catch(() => {})
+
+  // 📚 Aprende com a resposta do operador (só texto digitado de verdade, não placeholder de mídia)
+  if (textoDigitado.trim().length >= 8) {
+    const { aprenderResposta } = await import('./learning')
+    aprenderResposta(conversation.id, textoDigitado).catch(() => {})
+  }
 }
 
 /** Envia mensagem de texto. */

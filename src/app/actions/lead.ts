@@ -107,6 +107,11 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
   if (!conv) throw new Error('Esse lead ainda não tem conversa.')
   await dispatchOutbound(conv.id, text, media, 'human', session.userId)
   await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } })
+  // 📚 Aprende com a resposta do atendente (pergunta do cliente → resposta dada)
+  if (text?.trim().length >= 8) {
+    const { aprenderResposta } = await import('@/lib/crm/learning')
+    aprenderResposta(conv.id, text).catch(() => {})
+  }
   revalidatePath(`/leads/${leadId}`)
 }
 

@@ -598,11 +598,16 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   }
 
   // prompt da etapa sobrescreve o do funil quando preenchido
+  // Base de conhecimento: só busca quando NÃO vamos entregar orçamento (aí a resposta é
+  // conversacional e pode se beneficiar das respostas anteriores da equipe).
+  const learned = solar ? undefined : await (await import('./learning')).buscarConhecimento(text)
+
   const result = await runAgent(history, {
     botName:   fullPipeline?.botName,
     botPrompt: currentStage?.botPrompt || fullPipeline?.botPrompt,
     model:     fullPipeline?.aiModel,
     estimate,
+    learned,
     lead: (lead.customFields as Record<string, unknown> | null) ?? null,
   })
 

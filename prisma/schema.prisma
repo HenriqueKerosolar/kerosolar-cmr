@@ -312,6 +312,19 @@ model SystemConfig {
   @@map("system_configs")
 }
 
+/// Base de conhecimento — aprende com as respostas do operador (pergunta do cliente → resposta dada).
+/// Usada como referência pela IA quando entra uma pergunta semelhante (busca semântica via embedding).
+model LearnedAnswer {
+  id        String   @id @default(cuid())
+  question  String   // pergunta/mensagem do cliente
+  answer    String   // resposta que o operador deu
+  embedding Json?    // vetor da pergunta (text-embedding-3-small) para busca por similaridade
+  useCount  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("learned_answers")
+}
+
 /// Ações agendadas (chamada da etapa com delay, follow-ups, etc.)
 model ScheduledAction {
   id             String   @id @default(cuid())

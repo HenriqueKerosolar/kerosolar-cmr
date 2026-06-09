@@ -188,6 +188,32 @@ export async function transcribeAudio(
   }
 }
 
+/** Gera o embedding (vetor) de um texto via OpenAI. Usado para busca semântica
+ *  na base de conhecimento (perguntas parecidas). Retorna null se não der. */
+export async function embedText(cfg: AiConfig, text: string): Promise<number[] | null> {
+  if (!cfg.openaiKey || !text.trim()) return null
+  try {
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.openaiKey}` },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: text.slice(0, 2000) }),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const v = data.data?.[0]?.embedding
+    return Array.isArray(v) ? v as number[] : null
+  } catch { return null }
+}
+
+/** Similaridade de cosseno entre dois vetores (0 a 1). */
+export function cosineSim(a: number[], b: number[]): number {
+  if (!a?.length || !b?.length || a.length !== b.length) return 0
+  let dot = 0, na = 0, nb = 0
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
+  const den = Math.sqrt(na) * Math.sqrt(nb)
+  return den ? dot / den : 0
+}
+
 export function extractJson<T = Record<string, unknown>>(text: string): T | null {
   if (!text) return null
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)

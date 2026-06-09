@@ -99,6 +99,7 @@ export type AgentOptions = {
   tipoLigacao?: string | null
   distribuidora?: string | null
   lead?: Record<string, unknown> | null   // customFields do lead (p/ detectar agendamento pendente)
+  learned?: string                        // respostas anteriores da equipe p/ perguntas parecidas (base de conhecimento)
 }
 
 export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}): Promise<AgentResult> {
@@ -121,6 +122,15 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
     `"${saudacao}! Obrigado por entrar em contato com a Kerosolar. Para continuar com o atendimento, você pode perguntar qualquer coisa referente a energia solar. ` +
     `Caso seja um orçamento, me manda a foto da conta de luz, ou só me diz seu consumo médio em kWh ou o valor médio da conta em reais — qualquer um já serve. Fico no seu aguardo! 😊" ` +
     `Nas mensagens seguintes, cumprimente com ${saudacao} apenas quando fizer sentido.`
+
+  // Base de conhecimento: respostas que a EQUIPE já deu para perguntas parecidas.
+  // A IA usa como REFERÊNCIA (mesmo sentido/conteúdo), adaptando ao contexto — não copia cego.
+  if (opts.learned) {
+    system += `\n\n## 📚 BASE DE CONHECIMENTO (respostas que a EQUIPE já deu para perguntas parecidas):\n${opts.learned}\n` +
+      `Se a pergunta atual do cliente for sobre o MESMO assunto, responda no MESMO sentido dessas respostas ` +
+      `(pode reescrever com suas palavras e adaptar ao contexto). NÃO contradiga o que a equipe já respondeu. ` +
+      `Se não tiver relação com a pergunta atual, ignore.`
+  }
 
   // Injeta o cálculo do simulador (números REAIS) — entrega IMEDIATA e prioritária
   if (opts.estimate) {
