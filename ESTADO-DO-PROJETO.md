@@ -67,6 +67,12 @@ Arquivo principal: `src/lib/crm/whatsapp.ts`.
 - **Equivalência kWh ↔ R$:** valor da conta ≈ kWh × 1,22.
 - **Validação de faixa** (em `pdf-utils.ts`): consumo só 20–50.000 kWh; valor só
   R$ 30–100.000. Descarta código de barras/instalação que o PDF traz.
+- **🔒 TRAVA DE SEGURANÇA central** (`solar-calc.ts` + `engine.ts`): `consumoKwhValido`
+  (30–50.000 kWh) e `contaReaisValida` (R$ 30–100.000). Aplicada em TODOS os caminhos
+  (texto, foto, PDF, extração da IA). Se o número estiver fora da faixa (ex.: código de
+  barras lido como consumo → orçamento bilionário), é DESCARTADO e NÃO calcula orçamento —
+  a IA segue pedindo o consumo / passa pro humano. Implementa a regra universal "nunca chutar valor".
+- O simulador (`/api/crm/simulate`) também usa `unpdf` e passa SÓ o resumo (não o texto bruto).
 
 ---
 

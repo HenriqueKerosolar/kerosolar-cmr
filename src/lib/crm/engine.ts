@@ -402,7 +402,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   }
 
   // 4.7) Cálculo solar — extrai dados da mensagem ou da imagem (conta de luz)
-  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO } = await import('./solar-calc')
+  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida } = await import('./solar-calc')
   let consumo = extrairConsumo(text)
 
   // Se veio imagem → extrai via visão da IA (conta de luz OU detecta documento de identidade)
@@ -489,6 +489,19 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     return { ...base, reply, aiHandled: true, handoff: true, stage: targetStage?.name ?? base.stage }
   }
 
+  // 🔒 TRAVA DE SEGURANÇA (regra universal: nunca chutar valor). Descarta consumo/valor
+  // fora da faixa realista — evita orçamento absurdo quando o número lido é código de
+  // barras / nº de instalação do PDF ou erro de OCR. Sem número confiável → não calcula nada
+  // e a IA segue pedindo o consumo (ou passa pro humano), em vez de mandar valor louco.
+  if (consumo.kwh != null && !consumoKwhValido(consumo.kwh)) {
+    console.warn('[engine] consumoKwh fora de faixa, descartado:', consumo.kwh)
+    consumo = { ...consumo, kwh: undefined }
+  }
+  if (consumo.reais != null && !contaReaisValida(consumo.reais)) {
+    console.warn('[engine] billValue fora de faixa, descartado:', consumo.reais)
+    consumo = { ...consumo, reais: undefined }
+  }
+
   // Quando vêm os dois (kWh + valor real da fatura), usa kWh para o sistema
   let solar = consumo.kwh ? calcularSolarPorKwh(consumo.kwh)
             : consumo.reais ? calcularSolar(consumo.reais)
@@ -561,9 +574,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   }
 
   // Se o regex não pegou mas a IA extraiu a conta/consumo, calcula a partir dela
+  // (também passa pela trava de faixa — a IA pode ter lido um número errado do PDF).
   if (!solar) {
-    if (result.qualification.consumoKwh) solar = calcularSolarPorKwh(result.qualification.consumoKwh)
-    else if (result.qualification.billValue) solar = calcularSolar(result.qualification.billValue)
+    if (consumoKwhValido(result.qualification.consumoKwh)) solar = calcularSolarPorKwh(result.qualification.consumoKwh)
+    else if (contaReaisValida(result.qualification.billValue)) solar = calcularSolar(result.qualification.billValue)
   }
 
   // 6) Aplica no CRM

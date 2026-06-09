@@ -13,6 +13,22 @@ export const MINIMO_KWH = 300             // abaixo disso oferecemos o kit míni
 export const MINIMO_KIT_KWH = 300         // menor kit que a Kerosolar oferece
 export const MINIMO_KIT_PRECO = 7670      // preço fixo do kit mínimo (R$ 7.670,00)
 
+// 🔒 FAIXAS REALISTAS — trava de segurança contra valor absurdo (código de barras /
+// nº de instalação do PDF, erro de OCR). Fora disso NÃO calculamos orçamento.
+export const CONSUMO_MIN_KWH = 30
+export const CONSUMO_MAX_KWH = 50000      // acima de 50 mil kWh/mês não é conta residencial/comercial comum
+export const CONTA_MIN_REAIS = 30
+export const CONTA_MAX_REAIS = 100000     // acima de R$ 100 mil/mês → caso atípico, vai pro humano
+
+/** Consumo em kWh é um número confiável (dentro da faixa realista)? */
+export function consumoKwhValido(n: number | null | undefined): n is number {
+  return typeof n === 'number' && isFinite(n) && n >= CONSUMO_MIN_KWH && n <= CONSUMO_MAX_KWH
+}
+/** Valor da conta em R$ é confiável (dentro da faixa realista)? */
+export function contaReaisValida(n: number | null | undefined): n is number {
+  return typeof n === 'number' && isFinite(n) && n >= CONTA_MIN_REAIS && n <= CONTA_MAX_REAIS
+}
+
 // Taxas de financiamento (% ao mês) por prazo
 export const TAXAS_FINANCIAMENTO: Record<number, number> = {
   24: 1.49, 36: 1.60, 48: 1.64, 60: 1.68, 72: 1.72, 84: 1.76, 96: 1.80,
@@ -198,11 +214,11 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   // Pedido por nº de placas/painéis/módulos → converte para kWh (1 painel = 60 kWh)
   // Ex.: "5 painéis" = 300 kWh, "10 placas" = 600 kWh. Ignora a potência em W ("540w").
   const painelMatch = t.match(/(\d+)\s*(pain[eé]is|painel|placas?|m[oó]dulos?)/)
-  if (painelMatch) { const n = parseInt(painelMatch[1], 10); if (n > 0) kwh = n * KWH_POR_PAINEL }
+  if (painelMatch) { const n = parseInt(painelMatch[1], 10); const k = n * KWH_POR_PAINEL; if (consumoKwhValido(k)) kwh = k }
 
   if (!kwh) {
     const kwhMatch = t.match(/([\d.,]+)\s*(kwh|kw\/h|quilowatt|kw h)/)
-    if (kwhMatch) { const k = parseBrNumber(kwhMatch[1]); if (k > 0) kwh = k }
+    if (kwhMatch) { const k = parseBrNumber(kwhMatch[1]); if (consumoKwhValido(k)) kwh = k }
   }
 
   // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações
@@ -212,7 +228,7 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     t.match(/r\$\s*([\d.,]+)/) ||
     t.match(/([\d.,]+)\s*reais/) ||
     t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/)
-  if (reaisMatch) { const v = parseBrNumber(reaisMatch[1]); if (v >= 30) reais = v }
+  if (reaisMatch) { const v = parseBrNumber(reaisMatch[1]); if (contaReaisValida(v)) reais = v }
 
   if (kwh) return { kwh, reais }  // retorna os dois quando kWh encontrado
   if (reais) return { reais }

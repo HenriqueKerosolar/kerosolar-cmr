@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionSafe } from '@/lib/dal'
 import { ingestMessage } from '@/lib/crm/engine'
 import { loadAiConfig, transcribeAudio } from '@/lib/crm/ai'
-import { extractPdfText, parseBillText, isBillPdf } from '@/lib/crm/pdf-utils'
+import { parseBillText, isBillPdf } from '@/lib/crm/pdf-utils'
 import { prisma } from '@/lib/prisma'
 import type { Channel } from '@prisma/client'
 
@@ -28,13 +28,21 @@ export async function POST(req: NextRequest) {
       const buf = Buffer.from(await file.arrayBuffer())
       const isPdf = file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')
       if (isPdf) {
-        const pdfText = await extractPdfText(buf)
+        // unpdf (serverless) — pdftotext NÃO existe no Railway
+        let pdfText = ''
+        try {
+          const { extractText, getDocumentProxy } = await import('unpdf')
+          const pdf = await getDocumentProxy(new Uint8Array(buf))
+          const { text: pdfRaw } = await extractText(pdf, { mergePages: true })
+          pdfText = (Array.isArray(pdfRaw) ? pdfRaw.join('\n') : pdfRaw ?? '').trim().slice(0, 3000)
+        } catch (e) { console.error('[simulate pdf]', e) }
         if (pdfText) {
           const summary = parseBillText(pdfText)
           const isBill = isBillPdf(summary)
           if (isBill) {
-            // Conta de luz → fluxo normal de cálculo solar
-            text = `Segue minha conta de luz (PDF):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema. Use o valor real da fatura para mostrar ao cliente quanto paga hoje.\n\n${pdfText.slice(0, 1500)}`
+            // SÓ o resumo estruturado — NÃO incluir o texto bruto (código de barras /
+            // linha digitável confundem a extração e geram valores absurdos).
+            text = `Segue minha conta de luz (PDF):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema.`
             displayText = '📄 Conta de luz enviada (PDF)'
           } else {
             // Outro documento (cotação, proposta, etc.) → IA lê e responde dúvidas
