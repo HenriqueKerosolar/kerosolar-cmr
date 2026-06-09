@@ -579,6 +579,25 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
+  // Cliente reclama que NÃO recebeu / pede o orçamento DE NOVO, mas JÁ TEM orçamento salvo →
+  // avisa que já está pronto e REENVIA o orçamento anterior (em vez de só pedir desculpas).
+  const cfResend = (lead.customFields as Record<string, unknown> | null) ?? {}
+  const storedSolarResend = cfResend.solar as Parameters<typeof orcamentoTexto>[0] | undefined
+  if (!solar && storedSolarResend && !lead.humanOnly) {
+    const txtR2 = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const reclama = /(nao recebi|nao chegou|nao veio|ningu[eé]m (me )?respond|nao (me )?respond|manda(r)?( de)? novo|reenvi|cad[eê].*or[çc]amento|pedi.*or[çc]amento|or[çc]amento.*(nao|ningu)|(duas|tr[eê]s|v[aá]rias) vezes)/.test(txtR2)
+    if (reclama) {
+      const { dispatchOutbound } = await import('./flow')
+      const intro = 'Olha, seu orçamento já está pronto sim! 😊 Desculpa se não chegou direitinho antes — segue ele novamente pra você:'
+      await simularDigitacao(intro)
+      await dispatchOutbound(conversation.id, intro, undefined, 'ai')
+      await new Promise((r) => setTimeout(r, 1500))
+      await dispatchOutbound(conversation.id, orcamentoTexto(storedSolarResend), undefined, 'ai')
+      await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: new Date() } })
+      return { ...base, aiHandled: true }
+    }
+  }
+
   // prompt da etapa sobrescreve o do funil quando preenchido
   // Base de conhecimento: só busca quando NÃO vamos entregar orçamento (aí a resposta é
   // conversacional e pode se beneficiar das respostas anteriores da equipe).

@@ -123,6 +123,9 @@ e valem em qualquer etapa / qualquer lead:
   se já tem o consumo. Assume o valor (não pede confirmação do número).
 - **Orçamento:** entregue na hora (determinístico via `orcamentoTexto`). Se o lead já tem
   orçamento salvo, a IA é avisada ("ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO") e nunca pede a conta de novo.
+- **Reclamou que não recebeu / "pedi várias vezes":** se o lead JÁ tem orçamento salvo (cf.solar)
+  e não mandou consumo novo, a IA avisa que já está pronto e REENVIA o orçamento anterior
+  (intro + orcamentoTexto). Em `engine.ts`, antes do runAgent.
 - **"quero financiar" NÃO é aceitação** — a IA explica/coleta dados. Aceitação só com
   termos explícitos (aceito, quero fechar, quero contratar, pode fechar...).
 
