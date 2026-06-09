@@ -5,6 +5,7 @@ import QRCode from 'qrcode'
 import { prisma } from '@/lib/prisma'
 import { ingestMessage } from './engine'
 import { loadAiConfig, transcribeAudio } from './ai'
+import { numeroNaLista } from './lists'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -240,6 +241,9 @@ export async function startSession(accountId: string): Promise<void> {
 async function handleIncoming(accountId: string, msg: any) {
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
+
+  // BLOCK LIST: ignora COMPLETAMENTE quem está na lista de "não receber" (não processa, não responde)
+  if (!msg.key.fromMe && await numeroNaLista(jid.split('@')[0], 'no_receive')) return
 
   // Mensagem enviada por NÓS (fromMe).
   if (msg.key.fromMe) {
@@ -493,6 +497,8 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
 export async function sendText(accountId: string, jid: string, text: string): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
+  // BLACK LIST: nunca envia pra quem está na lista de "não enviar"
+  if (await numeroNaLista(jid.split('@')[0], 'no_send')) { console.log('[wa] black list — envio bloqueado:', jid); return null }
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
   const sent = await sess.sock.sendMessage(fullJid, { text })
   markSentByCrm(sent?.key?.id)
@@ -503,6 +509,7 @@ export async function sendText(accountId: string, jid: string, text: string): Pr
 export async function sendMedia(accountId: string, jid: string, opts: { url: string; type: 'image' | 'video' | 'document'; caption?: string; fileName?: string }): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
+  if (await numeroNaLista(jid.split('@')[0], 'no_send')) { console.log('[wa] black list — envio (mídia) bloqueado:', jid); return null }
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
   const payload: any =
     opts.type === 'image'    ? { image: { url: opts.url }, caption: opts.caption } :

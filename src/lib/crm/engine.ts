@@ -606,6 +606,20 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     else if (contaReaisValida(result.qualification.billValue)) solar = calcularSolar(result.qualification.billValue)
   }
 
+  // 5.5) Cliente reclamou / não quer mais receber → agradece (a própria reply) e entra na BLACK LIST.
+  if (result.optOut) {
+    const { dispatchOutbound } = await import('./flow')
+    await simularDigitacao(result.reply)
+    await dispatchOutbound(conversation.id, result.reply, undefined, 'ai') // manda o agradecimento ANTES de bloquear
+    const numero = contact.phone || contact.whatsappId || conversation.externalId
+    if (numero) { const { addNaLista } = await import('./lists'); await addNaLista(numero, 'no_send', 'Cliente pediu para não receber mais (opt-out / reclamação).') }
+    await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } }) // cancela automações pendentes
+    await prisma.lead.update({ where: { id: lead.id }, data: { aiEnabled: false, humanOnly: true } })
+    await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
+    await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '🚫 Cliente pediu para NÃO receber mais mensagens — adicionado à black list (opt-out).' } })
+    return { ...base, reply: result.reply, aiHandled: true }
+  }
+
   // 6) Aplica no CRM
   const contactUpdate: Prisma.ContactUncheckedUpdateInput = {}
   if (result.contact.name && !contact.name)   contactUpdate.name  = result.contact.name

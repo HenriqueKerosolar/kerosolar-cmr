@@ -41,11 +41,18 @@ export async function POST(req: NextRequest) {
     ...(limit ? { take: limit } : {}),
   })
 
+  // BLACK LIST: não dispara pra quem está na lista de "não enviar"
+  const blackRows = await prisma.numberRule.findMany({ where: { kind: 'no_send' }, select: { phone: true } })
+  const black = new Set(blackRows.map((r) => r.phone))
+  const soDigitos = (s?: string | null) => (s || '').replace(/\D/g, '')
+
   let cursor = Date.now()
   let agendados = 0
   for (const lead of leads) {
     const conv = lead.conversations[0]
     if (!conv) continue // sem conversa → não dá pra enviar
+    const fone = soDigitos(lead.contact?.phone || lead.contact?.whatsappId)
+    if (black.has(fone) || black.has(fone.length <= 11 ? `55${fone}` : fone)) continue // black list → pula
     const nome = lead.contact?.name?.split(' ')[0] ?? ''
     const msg = (text || '').replace(/\{nome\}/gi, nome)
 

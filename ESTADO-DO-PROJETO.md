@@ -214,6 +214,14 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
   READ/PLAYED → grava `Message.readAt`. Para casar, `dispatchOutbound` salva o ID do WhatsApp no
   `Message.externalId` (sendText/sendMedia retornam o id). Vale só pra mensagens enviadas a partir de 2026-06-09.
 - **Modais:** fundo branco sólido (`bg-white dark:bg-zinc-900`) + backdrop `bg-black/70` (corrigida transparência).
+- **Listas (`/listas`, menu "🚫 Listas")** — tabela `NumberRule` (`lib/crm/lists.ts`):
+  - **Black list (`no_send`)**: NUNCA enviar (checado em `sendText`/`sendMedia` + filtrado no broadcast).
+    Quem reclama do disparo entra sozinho: a IA detecta (`optOut` no JSON), agradece/desculpa e o
+    engine adiciona à black list + cancela automações + humanOnly.
+  - **Block list (`no_receive`)**: mensagens desses números são IGNORADAS no `handleIncoming`.
+  - Gerenciável na tela (adicionar/remover número + motivo).
+- **Nome do WhatsApp:** `ingestMessage` grava o `pushName` no contato quando vazio; mensagens de
+  reengajamento (parada grande) usam o nome via IA.
 - **Mensagem de migração:** DESLIGADA em 2026-06-09 (config `migration_warning` apagada
   do `system_configs`). Não é mais enviada. Para religar, recriar a config com a mensagem.
 - **Fora do horário (21h–06h):** quando o cliente escreve nesse intervalo, a IA pergunta

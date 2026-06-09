@@ -305,6 +305,19 @@ model ChannelIntegration {
   @@map("channel_integrations")
 }
 
+/// Listas de números: 'no_send' (black list — nunca ENVIAR) e 'no_receive' (block list — ignorar quem ESCREVE).
+model NumberRule {
+  id        String   @id @default(cuid())
+  phone     String   // só dígitos, com DDI 55
+  kind      String   // 'no_send' | 'no_receive'
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([phone, kind])
+  @@index([kind])
+  @@map("number_rules")
+}
+
 /// Configurações gerais (chave→valor): ai_provider, anthropic_key, openai_key, ai_model, bot_name, bot_prompt
 model SystemConfig {
   key       String   @id

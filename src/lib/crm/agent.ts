@@ -63,6 +63,7 @@ const JSON_FORMAT = `RESPONDA SOMENTE com um JSON válido (sem texto fora dele):
   "acRequest": { "units": number|null, "btu": number|null, "hoursPerDay": number|null }|null,
   "lost": boolean,
   "lostReason": string|null,
+  "optOut": boolean,
   "appointment": null
 }
 
@@ -81,6 +82,7 @@ export type AgentResult = {
   acRequest: { units?: number | null; btu?: number | null; hoursPerDay?: number | null } | null
   lost: boolean
   lostReason: string | null
+  optOut: boolean
   appointment: { scheduledAt: string; channel: string; notes?: string | null } | null
 }
 
@@ -88,7 +90,7 @@ const FALLBACK: AgentResult = {
   reply: 'Oi! Aqui é a Sol, da KeroSolar ☀️ Como posso te ajudar com energia solar hoje?',
   contact: {}, qualification: {}, routeToStage: null, discardLead: false,
   estimatedValue: null, handoff: false, highPriority: false, isReferral: false, acRequest: null,
-  lost: false, lostReason: null, appointment: null,
+  lost: false, lostReason: null, optOut: false, appointment: null,
 }
 
 export type AgentOptions = {
@@ -289,6 +291,12 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
 - Se for alguém oferecendo um produto ou serviço genérico, responda gentilmente pedindo que entre em contato pelo número 21 98383-7434, e marque discardLead = true.
 - Se for propaganda de PLANO DE SAÚDE, produtos digitais (IA, bot de atendimento), ou serviços de MARKETING: faça uma propaganda da KeroService convidando a pessoa a se cadastrar para pegar clientes na plataforma (www.keroservice.com.br), e marque discardLead = true.`
 
+  // Regra fixa: cliente não quer mais receber mensagens / reclamou do disparo
+  system += `\n\n## NÃO QUER RECEBER / RECLAMAÇÃO: se o cliente reclamar de receber mensagens, pedir pra PARAR ` +
+    `("não quero mais receber", "para de mandar", "sai da minha lista", "como conseguiu meu número", "que propaganda é essa", "não autorizei", spam, etc.): ` +
+    `responda com MUITA educação, AGRADECENDO o contato e PEDINDO DESCULPAS pelo incômodo, e confirme que NÃO vai mais enviar mensagens. ` +
+    `Marque optOut: true. NÃO insista, NÃO tente convencer, NÃO ofereça nada.`
+
   // Regra fixa: agendamento de visita técnica
   system += `\n\n## VISITA TÉCNICA / AGENDAMENTO:
 
@@ -462,6 +470,7 @@ FAQ RÁPIDO:
     acRequest: parsed.acRequest && typeof parsed.acRequest === 'object' ? parsed.acRequest : null,
     lost: parsed.lost === true,
     lostReason: parsed.lostReason ?? null,
+    optOut: parsed.optOut === true,
     appointment: parsed.appointment && typeof parsed.appointment === 'object' && parsed.appointment.scheduledAt
       ? { scheduledAt: String(parsed.appointment.scheduledAt), channel: String(parsed.appointment.channel || 'whatsapp'), notes: parsed.appointment.notes ?? null }
       : null,

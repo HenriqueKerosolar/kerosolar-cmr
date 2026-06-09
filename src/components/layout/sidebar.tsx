@@ -14,6 +14,7 @@ const NAV = [
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },
   { href: '/aprendizado',   icon: '🧠', label: 'Aprendizado' },
   { href: '/resultados',    icon: '📊', label: 'Resultados' },
+  { href: '/listas',        icon: '🚫', label: 'Listas' },
   { href: '/configuracoes', icon: '⚙️', label: 'Config' },
 ]
 
