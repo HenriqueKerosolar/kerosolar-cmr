@@ -9,6 +9,7 @@ import 'server-only'
  * "taxa" (% a.m.) é só exibição. Máximo 24x.
  */
 export const MAX_PARCELAS_CARTAO = 24
+export const PARCELAS_SEM_JUROS = 3   // até 3x no cartão é SEM JUROS (a KeroSolar absorve a taxa)
 
 export const TABELA_CARTAO: Record<number, { taxa: number; acumulada: number }> = {
   1:  { taxa: 4.10, acumulada: 4.10 },
@@ -37,12 +38,17 @@ export const TABELA_CARTAO: Record<number, { taxa: number; acumulada: number }> 
   24: { taxa: 2.35, acumulada: 31.98 },
 }
 
-export type CartaoResult = { parcelas: number; taxa: number; acumulada: number; total: number; parcela: number }
+export type CartaoResult = { parcelas: number; taxa: number; acumulada: number; total: number; parcela: number; semJuros: boolean }
 
-/** Simula o parcelamento no cartão para um valor e nº de parcelas (1–24). */
+/** Simula o parcelamento no cartão para um valor e nº de parcelas (1–24).
+ *  Até PARCELAS_SEM_JUROS (3x) é SEM JUROS (parcela = valor / nº); acima usa a tabela PinPag. */
 export function simularCartao(valor: number, parcelas: number): CartaoResult | null {
+  if (!Number.isFinite(parcelas) || parcelas < 1 || parcelas > MAX_PARCELAS_CARTAO || valor <= 0) return null
+  if (parcelas <= PARCELAS_SEM_JUROS) {
+    return { parcelas, taxa: 0, acumulada: 0, total: Math.round(valor * 100) / 100, parcela: Math.round((valor / parcelas) * 100) / 100, semJuros: true }
+  }
   const row = TABELA_CARTAO[parcelas]
-  if (!row || valor <= 0) return null
+  if (!row) return null
   const total = valor * (1 + row.acumulada / 100)
   return {
     parcelas,
@@ -50,6 +56,7 @@ export function simularCartao(valor: number, parcelas: number): CartaoResult | n
     acumulada: row.acumulada,
     total: Math.round(total * 100) / 100,
     parcela: Math.round((total / parcelas) * 100) / 100,
+    semJuros: false,
   }
 }
 
@@ -61,11 +68,14 @@ export function formatarCartao(sim: CartaoResult, valorSistema: number, entrada 
   const head = entrada > 0
     ? `🔆 Sistema: ${brl(valorSistema)}\n💵 Entrada: *${brl(entrada)}*\n💳 No cartão: *${brl(valorSistema - entrada)}*`
     : `🔆 Sistema: *${brl(valorSistema)}*`
+  const linhaParcela = sim.semJuros
+    ? `*${sim.parcelas}x de ${brl(sim.parcela)}* _(sem juros)_ ✅`
+    : `*${sim.parcelas}x de ${brl(sim.parcela)}*`
   return (
 `💳 *PAGAMENTO NO CARTÃO DE CRÉDITO*
 
 ${head}
-*${sim.parcelas}x de ${brl(sim.parcela)}*
+${linhaParcela}
 Total no cartão: ${brl(sim.total)}
 
 _Simulação — as taxas e valores podem ser atualizados a qualquer momento._`

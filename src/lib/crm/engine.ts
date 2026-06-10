@@ -502,12 +502,13 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const cartaoAsked = !!cfNow.cartaoAsked
     const entradaAsked = !!cfNow.entradaAsked
     const ehConsumo = /kwh|kw\b|\bk\b|placa|painel|conta|fatura/i.test(text)
+    const semJuros = /sem juros?|sem jur/i.test(text)   // "tem cartão sem juros?"
 
     // nº de parcelas do cartão: da mensagem, ou número solto quando estávamos esperando ("24")
     let parcelas = cartao.parcelas
     if (parcelas == null && cartaoAsked) { const mN = text.match(/\b(\d{1,2})\b/); if (mN) parcelas = parseInt(mN[1], 10) }
 
-    const pedeCartao = cartao.intent || (cartaoAsked && parcelas != null)
+    const pedeCartao = cartao.intent || semJuros || (cartaoAsked && parcelas != null)
     const pedeEntrada = ent.intent || ent.remover || (entradaAsked && ent.valor != null && !ehConsumo)
 
     if (pedeCartao || pedeEntrada) {
@@ -545,7 +546,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const nParc = parcelas ?? (typeof cfNow.cartaoParcelas === 'number' ? (cfNow.cartaoParcelas as number) : null)
         if (!nParc) {
           await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: true, entradaAsked: false, entrada: entrada || null } as object } })
-          await responder('No cartão de crédito dá pra parcelar em até *24x*! Em quantas vezes você quer que eu simule? (de 1 a 24) 😊')
+          const msg = semJuros
+            ? 'Sim! No cartão de crédito dá pra fazer em até *3x sem juros* 😊 (acima de 3x entram as taxas). Em quantas vezes você quer que eu simule? (de 1 a 24)'
+            : 'No cartão de crédito dá pra parcelar em até *24x* (sendo até *3x sem juros*)! Em quantas vezes você quer que eu simule? (de 1 a 24) 😊'
+          await responder(msg)
           return { ...base, reply: null, aiHandled: true }
         }
         if (nParc > 24) {
