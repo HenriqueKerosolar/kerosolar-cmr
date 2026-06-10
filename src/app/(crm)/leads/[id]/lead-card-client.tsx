@@ -23,14 +23,32 @@ function horaBrasilia(iso: string): string {
 type Stage = { id: string; name: string; color: string | null; isWon: boolean; isLost: boolean }
 type Task = { id: string; title: string; status: string; dueAt: string | null }
 type Note = { id: string; type: string; content: string; createdAt: string; author: { name: string } | null }
+type ScheduledAction = { id: string; type: string; runAt: string }
 type Lead = {
   id: string; title: string; value: number; status: string; aiEnabled: boolean; source: string | null
   customFields: Record<string, unknown> | null
   contact: { name: string | null; phone: string | null; email: string | null } | null
   stage: Stage
   pipeline: { name: string; icon: string | null; stages: Stage[] }
-  tasks: Task[]; notes: Note[]; messages: Msg[]
+  tasks: Task[]; notes: Note[]; messages: Msg[]; scheduledActions: ScheduledAction[]
 }
+
+// Rótulos amigáveis para os tipos de ação automática agendada
+const ACTION_LABELS: Record<string, string> = {
+  send_message: '✉️ Mensagem programada',
+  no_reply: '🔀 Mudança de etapa por inatividade',
+  flow_noreply: '⏰ Cobrança de sem-resposta',
+  flow_continue: '▶️ Continuação do fluxo',
+  budget_followup: '💬 Follow-up do orçamento',
+  budget_validity: '📅 Lembrete de validade do orçamento',
+  reengage: '🔁 Reengajamento',
+  chegada_followup: '👋 Lembrete de chegada',
+  after_hours_resume: '🌅 Retomada do horário comercial (9h)',
+  appointment_reminder: '📞 Lembrete de agendamento',
+  ac_followup: '❄️ Follow-up de ar-condicionado',
+  redeliver: '🔄 Reenvio de mensagem',
+}
+const actionLabel = (t: string) => ACTION_LABELS[t] ?? `⚙️ ${t}`
 
 const fmtBRL = (n?: unknown) => typeof n === 'number' ? n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'
 const channelIcon: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
@@ -247,6 +265,23 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             </div>
           )
         })()}
+
+        {/* ⏰ Próxima atividade automática programada */}
+        <div>
+          <p className="text-xs font-medium text-[--muted-foreground] mb-1">Próxima atividade automática</p>
+          {lead.scheduledActions.length === 0 ? (
+            <p className="text-xs text-[--muted-foreground] italic">Nenhuma ação automática programada.</p>
+          ) : (
+            <div className="space-y-1">
+              {lead.scheduledActions.map((a, i) => (
+                <div key={a.id} className={`flex justify-between gap-2 text-xs ${i === 0 ? 'font-medium' : 'text-[--muted-foreground]'}`}>
+                  <span>{actionLabel(a.type)}</span>
+                  <span className="whitespace-nowrap">{horaBrasilia(a.runAt)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Tarefas */}
         <div>

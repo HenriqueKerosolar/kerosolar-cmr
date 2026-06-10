@@ -22,6 +22,13 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
   })
   if (!lead) notFound()
 
+  // Próximas ações automáticas agendadas (follow-ups, retomada 9h, validade etc.)
+  const scheduledActions = await prisma.scheduledAction.findMany({
+    where: { leadId: id, done: false },
+    orderBy: { runAt: 'asc' }, take: 5,
+    select: { id: true, type: true, runAt: true },
+  })
+
   const messages = lead.conversations[0]?.messages ?? []
-  return <LeadCardClient lead={JSON.parse(JSON.stringify({ ...lead, messages }))} />
+  return <LeadCardClient lead={JSON.parse(JSON.stringify({ ...lead, messages, scheduledActions }))} />
 }
