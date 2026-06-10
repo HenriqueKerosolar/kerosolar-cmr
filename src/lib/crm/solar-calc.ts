@@ -285,8 +285,16 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   if (painelMatch) { const n = parseInt(painelMatch[1], 10); const k = n * KWH_POR_PAINEL; if (consumoKwhValido(k)) kwh = k }
 
   if (!kwh) {
-    const kwhMatch = t.match(/([\d.,]+)\s*(kwh|kw\/h|quilowatt|kw h)/)
-    if (kwhMatch) { const k = parseBrNumber(kwhMatch[1]); if (consumoKwhValido(k)) kwh = k }
+    // Unidade de consumo: além de "kwh", "kw/h", "kw h" e "quilowatt", aceita também
+    // "kw" (sem o h) e "k" colados ao número — o cliente costuma escrever "700kw" ou
+    // "700k" no lugar de "700kWh". A faixa realista (>=30 kWh em consumoKwhValido) filtra
+    // naturalmente valores de potência tipo "5kw"/"5k".
+    const reUni = /([\d.,]+)\s*(kwh|kw\s*\/?\s*h|quilowatts?|kw|k)\b/i
+    // Se o cliente disser "quero/preciso/gostaria … N", prioriza ESSE valor (o desejado).
+    // Ex.: "hoje o consumo é 500kw, mas QUERO 700kw" → usa 700, não 500.
+    const reWant = /(?:quero|queria|quer|preciso|gostaria|pretendo|desejo)[^\d]{0,25}([\d.,]+)\s*(kwh|kw\s*\/?\s*h|quilowatts?|kw|k)\b/i
+    const m = t.match(reWant) || t.match(reUni)
+    if (m) { const k = parseBrNumber(m[1]); if (consumoKwhValido(k)) kwh = k }
   }
 
   // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações
