@@ -29,14 +29,17 @@ export function contaReaisValida(n: number | null | undefined): n is number {
   return typeof n === 'number' && isFinite(n) && n >= CONTA_MIN_REAIS && n <= CONTA_MAX_REAIS
 }
 
-// 💳 TABELA DE FINANCIAMENTO REAL DO BANCO PARCEIRO — calibrada pela simulação oficial.
+// 💳 TABELA DE FINANCIAMENTO DO BANCO PARCEIRO.
 // O "fator" (valor da parcela por R$ 1,00 financiado) já EMBUTE tudo que o banco cobra:
 // taxa de juros, CARÊNCIA de 120 dias (1ª parcela), IOF e seguro prestamista. Por isso
 // reproduz EXATAMENTE a tabela do banco — diferente da fórmula PMT pura (que dava parcela
 // menor por ignorar carência/IOF/seguro).
-// Referência: simulação oficial de R$ 20.870,00 com 1º vencimento em 120 dias.
 //   parcela(prazo) = valorFinanciado × fator(prazo)
-export const TABELA_FINANCIAMENTO: Record<number, { taxa: number; fator: number }> = {
+export type LinhaFinanciamento = { taxa: number; fator: number }
+
+// Tabela PADRÃO (fallback) — calibrada pela simulação oficial de R$ 20.870,00 (1º venc. 120 dias).
+// Pode ser sobrescrita nas Configurações do CRM (chave 'financing_table').
+export const TABELA_FINANCIAMENTO_PADRAO: Record<number, LinhaFinanciamento> = {
   24: { taxa: 1.54, fator: 0.0573407 },
   30: { taxa: 1.60, fator: 0.0484193 },
   36: { taxa: 1.65, fator: 0.0425946 },
@@ -47,15 +50,56 @@ export const TABELA_FINANCIAMENTO: Record<number, { taxa: number; fator: number 
   96: { taxa: 1.95, fator: 0.0270057 },
 }
 
-// Compatibilidade: taxas (% a.m.) por prazo, derivadas da tabela real acima.
+// Tabela ATIVA (cache em memória). carregarTabelaFinanciamento() a atualiza a partir das
+// Configurações antes de cada cálculo de orçamento; sem config válida usa a tabela padrão.
+let _tabelaAtiva: Record<number, LinhaFinanciamento> = { ...TABELA_FINANCIAMENTO_PADRAO }
+
+/** Tabela de financiamento atualmente ativa (a configurada no CRM, ou a padrão). */
+export function getTabelaFinanciamento(): Record<number, LinhaFinanciamento> {
+  return _tabelaAtiva
+}
+
+// Compatibilidade (usos legados): exports sempre refletindo a tabela PADRÃO.
+export const TABELA_FINANCIAMENTO = TABELA_FINANCIAMENTO_PADRAO
 export const TAXAS_FINANCIAMENTO: Record<number, number> = Object.fromEntries(
-  Object.entries(TABELA_FINANCIAMENTO).map(([prazo, v]) => [Number(prazo), v.taxa]),
+  Object.entries(TABELA_FINANCIAMENTO_PADRAO).map(([prazo, v]) => [Number(prazo), v.taxa]),
 ) as Record<number, number>
 
-/** Parcela de financiamento (R$) para um valor e prazo, usando o fator real do banco
- *  (já com carência de 120 dias, IOF e seguro embutidos). */
+/** Converte o JSON salvo nas Configurações em tabela {prazo:{taxa,fator}}.
+ *  Formato: { valorReferencia: number, linhas: [{prazo,taxa,parcela}] }.
+ *  fator = parcela / valorReferencia — embute juros + carência + IOF + seguro do banco. */
+export function parseTabelaFinanciamento(value?: string | null): Record<number, LinhaFinanciamento> | null {
+  if (!value) return null
+  try {
+    const obj = JSON.parse(value) as { valorReferencia?: number; linhas?: { prazo?: number; taxa?: number; parcela?: number }[] }
+    const ref = Number(obj?.valorReferencia)
+    if (!isFinite(ref) || ref <= 0) return null
+    const table: Record<number, LinhaFinanciamento> = {}
+    for (const l of obj?.linhas ?? []) {
+      const prazo = Number(l?.prazo), taxa = Number(l?.taxa), parcela = Number(l?.parcela)
+      if (!isFinite(prazo) || prazo <= 0 || !isFinite(parcela) || parcela <= 0) continue
+      table[prazo] = { taxa: isFinite(taxa) ? taxa : 0, fator: parcela / ref }
+    }
+    return Object.keys(table).length > 0 ? table : null
+  } catch { return null }
+}
+
+/** Lê a tabela das Configurações (chave 'financing_table') e a ativa (ou volta ao padrão).
+ *  Deve ser chamada (await) ANTES dos cálculos de orçamento. */
+export async function carregarTabelaFinanciamento(): Promise<void> {
+  try {
+    const { prisma } = await import('@/lib/prisma')
+    const row = await prisma.systemConfig.findUnique({ where: { key: 'financing_table' } })
+    _tabelaAtiva = parseTabelaFinanciamento(row?.value) ?? { ...TABELA_FINANCIAMENTO_PADRAO }
+  } catch {
+    _tabelaAtiva = { ...TABELA_FINANCIAMENTO_PADRAO }
+  }
+}
+
+/** Parcela de financiamento (R$) para um valor e prazo, usando a tabela ATIVA
+ *  (já com taxa + carência de 120 dias + IOF + seguro embutidos no fator). */
 export function parcelaFinanciamento(valor: number, prazo: number): number {
-  const f = TABELA_FINANCIAMENTO[prazo]
+  const f = _tabelaAtiva[prazo]
   if (!f || valor <= 0) return 0
   return valor * f.fator
 }
@@ -126,8 +170,8 @@ function calcularCore(
   for (let i = 0; i < 30; i++) { rendimentoPoupanca += invPoup * 0.05; invPoup *= 1.05 }
   const vsPoupanca = rendimentoPoupanca > 0 ? Math.round(economia30Anos / rendimentoPoupanca) : 0
 
-  const financiamento = Object.keys(TABELA_FINANCIAMENTO).map(Number).sort((a, b) => a - b).map((prazo) => ({
-    prazo, taxa: TABELA_FINANCIAMENTO[prazo].taxa, parcela: parcelaFinanciamento(valorSistema, prazo),
+  const financiamento = Object.keys(_tabelaAtiva).map(Number).sort((a, b) => a - b).map((prazo) => ({
+    prazo, taxa: _tabelaAtiva[prazo].taxa, parcela: parcelaFinanciamento(valorSistema, prazo),
   }))
   const menorParcela = Math.min(...financiamento.map((f) => f.parcela).filter((p) => p > 0))
 

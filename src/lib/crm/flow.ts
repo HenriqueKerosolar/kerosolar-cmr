@@ -459,7 +459,8 @@ async function handleAcFollowup(a: { leadId: string; conversationId: string; pay
   if (ac.hoursPerDay != null) return // cliente já informou as horas → não precisa do fallback
 
   const baseKwh = typeof cf.consumoKwh === 'number' ? cf.consumoKwh : null
-  const { calcularSolarPorKwh, resumoParaIA } = await import('./solar-calc')
+  const { calcularSolarPorKwh, resumoParaIA, carregarTabelaFinanciamento } = await import('./solar-calc')
+  await carregarTabelaFinanciamento()
   const { consumoAcKwhMes } = await import('./ac-calc')
   const acKwh = consumoAcKwhMes(ac.btu, 8, ac.units ?? 1)
 

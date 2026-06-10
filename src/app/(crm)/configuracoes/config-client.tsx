@@ -1,8 +1,22 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 type Cfg = Record<string, string>
+
+// Tabela de financiamento padrão (usada quando ainda não há configuração salva).
+type FinRow = { prazo: number; taxa: number; parcela: number }
+const FIN_DEFAULT_REF = 20870
+const FIN_DEFAULT_ROWS: FinRow[] = [
+  { prazo: 24, taxa: 1.54, parcela: 1196.70 },
+  { prazo: 30, taxa: 1.60, parcela: 1010.51 },
+  { prazo: 36, taxa: 1.65, parcela: 888.95 },
+  { prazo: 48, taxa: 1.69, parcela: 735.39 },
+  { prazo: 60, taxa: 1.73, parcela: 648.99 },
+  { prazo: 72, taxa: 1.82, parcela: 606.14 },
+  { prazo: 84, taxa: 1.91, parcela: 583.61 },
+  { prazo: 96, taxa: 1.95, parcela: 563.61 },
+]
 
 export function ConfigClient({ initial }: { initial: Cfg }) {
   const [cfg, setCfg] = useState<Cfg>(initial)
@@ -10,6 +24,30 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
   const [saved, setSaved] = useState(false)
 
   const set = (key: string, value: string) => setCfg((c) => ({ ...c, [key]: value }))
+
+  // ── Tabela de financiamento (estado próprio, sincronizado para dentro de cfg) ──
+  const initialFin = (() => {
+    try {
+      const o = JSON.parse(initial['financing_table'] || '')
+      if (o && typeof o.valorReferencia === 'number' && Array.isArray(o.linhas) && o.linhas.length > 0) {
+        return { ref: Number(o.valorReferencia), rows: o.linhas as FinRow[] }
+      }
+    } catch { /* usa padrão */ }
+    return { ref: FIN_DEFAULT_REF, rows: FIN_DEFAULT_ROWS }
+  })()
+  const [finRef, setFinRef] = useState<number>(initialFin.ref)
+  const [finRows, setFinRows] = useState<FinRow[]>(initialFin.rows)
+
+  // Sempre que a tabela muda, grava o JSON dentro de cfg para o save() existente enviar.
+  useEffect(() => {
+    setCfg((c) => ({ ...c, financing_table: JSON.stringify({ valorReferencia: finRef, linhas: finRows }) }))
+  }, [finRef, finRows])
+
+  const setFinRow = (i: number, field: keyof FinRow, value: number) =>
+    setFinRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)))
+  const addFinRow = () => setFinRows((rows) => [...rows, { prazo: 0, taxa: 0, parcela: 0 }])
+  const removeFinRow = (i: number) => setFinRows((rows) => rows.filter((_, idx) => idx !== i))
+  const resetFin = () => { setFinRef(FIN_DEFAULT_REF); setFinRows(FIN_DEFAULT_ROWS) }
 
   async function save() {
     setSaving(true)
@@ -99,6 +137,54 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
             rows={8} placeholder="Você é {BOT_NAME}..."
             className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring] font-mono"
           />
+        </div>
+      </section>
+
+      {/* Financiamento — tabela do banco */}
+      <section className="space-y-4">
+        <h2 className="font-semibold border-b border-[--border] pb-2">Financiamento (tabela do banco)</h2>
+        <p className="text-xs text-[--muted-foreground]">
+          Faça uma simulação no banco com um valor de projeto e copie aqui as parcelas de cada prazo.
+          O sistema calcula o <b>fator</b> de cada parcela automaticamente (parcela ÷ valor de referência) —
+          já embutindo juros, carência de 120 dias, IOF e seguro. Assim o orçamento da IA bate com a simulação real.
+        </p>
+
+        <div className="max-w-xs">
+          <label className="block text-sm font-medium mb-1">Valor de referência do projeto (R$)</label>
+          <input
+            type="number" inputMode="decimal" step="0.01" value={Number.isFinite(finRef) ? finRef : ''}
+            onChange={(e) => setFinRef(parseFloat(e.target.value) || 0)}
+            placeholder="20870"
+            className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring]"
+          />
+          <p className="text-xs text-[--muted-foreground] mt-1">O mesmo valor de projeto que você usou na simulação do banco.</p>
+        </div>
+
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_1fr_1.4fr_auto] gap-2 text-xs font-medium text-[--muted-foreground] px-1">
+            <span>Prazo (meses)</span>
+            <span>Taxa (% a.m.)</span>
+            <span>Parcela (R$)</span>
+            <span></span>
+          </div>
+          {finRows.map((row, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_1.4fr_auto] gap-2 items-center">
+              <input type="number" inputMode="numeric" value={row.prazo || ''} onChange={(e) => setFinRow(i, 'prazo', parseInt(e.target.value, 10) || 0)}
+                placeholder="36" className="px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring]" />
+              <input type="number" inputMode="decimal" step="0.01" value={row.taxa || ''} onChange={(e) => setFinRow(i, 'taxa', parseFloat(e.target.value) || 0)}
+                placeholder="1.65" className="px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring]" />
+              <input type="number" inputMode="decimal" step="0.01" value={row.parcela || ''} onChange={(e) => setFinRow(i, 'parcela', parseFloat(e.target.value) || 0)}
+                placeholder="888.95" className="px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring]" />
+              <button type="button" onClick={() => removeFinRow(i)} title="Remover prazo"
+                className="px-3 py-2 rounded-lg border border-[--border] text-sm text-red-600 hover:bg-red-50 transition">✕</button>
+            </div>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={addFinRow}
+              className="px-3 py-1.5 rounded-lg border border-[--border] text-sm hover:bg-[--muted] transition">+ Adicionar prazo</button>
+            <button type="button" onClick={resetFin}
+              className="px-3 py-1.5 rounded-lg border border-[--border] text-sm text-[--muted-foreground] hover:bg-[--muted] transition">Restaurar padrão</button>
+          </div>
         </div>
       </section>
 
