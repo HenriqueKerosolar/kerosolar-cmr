@@ -448,10 +448,15 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   }
 
   // 5) Agente IA
-  const msgs = await prisma.message.findMany({
+  // Busca as ÚLTIMAS 40 mensagens (mais recentes) em ordem decrescente e depois
+  // inverte → conversa em ordem cronológica. Assim a IA SEMPRE vê o contexto atual,
+  // mesmo em conversas longas (>40 msgs) — antes pegava as 40 mais antigas e
+  // perdia as mensagens recentes, deixando a IA sem ver a pergunta do cliente.
+  const msgsRaw = await prisma.message.findMany({
     where: { conversationId: conversation.id },
-    orderBy: { createdAt: 'asc' }, take: 40,
+    orderBy: { createdAt: 'desc' }, take: 40,
   })
+  const msgs = msgsRaw.reverse()
   const history: ChatMessage[] = msgs.map((m) => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',
     content: m.content,
@@ -821,26 +826,34 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     outboundText = 'Desculpa, não entendi bem 😅 Pode me explicar de outro jeito? Se preferir, me manda sua conta de luz que eu já te ajudo.'
   }
 
-  // 🔒 ANTI-LOOP (regra universal: nunca repetir mensagem). Se a IA vai responder
-  // EXATAMENTE o que já respondeu por último, ela está travada → em vez de repetir,
-  // passa pro humano (melhor não insistir do que mandar o mesmo texto de novo).
+  // 🔒 ANTI-LOOP (regra universal: nunca repetir mensagem). Detecta dois tipos:
+  // 1) Repetição EXATA: IA vai mandar exatamente o que já mandou → passa pro humano.
+  // 2) Loop SEMÂNTICO: as últimas 2 respostas da IA + a nova todas começam com as
+  //    mesmas 5 palavras (ex.: "Sim estou aqui como posso") → IA travou num ciclo de
+  //    variações do mesmo texto → passa pro humano imediatamente.
   if (!result.handoff && !presentBudget && outboundText?.trim()) {
     const normMsg = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-    const lastOut = await prisma.message.findFirst({
+    const prefixOf = (s: string) => normMsg(s).split(' ').slice(0, 5).join(' ')
+    const recentOut = await prisma.message.findMany({
       where: { conversationId: conversation.id, direction: 'outbound', senderType: { in: ['ai', 'system'] } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'desc' }, take: 2,
       select: { content: true },
     })
-    if (lastOut && normMsg(lastOut.content) === normMsg(outboundText)) {
-      console.warn('[engine] IA ia repetir a mesma mensagem → encaminhando ao humano')
+    const isExactRepeat  = recentOut.length > 0 && normMsg(recentOut[0].content) === normMsg(outboundText)
+    // Loop semântico: 2 respostas anteriores + a nova TODAS compartilham o mesmo prefixo
+    const isSemanticLoop = recentOut.length >= 2
+      && prefixOf(outboundText) === prefixOf(recentOut[0].content)
+      && prefixOf(outboundText) === prefixOf(recentOut[1].content)
+    if (isExactRepeat || isSemanticLoop) {
+      console.warn('[engine] IA travou em loop (exato ou semântico) → encaminhando ao humano')
       const { getHandoffMessage } = await import('./handoff')
       outboundText = await getHandoffMessage()
       outboundSender = 'system'
       leadUpdate.aiEnabled = false
       leadUpdate.highPriority = true
       await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
-      await prisma.task.create({ data: { leadId: lead.id, title: '⚠️ IA travou (ia repetir) — assumir conversa', type: 'message', dueAt: now } })
-      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'IA ia repetir a mesma mensagem — encaminhado ao humano e IA desativada.' } })
+      await prisma.task.create({ data: { leadId: lead.id, title: '⚠️ IA travou em loop — assumir conversa', type: 'message', dueAt: now } })
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: isSemanticLoop ? 'IA travou em loop semântico (variações da mesma resposta) — encaminhado ao humano.' : 'IA ia repetir a mesma mensagem — encaminhado ao humano e IA desativada.' } })
     }
   }
 
