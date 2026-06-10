@@ -68,6 +68,7 @@ export async function createManualLead(data: {
   })
 
   // conversa (WhatsApp) pra poder atender pelo card
+  let conversationId: string | null = null
   if (phone) {
     // Conta de WhatsApp para enviar: a conectada (preferência) ou a primeira cadastrada.
     // Sem accountId a conversa não consegue despachar mensagens pelo WhatsApp.
@@ -80,20 +81,33 @@ export async function createManualLead(data: {
       where: { channel_contactId: { channel: 'whatsapp', contactId: contact.id } },
     })
     if (!existing) {
-      await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead.id, externalId: phone, accountId } })
+      const created = await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead.id, externalId: phone, accountId } })
+      conversationId = created.id
     } else {
       await prisma.conversation.update({
         where: { id: existing.id },
         data: { leadId: lead.id, ...(existing.accountId ? {} : { accountId }) },
       })
+      conversationId = existing.id
     }
   }
 
   await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Lead criado manualmente.' } })
 
-  // Aciona o bot/fluxo da etapa (trata como lead novo) se solicitado e houver telefone
-  if (data.startBot && phone) {
-    await enterStage(lead.id, data.stageId).catch((e) => console.error('[manual startBot]', e))
+  // Aciona o bot/fluxo da etapa (trata como lead novo) se solicitado e houver telefone.
+  // Se a etapa tem fluxo de abertura próprio (mensagens/blocos) → enterStage o executa.
+  // Se NÃO tem (ex.: "Chegada", cuja saudação vem do motor) → envia a saudação de boas-vindas
+  // manualmente, senão o lead manual ficaria parado sem receber nada.
+  if (data.startBot && phone && conversationId) {
+    const stage = await prisma.stage.findUnique({ where: { id: data.stageId } })
+    const flow = (stage?.flow as { openingMessages?: unknown[]; blocks?: unknown[] } | null) ?? null
+    const temAbertura = !!(flow?.openingMessages?.length || flow?.blocks?.length)
+    if (temAbertura) {
+      await enterStage(lead.id, data.stageId).catch((e) => console.error('[manual startBot]', e))
+    } else {
+      const { iniciarSaudacaoManual } = await import('@/lib/crm/flow')
+      await iniciarSaudacaoManual(lead.id, conversationId, data.stageId).catch((e) => console.error('[manual saudacao]', e))
+    }
   }
 
   revalidatePath('/leads')

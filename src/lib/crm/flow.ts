@@ -227,6 +227,45 @@ export async function enterStage(leadId: string, stageId: string) {
   }
 }
 
+/**
+ * 👋 Saudação inicial para LEAD MANUAL.
+ * Etapas como a "Chegada" não têm mensagens de abertura próprias — a saudação do primeiro
+ * contato vem do MOTOR (engine), que só roda quando o cliente manda mensagem. Para um lead
+ * cadastrado manualmente (que não escreveu nada), enviamos aqui a MESMA saudação de boas-vindas,
+ * respeitando o horário comercial (fora do horário, agenda pro próximo horário válido).
+ * Usada pelo cadastro manual quando a etapa não tem fluxo de abertura próprio.
+ */
+export async function iniciarSaudacaoManual(leadId: string, conversationId: string, stageId: string) {
+  const stage = await prisma.stage.findUnique({ where: { id: stageId } })
+  if (!stage?.botEnabled) return
+
+  const { respeitaHorarioGlobal, nextAllowedSlot, JANELA_PADRAO } = await import('./schedule-window')
+  const now = Date.now()
+  const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date(now)), JANELA_PADRAO)
+
+  // Saudação baseada na HORA REAL do envio (agora ou o horário agendado), em Brasília.
+  const sendHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(slot))
+  const saud = sendHour < 12 ? 'Bom dia' : sendHour < 18 ? 'Boa tarde' : 'Boa noite'
+
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
+  const nome = lead?.contact?.name?.split(' ')[0] ?? ''
+  const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
+  const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`)
+    .replace(/\{SAUDACAO\}/g, saud).replace(/\{nome\}/gi, nome)
+
+  if (slot.getTime() <= now + 1500) {
+    // horário comercial → envia agora e arma o "sem resposta" da etapa
+    await dispatchOutbound(conversationId, msg, undefined, 'ai')
+    const { scheduleNoReply } = await import('./flow-blocks')
+    await scheduleNoReply(leadId, conversationId, stageId).catch(() => {})
+  } else {
+    // fora do horário → agenda a saudação pro próximo horário comercial (o scheduler envia)
+    await prisma.scheduledAction.create({
+      data: { leadId, conversationId, stageId, type: 'send_message', payload: { text: msg } as object, runAt: slot },
+    })
+  }
+}
+
 /** Processa as ações agendadas vencidas. Chamado pelo poller. */
 export async function processDueActions() {
   const due = await prisma.scheduledAction.findMany({
