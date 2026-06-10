@@ -208,6 +208,46 @@ export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: numb
 
 const brl = (n: number) => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+// ── 💰 ENTRADA / SINAL ────────────────────────────────────────────────────────
+/** Detecta pedido de entrada/sinal e o valor (se informado). Use o valor só em contexto de entrada. */
+export function extrairEntrada(text: string): { intent: boolean; valor: number | null } {
+  const t = (text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const intent = /\b(sinal|entrada)\b|dar (uma |um )?(entrada|sinal)|de entrada|com entrada|adiantar|adiantamento/.test(t)
+  let valor: number | null = null
+  const mil = t.match(/([\d.,]+)\s*mil\b/)
+  if (mil) valor = parseBrNumber(mil[1]) * 1000
+  else {
+    const m = t.match(/r\$\s*([\d.,]+)/) || t.match(/([\d.,]+)\s*reais/) || t.match(/([\d.,]+)/)
+    if (m) valor = parseBrNumber(m[1])
+  }
+  if (valor != null && (!isFinite(valor) || valor < 50 || valor > 1_000_000)) valor = null
+  return { intent, valor }
+}
+
+/** Mensagem de financiamento COM ENTRADA: financia (valorSistema − entrada) e mostra 3 prazos. */
+export function financiamentoEntradaTexto(valorSistema: number, entrada: number): string {
+  const financiado = Math.max(0, valorSistema - entrada)
+  const tabela = getTabelaFinanciamento()
+  const prazos = Object.keys(tabela).map(Number).sort((a, b) => a - b)
+  const longo = prazos[prazos.length - 1]
+  const medio = prazos.includes(60) ? 60 : prazos[Math.floor(prazos.length / 2)]
+  const curto = prazos.includes(36) ? 36 : prazos[0]
+  const sel = [longo, medio, curto].filter((p, i, a) => a.indexOf(p) === i)
+  const linhas = sel.map((p) => `• ${p}x de *${brl(parcelaFinanciamento(financiado, p))}*`).join('\n')
+  return (
+`💰 *FINANCIAMENTO COM ENTRADA*
+
+🔆 Sistema: ${brl(valorSistema)}
+💵 Entrada: *${brl(entrada)}*
+📉 Valor financiado: *${brl(financiado)}*
+
+💳 *Parcelas* (1ª só daqui a 120 dias):
+${linhas}
+
+_Valores podem variar conforme o projeto e a aprovação de crédito._`
+  )
+}
+
 /** Resumo COMPLETO para a IA (todos os dados do simulador + observações). */
 export function resumoParaIA(r: SolarResult): string {
   const fin = r.financiamento.map((f) => `${f.prazo}x de ${brl(f.parcela)} (${f.taxa}% a.m.)`).join('; ')

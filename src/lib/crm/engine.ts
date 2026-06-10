@@ -487,6 +487,45 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     return { ...base, aiHandled: true, stage: tgt?.name ?? base.stage }
   }
 
+  // 💰 ENTRADA / SINAL: cliente quer dar uma entrada → pergunta o valor e recalcula o
+  //    financiamento (financia valorSistema − entrada). O valor fica guardado (cf.entrada) e
+  //    também desconta na simulação de cartão. Fluxo de 2 passos (pergunta → recalcula).
+  {
+    const cfNow = (lead.customFields as Record<string, unknown> | null) ?? {}
+    const { extrairEntrada } = await import('./solar-calc')
+    const ent = extrairEntrada(text)
+    const entradaAsked = !!cfNow.entradaAsked
+    // só trata número solto como entrada se já perguntamos E não é mensagem de consumo/conta
+    const valorPasso2 = entradaAsked && ent.valor != null && !/kwh|kw\b|\bk\b|placa|painel|conta|fatura|cart[aã]o/i.test(text)
+    if (ent.intent || valorPasso2) {
+      const cfSolar = cfNow.solar as { valorSistema?: number } | undefined
+      const valorSist = typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null
+      const { dispatchOutbound } = await import('./flow')
+      if (!valorSist) {
+        const msg = 'Pra calcular com a entrada, preciso primeiro do seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
+        await simularDigitacao(msg)
+        await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        return { ...base, reply: null, aiHandled: true }
+      }
+      if (ent.valor == null) {
+        await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entradaAsked: true } as object } })
+        const msg = 'Que ótimo! 😊 De quanto seria a *entrada*? (em reais)'
+        await simularDigitacao(msg)
+        await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        return { ...base, reply: null, aiHandled: true }
+      }
+      const entrada = Math.min(ent.valor, valorSist)   // entrada não passa do valor do sistema
+      await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entrada, entradaAsked: false } as object } })
+      const { financiamentoEntradaTexto, carregarTabelaFinanciamento } = await import('./solar-calc')
+      await carregarTabelaFinanciamento()
+      const msg = financiamentoEntradaTexto(valorSist, entrada)
+      await simularDigitacao(msg)
+      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Cliente quer dar entrada de R$ ${entrada.toLocaleString('pt-BR')} — financiamento recalculado.` } }).catch(() => {})
+      return { ...base, reply: null, aiHandled: true }
+    }
+  }
+
   // 5) Agente IA
   // Busca as ÚLTIMAS 40 mensagens (mais recentes) em ordem decrescente e depois
   // inverte → conversa em ordem cronológica. Assim a IA SEMPRE vê o contexto atual,
@@ -822,8 +861,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       cartaoMsg = 'Pra simular no cartão de crédito, preciso primeiro fazer seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
     } else if (cartao.parcelas && cartao.parcelas >= 1 && cartao.parcelas <= 24) {
       const { simularCartao, formatarCartao } = await import('./card-calc')
-      const sim = simularCartao(valorSist, cartao.parcelas)
-      if (sim) cartaoMsg = formatarCartao(sim, valorSist)
+      const entrada = typeof cf.entrada === 'number' ? Math.min(cf.entrada, valorSist) : 0
+      const sim = simularCartao(valorSist - entrada, cartao.parcelas)   // entrada deduzida
+      if (sim) cartaoMsg = formatarCartao(sim, valorSist, entrada)
     } else if (cartao.parcelas && cartao.parcelas > 24) {
       cartaoMsg = 'No cartão de crédito a gente parcela em até *24x* 😊 Em quantas vezes (de 1 a 24) você quer simular?'
     } else {

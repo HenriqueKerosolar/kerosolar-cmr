@@ -55,12 +55,16 @@ export function simularCartao(valor: number, parcelas: number): CartaoResult | n
 
 const brl = (n: number) => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-/** Mensagem (WhatsApp) da simulação no cartão. */
-export function formatarCartao(sim: CartaoResult, valor: number): string {
+/** Mensagem (WhatsApp) da simulação no cartão. `valorSistema` é o valor cheio; `entrada`
+ *  (opcional) é deduzida — as parcelas em `sim` já devem ser do valor financiado (sistema − entrada). */
+export function formatarCartao(sim: CartaoResult, valorSistema: number, entrada = 0): string {
+  const head = entrada > 0
+    ? `🔆 Sistema: ${brl(valorSistema)}\n💵 Entrada: *${brl(entrada)}*\n💳 No cartão: *${brl(valorSistema - entrada)}*`
+    : `🔆 Sistema: *${brl(valorSistema)}*`
   return (
 `💳 *PAGAMENTO NO CARTÃO DE CRÉDITO*
 
-🔆 Sistema: *${brl(valor)}*
+${head}
 *${sim.parcelas}x de ${brl(sim.parcela)}*
 Total no cartão: ${brl(sim.total)}
 
