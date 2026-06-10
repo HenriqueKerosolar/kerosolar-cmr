@@ -218,8 +218,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // Cliente escreveu → reabre a conversa no Inbox (zera o "fechado pelo operador")
   await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: now, resolvedAt: null } })
   await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: now } })
-  // cliente respondeu → cancela checagens pendentes (sem-resposta e follow-up de orçamento)
-  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup'] }, done: false }, data: { done: true } })
+  // cliente respondeu → cancela checagens pendentes (sem-resposta, follow-up de orçamento
+  // e a retomada das 9h — já que ele voltou a falar, não precisa do "bom dia, retomando").
+  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup', 'after_hours_resume'] }, done: false }, data: { done: true } })
 
   const base: IngestResult = {
     contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
@@ -356,6 +357,19 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const norm = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const { dispatchOutbound } = await import('./flow')
 
+    // 🌅 Arma a RETOMADA das 9h: quem recebe o "agora ou depois?" (ou pede pra deixar
+    //    registrado) e fica sem responder será retomado pela IA no próximo horário comercial
+    //    — cumprindo a promessa "a gente continua a partir das 9h". (Ver tipo 'after_hours_resume'
+    //    em flow.ts; é cancelado automaticamente se o cliente responder.)
+    const armarRetomada9h = async () => {
+      try {
+        const { respeitaHorarioGlobal } = await import('./schedule-window')
+        const runAt = respeitaHorarioGlobal(new Date())
+        await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: 'after_hours_resume', done: false }, data: { done: true } })
+        await prisma.scheduledAction.create({ data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'after_hours_resume', payload: {} as object, runAt } })
+      } catch (e) { console.error('[engine] armarRetomada9h', e) }
+    }
+
     if (!isAfterHours && (lead.afterHoursAsked || lead.afterHoursProceed)) {
       // voltou a ser horário comercial → reseta o estado
       await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: false, afterHoursProceed: false } })
@@ -378,6 +392,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const msg = `Perfeito! Deixei seu contato registrado e retomo no horário comercial (a partir das 9h). ${saud === 'Boa noite' ? 'Tenha uma ótima noite' : 'Até já'}! 😊`
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        await armarRetomada9h()   // cliente pediu pra deixar registrado → retomamos às 9h
         // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
         return { ...base, reply: null, aiHandled: true }
       }
@@ -397,6 +412,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua no horário comercial (a partir das 9h)?`).replace(/\{SAUDACAO\}/g, saud)
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        await armarRetomada9h()   // se ficar sem responder, a IA retoma às 9h
         // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
         return { ...base, reply: null, aiHandled: true }
       }

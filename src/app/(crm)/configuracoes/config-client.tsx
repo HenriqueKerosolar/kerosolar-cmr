@@ -114,6 +114,14 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
             placeholder="{SAUDACAO}! Recebi sua mensagem. Quer começar o atendimento agora ou deixar registrado para o horário comercial?"
             className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
         </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Mensagem de retomada (às 9h, se o cliente não respondeu)</label>
+          <p className="text-xs text-[--muted-foreground] mb-1">Enviada automaticamente no horário comercial para quem recebeu o contato acima e ficou sem responder. Use {'{SAUDACAO}'} e {'{nome}'}.</p>
+          <textarea value={cfg['after_hours_resume_message'] ?? ''} onChange={(e) => set('after_hours_resume_message', e.target.value)} rows={3}
+            placeholder="{SAUDACAO}, {nome}! Retomando seu contato com a KeroSolar. Me envia a foto da sua conta de luz ou o consumo médio em kWh que já preparo seu orçamento!"
+            className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
+        </div>
+        <ResumeAfterHoursButton />
       </section>
 
       {/* Reengajamento */}
@@ -192,6 +200,40 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
         className="px-6 py-2.5 rounded-lg bg-[--primary] text-[--primary-foreground] font-medium text-sm disabled:opacity-60 transition hover:opacity-90">
         {saving ? 'Salvando…' : saved ? '✓ Salvo!' : 'Salvar configurações'}
       </button>
+    </div>
+  )
+}
+
+/** Botão que dispara a retomada (1x) dos leads que ficaram sem responder fora do horário. */
+function ResumeAfterHoursButton() {
+  const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function run() {
+    if (!confirm('Armar a retomada para os leads que receberam o contato fora do horário e não responderam?\n\nA IA vai falar com eles no próximo horário comercial (9h).')) return
+    setLoading(true); setMsg('')
+    try {
+      const res = await fetch('/api/crm/resume-afterhours', { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        const quando = data.runAt ? new Date(data.runAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : ''
+        setMsg(`✓ ${data.armados} lead(s) armado(s) de ${data.candidatos} candidato(s). Retomada em: ${quando}.`)
+      } else {
+        setMsg(`Erro: ${data.error || 'falhou'}`)
+      }
+    } catch {
+      setMsg('Erro de conexão.')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div className="pt-2">
+      <button type="button" onClick={run} disabled={loading}
+        className="px-4 py-2 rounded-lg border border-[--border] text-sm font-medium disabled:opacity-60 hover:bg-[--muted] transition">
+        {loading ? 'Armando…' : '🌅 Retomar agora os leads parados (fora do horário)'}
+      </button>
+      {msg && <p className="text-xs mt-2 text-[--muted-foreground]">{msg}</p>}
     </div>
   )
 }

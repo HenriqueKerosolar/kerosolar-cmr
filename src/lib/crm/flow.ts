@@ -241,7 +241,7 @@ export async function processDueActions() {
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
       //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
       //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.
-      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity' || a.type === 'reengage' || a.type === 'chegada_followup') {
+      if (a.type === 'flow_continue' || a.type === 'flow_noreply' || a.type === 'budget_followup' || a.type === 'budget_validity' || a.type === 'reengage' || a.type === 'chegada_followup' || a.type === 'after_hours_resume') {
         const ldw = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
         const janela = janelaDoFunil(ldw?.pipeline?.sendStartHour, ldw?.pipeline?.sendEndHour)
         const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janela)
@@ -357,6 +357,29 @@ export async function processDueActions() {
             const target = await prisma.stage.findFirst({ where: { name: { equals: 'Repescagem', mode: 'insensitive' } } })
             if (target) await moveLeadToStage(a.leadId, target.id, 'Conversou na Chegada mas não avançou — movido para Repescagem.')
           }
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      if (a.type === 'after_hours_resume') {
+        // 🌅 Retomada do horário comercial: o lead recebeu o "agora ou depois?" fora do horário
+        //    e NÃO respondeu. Agora (9h+) a IA retoma o atendimento — cumprindo a promessa.
+        //    Só aplica se: IA ligada, não é atendimento humano, lead aberto e o cliente
+        //    continua sem responder desde que o prompt foi enviado.
+        const lead = await prisma.lead.findUnique({ where: { id: a.leadId }, include: { contact: true } })
+        const inboundDepois = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+        const aplica = lead && !lead.humanOnly && lead.aiEnabled && lead.status === 'open' && inboundDepois === 0
+        if (aplica) {
+          const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+          const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+          const nome = lead.contact?.name?.split(' ')[0] ?? ''
+          const cfg = await prisma.systemConfig.findUnique({ where: { key: 'after_hours_resume_message' } })
+          const msg = (cfg?.value || `${saud}${nome ? ', ' + nome : ''}! 😊 Retomando seu contato com a KeroSolar. Pra eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*. Qualquer uma já serve!`)
+            .replace(/\{SAUDACAO\}/g, saud).replace(/\{nome\}/gi, nome)
+          await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+          // limpa o estado de fora-de-horário e arma o nudge da Chegada (+2h → Repescagem)
+          await prisma.lead.update({ where: { id: a.leadId }, data: { afterHoursAsked: false, afterHoursProceed: true } }).catch(() => {})
+          await prisma.scheduledAction.create({ data: { leadId: a.leadId, conversationId: a.conversationId, stageId: a.stageId, type: 'chegada_followup', payload: { step: 1 } as object, runAt: new Date(Date.now() + 2 * 60 * 60 * 1000) } }).catch(() => {})
         }
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
