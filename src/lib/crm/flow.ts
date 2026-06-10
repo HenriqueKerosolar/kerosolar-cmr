@@ -55,6 +55,7 @@ export async function dispatchOutbound(
   media?: { url: string; type: 'image' | 'video' | 'document' },
   senderType: 'system' | 'human' | 'ai' = 'system',
   senderUserId?: string,
+  skipDedup = false,   // simulações que o cliente pede de novo podem repetir o mesmo texto
 ) {
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } })
   if (!conv) return
@@ -62,7 +63,7 @@ export async function dispatchOutbound(
   // 🔒 Anti-repetição (regra universal: nunca repetir mensagem). Mensagens automáticas
   // (ai/system) NÃO são reenviadas se forem idênticas à última que NÓS mandamos nesta
   // conversa — evita follow-up/saudação duplicados e loop da IA. (Humano pode repetir.)
-  if (text && !media && (senderType === 'ai' || senderType === 'system')) {
+  if (text && !media && !skipDedup && (senderType === 'ai' || senderType === 'system')) {
     const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
     const lastOut = await prisma.message.findFirst({
       where: { conversationId, direction: 'outbound', senderType: { in: ['ai', 'system'] } },

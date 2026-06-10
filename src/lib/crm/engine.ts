@@ -487,57 +487,89 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     return { ...base, aiHandled: true, stage: tgt?.name ?? base.stage }
   }
 
-  // 💰 ENTRADA / SINAL: cliente quer dar uma entrada → pergunta o valor e recalcula o
-  //    financiamento (financia valorSistema − entrada). O valor fica guardado (cf.entrada) e
-  //    também desconta na simulação de cartão. Fluxo de 2 passos (pergunta → recalcula).
+  // 💳💰 SIMULAÇÃO DE PAGAMENTO (cartão / financiamento / entrada) — unificado, com MEMÓRIA de
+  //    contexto (cf.simMode, cf.cartaoParcelas, cf.entrada). Intercepta só pedidos CLAROS de cartão
+  //    ou de entrada/sinal; perguntas genéricas de prazo do financiamento ("em 24x") ficam com a IA
+  //    (que tem a tabela). Garante: cartão usa a tabela do cartão (não a do financiamento), a entrada
+  //    vale no contexto certo (cartão OU financiamento), e nunca trava por mensagem repetida.
   {
     const cfNow = (lead.customFields as Record<string, unknown> | null) ?? {}
-    const { extrairEntrada, orcamentoTexto } = await import('./solar-calc')
+    const { extrairEntrada, financiamentoEntradaTexto, orcamentoTexto, carregarTabelaFinanciamento } = await import('./solar-calc')
+    const { extrairCartao, simularCartao, formatarCartao } = await import('./card-calc')
+
     const ent = extrairEntrada(text)
+    const cartao = extrairCartao(text)
+    const cartaoAsked = !!cfNow.cartaoAsked
     const entradaAsked = !!cfNow.entradaAsked
-    const temEntrada = typeof cfNow.entrada === 'number' && (cfNow.entrada as number) > 0
+    const ehConsumo = /kwh|kw\b|\bk\b|placa|painel|conta|fatura/i.test(text)
 
-    // ➖ REMOVER a entrada ("sem entrada", "tirar a entrada") → zera e reenvia o orçamento cheio
-    if (ent.remover && (temEntrada || entradaAsked)) {
-      const cfSolar = cfNow.solar as Parameters<typeof orcamentoTexto>[0] | undefined
-      await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entrada: null, entradaAsked: false } as object } })
-      const { dispatchOutbound } = await import('./flow')
-      const msg = cfSolar
-        ? `Sem problema, removi a entrada! 😊 Segue o orçamento sem entrada:\n\n${orcamentoTexto(cfSolar)}`
-        : 'Sem problema, removi a entrada! 😊'
-      await simularDigitacao(msg)
-      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Cliente removeu a entrada — financiamento volta ao valor cheio.' } }).catch(() => {})
-      return { ...base, reply: null, aiHandled: true }
-    }
+    // nº de parcelas do cartão: da mensagem, ou número solto quando estávamos esperando ("24")
+    let parcelas = cartao.parcelas
+    if (parcelas == null && cartaoAsked) { const mN = text.match(/\b(\d{1,2})\b/); if (mN) parcelas = parseInt(mN[1], 10) }
 
-    // só trata número solto como entrada se já perguntamos E não é mensagem de consumo/conta
-    const valorPasso2 = entradaAsked && ent.valor != null && !/kwh|kw\b|\bk\b|placa|painel|conta|fatura|cart[aã]o/i.test(text)
-    if (ent.intent || valorPasso2) {
+    const pedeCartao = cartao.intent || (cartaoAsked && parcelas != null)
+    const pedeEntrada = ent.intent || ent.remover || (entradaAsked && ent.valor != null && !ehConsumo)
+
+    if (pedeCartao || pedeEntrada) {
       const cfSolar = cfNow.solar as { valorSistema?: number } | undefined
       const valorSist = typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null
       const { dispatchOutbound } = await import('./flow')
+      const responder = async (msg: string) => { await simularDigitacao(msg); await dispatchOutbound(conversation.id, msg, undefined, 'ai', undefined, true) }
+
       if (!valorSist) {
-        const msg = 'Pra calcular com a entrada, preciso primeiro do seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
-        await simularDigitacao(msg)
-        await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        await responder('Pra simular o pagamento, preciso primeiro do seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.')
         return { ...base, reply: null, aiHandled: true }
       }
-      if (ent.valor == null) {
+
+      // ENTRADA: remover, definir nesta mensagem, ou herdar a guardada
+      let entrada = typeof cfNow.entrada === 'number' ? (cfNow.entrada as number) : 0
+      if (ent.remover) entrada = 0
+      else if (ent.valor != null && (ent.intent || cartaoAsked || cartao.intent || entradaAsked)) entrada = ent.valor
+      entrada = Math.max(0, Math.min(entrada, valorSist))
+
+      // Pediu entrada SEM valor e SEM contexto de cartão → pergunta o valor (passo 1)
+      if (pedeEntrada && !ent.remover && ent.valor == null && !pedeCartao) {
         await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entradaAsked: true } as object } })
-        const msg = 'Que ótimo! 😊 De quanto seria a *entrada*? (em reais)'
-        await simularDigitacao(msg)
-        await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+        await responder('Que ótimo! 😊 De quanto seria a *entrada*? (em reais)')
         return { ...base, reply: null, aiHandled: true }
       }
-      const entrada = Math.min(ent.valor, valorSist)   // entrada não passa do valor do sistema
-      await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entrada, entradaAsked: false } as object } })
-      const { financiamentoEntradaTexto, carregarTabelaFinanciamento } = await import('./solar-calc')
+
+      // MODO: cartão se pediu cartão / estava esperando parcelas; senão, se o último contexto era
+      // cartão e há parcelas (atuais ou guardadas), mantém cartão; caso contrário, financiamento.
+      const modo: 'cartao' | 'financiamento' =
+        pedeCartao ? 'cartao'
+        : (cfNow.simMode === 'cartao' && (parcelas != null || typeof cfNow.cartaoParcelas === 'number')) ? 'cartao'
+        : 'financiamento'
+
+      if (modo === 'cartao') {
+        const nParc = parcelas ?? (typeof cfNow.cartaoParcelas === 'number' ? (cfNow.cartaoParcelas as number) : null)
+        if (!nParc) {
+          await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: true, entradaAsked: false, entrada: entrada || null } as object } })
+          await responder('No cartão de crédito dá pra parcelar em até *24x*! Em quantas vezes você quer que eu simule? (de 1 a 24) 😊')
+          return { ...base, reply: null, aiHandled: true }
+        }
+        if (nParc > 24) {
+          await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: true } as object } })
+          await responder('No cartão a gente parcela em até *24x* 😊 Em quantas vezes (de 1 a 24) você quer simular?')
+          return { ...base, reply: null, aiHandled: true }
+        }
+        const sim = simularCartao(valorSist - entrada, nParc)
+        await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: false, entradaAsked: false, cartaoParcelas: nParc, entrada: entrada || null } as object } })
+        if (sim) await responder(formatarCartao(sim, valorSist, entrada))
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Simulação no cartão ${nParc}x${entrada ? ` com entrada de R$ ${entrada.toLocaleString('pt-BR')}` : ''}.` } }).catch(() => {})
+        return { ...base, reply: null, aiHandled: true }
+      }
+
+      // FINANCIAMENTO (com ou sem entrada)
       await carregarTabelaFinanciamento()
-      const msg = financiamentoEntradaTexto(valorSist, entrada)
-      await simularDigitacao(msg)
-      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Cliente quer dar entrada de R$ ${entrada.toLocaleString('pt-BR')} — financiamento recalculado.` } }).catch(() => {})
+      await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'financiamento', cartaoAsked: false, entradaAsked: false, entrada: entrada || null } as object } })
+      if (entrada > 0) {
+        await responder(financiamentoEntradaTexto(valorSist, entrada))
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Financiamento com entrada de R$ ${entrada.toLocaleString('pt-BR')}.` } }).catch(() => {})
+      } else {
+        const cfSolarFull = cfNow.solar as Parameters<typeof orcamentoTexto>[0] | undefined
+        await responder(`${ent.remover ? 'Sem problema, removi a entrada! 😊 ' : ''}${cfSolarFull ? orcamentoTexto(cfSolarFull) : 'Segue o financiamento pelo valor do sistema.'}`)
+      }
       return { ...base, reply: null, aiHandled: true }
     }
   }
@@ -863,29 +895,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
-  // 💳 SIMULAÇÃO NO CARTÃO DE CRÉDITO (tabela PinPag): cliente pede "cartão" → calcula pelo
-  //    valor do sistema. Pergunta as parcelas (até 24x) se ele não disse. Suprime o orçamento
-  //    normal (cartaoMsg vira a resposta).
-  const { extrairCartao } = await import('./card-calc')
-  const cartao = extrairCartao(text)
-  let cartaoMsg: string | null = null
-  if (cartao.intent) {
-    const cfSolar = cf.solar as { valorSistema?: number } | undefined
-    const valorSist = (typeof solar?.valorSistema === 'number' ? solar.valorSistema : null)
-      ?? (typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null)
-    if (!valorSist) {
-      cartaoMsg = 'Pra simular no cartão de crédito, preciso primeiro fazer seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
-    } else if (cartao.parcelas && cartao.parcelas >= 1 && cartao.parcelas <= 24) {
-      const { simularCartao, formatarCartao } = await import('./card-calc')
-      const entrada = typeof cf.entrada === 'number' ? Math.min(cf.entrada, valorSist) : 0
-      const sim = simularCartao(valorSist - entrada, cartao.parcelas)   // entrada deduzida
-      if (sim) cartaoMsg = formatarCartao(sim, valorSist, entrada)
-    } else if (cartao.parcelas && cartao.parcelas > 24) {
-      cartaoMsg = 'No cartão de crédito a gente parcela em até *24x* 😊 Em quantas vezes (de 1 a 24) você quer simular?'
-    } else {
-      cartaoMsg = 'No cartão de crédito dá pra parcelar em até *24x*! Em quantas vezes você quer que eu simule? (de 1 a 24) 😊'
-    }
-  }
+  // (Simulação de cartão / financiamento / entrada é tratada no bloco unificado acima, que
+  //  responde e retorna antes de chegar aqui.)
 
   // Roteamento por NOME da etapa: a IA escolhe, com backup por palavra-chave (garantido)
   let routeName: string | null = result.routeToStage
@@ -924,7 +935,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // acIntent suprime o orçamento automático: com pedido de ar-condicionado o cálculo precisa
   // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
   // de mandar um orçamento subdimensionado no consumo atual.
-  const presentBudget = !!solar && mudancaRelevante && !acIntent && !cartaoMsg
+  const presentBudget = !!solar && mudancaRelevante && !acIntent
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
@@ -972,12 +983,6 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       ].filter(Boolean).join(' e ')
       outboundText = `Que bom que vai colocar ar-condicionado! 😊 Pra eu dimensionar o sistema certinho — já incluindo os ares no cálculo — me diz ${pede || 'os detalhes dos aparelhos (quantidade, BTU e horas de uso por dia)'}?`
     }
-    outboundSender = 'ai'
-  }
-
-  // 💳 CARTÃO DE CRÉDITO: resposta determinística (simulação da tabela ou pergunta das parcelas).
-  if (cartaoMsg && !result.handoff) {
-    outboundText = cartaoMsg
     outboundSender = 'ai'
   }
 
