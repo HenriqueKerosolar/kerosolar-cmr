@@ -252,12 +252,38 @@ export async function startSession(accountId: string): Promise<void> {
   }
 }
 
+/**
+ * Resolve o número REAL (telefone) de uma mensagem. Quando o JID é @lid (privacidade / anúncios
+ * da Meta), o WhatsApp NÃO manda o telefone direto — o que criava CONTATOS DUPLICADOS (um pelo
+ * número, outro pelo @lid). Aqui usamos o `remoteJidAlt` que o Baileys 7 fornece (o JID de
+ * telefone), com fallback no mapeamento LID→PN do Baileys. Assim @lid e telefone caem no MESMO
+ * contato. Sem resolução possível → mantém o número do @lid (comportamento antigo, sem quebrar).
+ */
+async function resolverNumeroReal(accountId: string, msg: any): Promise<string> {
+  const jid: string = msg.key?.remoteJid || ''
+  if (!jid.endsWith('@lid')) return jid.split('@')[0]
+  // 1) remoteJidAlt na própria mensagem (telefone real) — mais confiável
+  const alt: string = msg.key?.remoteJidAlt || ''
+  if (alt.includes('@s.whatsapp.net')) return alt.split('@')[0]
+  // 2) fallback: mapeamento LID→PN do Baileys
+  try {
+    const sock = sessions.get(accountId)?.sock as any
+    const pn: string | null = await sock?.signalRepository?.lidMapping?.getPNForLID?.(jid)
+    if (pn) return String(pn).split('@')[0]
+  } catch { /* sem mapeamento → mantém o @lid */ }
+  // 3) sem resolução → mantém o número do @lid
+  return jid.split('@')[0]
+}
+
 async function handleIncoming(accountId: string, msg: any) {
   const jid: string = msg.key.remoteJid || ''
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return // ignora grupos/status
 
+  // Número REAL (resolve @lid → telefone) — usado p/ casar o contato e evitar duplicatas.
+  const phone = await resolverNumeroReal(accountId, msg)
+
   // BLOCK LIST: ignora COMPLETAMENTE quem está na lista de "não receber" (não processa, não responde)
-  if (!msg.key.fromMe && await numeroNaLista(jid.split('@')[0], 'no_receive')) return
+  if (!msg.key.fromMe && await numeroNaLista(phone, 'no_receive')) return
 
   // Mensagem enviada por NÓS (fromMe).
   if (msg.key.fromMe) {
@@ -411,7 +437,8 @@ async function handleIncoming(accountId: string, msg: any) {
   // Sem texto E sem imagem → nada a processar
   if (!text.trim() && !imageBase64) return
 
-  const phone = jid.split('@')[0]
+  // `phone` já resolvido no topo (resolve @lid → telefone real). chatJid continua o JID original
+  // (inclusive @lid) pra responder no lugar certo; o contato casa pelo telefone real (sem duplicar).
   const name = msg.pushName || null
 
   // Descobre o funil de destino: primeiro vínculo deste número, senão o padrão
@@ -472,7 +499,7 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
 
   if (!text && !mediaUrl) return // nada a registrar (edição/reação/etc.)
 
-  const phone = jid.split('@')[0]
+  const phone = await resolverNumeroReal(accountId, msg)  // resolve @lid → telefone real (evita duplicar)
   let contact = await prisma.contact.findFirst({ where: { OR: [{ phone }, { whatsappId: phone }] } })
   if (!contact) contact = await prisma.contact.create({ data: { phone, whatsappId: phone } })
 
@@ -482,7 +509,7 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
     const pipeline = await prisma.pipeline.findFirst({ orderBy: { createdAt: 'asc' }, include: { stages: { orderBy: { sortOrder: 'asc' }, take: 1 } } })
     const stageId = pipeline?.stages?.[0]?.id
     const lead = pipeline && stageId ? await prisma.lead.create({ data: { title: contact.name || phone, pipelineId: pipeline.id, stageId, contactId: contact.id, source: 'whatsapp' } }) : null
-    conversation = await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead?.id ?? null, externalId: phone, accountId } })
+    conversation = await prisma.conversation.create({ data: { channel: 'whatsapp', contactId: contact.id, leadId: lead?.id ?? null, externalId: phone, chatJid: jid, accountId } })
   }
 
   // dedup: não grava 2x a mesma mensagem
