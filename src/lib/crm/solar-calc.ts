@@ -297,13 +297,17 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     if (m) { const k = parseBrNumber(m[1]); if (consumoKwhValido(k)) kwh = k }
   }
 
-  // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações
+  // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações.
+  // ÚLTIMO caso: mensagem que é SÓ um número "puro" (ex.: "350", "1.250,50") → interpretamos
+  // como o VALOR DA CONTA em reais. A faixa realista (contaReaisValida) descarta números fora
+  // de R$30–100.000 (ex.: nº de instalação como "23092440").
   const reaisMatch =
     t.match(/valor\s+a\s+pagar[^0-9]{0,20}([\d.,]+)/) ||
     t.match(/total\s+a\s+pagar[^0-9]{0,20}([\d.,]+)/) ||
     t.match(/r\$\s*([\d.,]+)/) ||
     t.match(/([\d.,]+)\s*reais/) ||
-    t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/)
+    t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/) ||
+    (/^[\d.,\s]+$/.test(t.trim()) ? t.trim().match(/([\d.,]+)/) : null)
   if (reaisMatch) { const v = parseBrNumber(reaisMatch[1]); if (contaReaisValida(v)) reais = v }
 
   if (kwh) return { kwh, reais }  // retorna os dois quando kWh encontrado

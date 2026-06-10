@@ -423,6 +423,30 @@ export async function processDueActions() {
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
+      if (a.type === 'recalc_orcamento') {
+        // 🧮 Disparo manual do orçamento: recalcula com o motor REAL (mesmos números do sistema)
+        //    e envia o orçamento formatado pelo WhatsApp, gravando a simulação no lead.
+        //    payload: { kwh?: number, reais?: number }
+        const pl = (a.payload as { kwh?: number; reais?: number }) ?? {}
+        const lead = await prisma.lead.findUnique({ where: { id: a.leadId } })
+        if (lead && !lead.humanOnly) {
+          const { calcularSolarPorKwh, calcularSolar, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido, contaReaisValida } = await import('./solar-calc')
+          await carregarTabelaFinanciamento()
+          const solar = (typeof pl.kwh === 'number' && consumoKwhValido(pl.kwh)) ? calcularSolarPorKwh(pl.kwh)
+                      : (typeof pl.reais === 'number' && contaReaisValida(pl.reais)) ? calcularSolar(pl.reais)
+                      : null
+          if (solar) {
+            const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+            await prisma.lead.update({ where: { id: a.leadId }, data: {
+              customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
+              value: solar.valorSistema,
+            } }).catch(() => {})
+            await dispatchOutbound(a.conversationId, orcamentoTexto(solar), undefined, 'ai')
+          }
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
       if (a.type === 'reengage') {
         const ld = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { humanOnly: true, status: true } })
         if (ld && !ld.humanOnly && ld.status === 'open') {
