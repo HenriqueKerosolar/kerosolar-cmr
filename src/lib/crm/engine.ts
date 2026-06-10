@@ -766,7 +766,13 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     ? { units: result.acRequest.units ?? 1, btu: result.acRequest.btu ?? null, hoursPerDay: result.acRequest.hoursPerDay ?? null }
     : null)
   const prevAc = (cf.ac as { units?: number; btu?: number | null; hoursPerDay?: number | null } | undefined)
+  // acIntent: cliente mencionou querer instalar/usar mais ar-condicionado. Enquanto não temos
+  // BTU + horas, NÃO mandamos o orçamento simples (ficaria subdimensionado, ignorando os ares):
+  // perguntamos os dados e sinalizamos pra revisão. (Ver bloco de outboundText abaixo.)
+  let acIntent = false
+  let acData: { units: number; btu: number | null; hoursPerDay: number | null } | null = null
   if (acDet) {
+    acIntent = true
     // Junta com o que já sabíamos do AC (ex: BTU veio antes, horas agora)
     const ac = {
       units: acDet.units ?? prevAc?.units ?? 1,
@@ -774,6 +780,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       hoursPerDay: acDet.hoursPerDay ?? prevAc?.hoursPerDay ?? null,
     }
     merged.ac = ac
+    acData = ac
     leadUpdate.customFields = merged as Prisma.InputJsonValue
 
     // Só sinaliza/agenda quando já temos BTU (pedido concreto)
@@ -808,8 +815,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       routeName = 'Ficou de enviar a conta'
     else if (/ja sou cliente|ja instalei|ja comprei com voc|sou cliente de voc|ja tenho sistema com voc/.test(txtNorm))
       routeName = 'Já é cliente'
-    // Orçamento calculado automaticamente nesta interação → move pra "Recebeu orçamento automático"
-    else if (solar && !kitMinimo)
+    // Orçamento calculado automaticamente nesta interação → move pra "Recebeu orçamento automático".
+    // (Não move quando há pedido de ar-condicionado pendente: ainda não enviamos orçamento.)
+    else if (solar && !kitMinimo && !acIntent)
       routeName = 'Recebeu orçamento automático'
   }
   let movedToStageId: string | null = null
@@ -834,7 +842,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // cliente manda a conta confirmando praticamente o mesmo consumo.
   const mudancaRelevante = consumoAntes == null
     || Math.abs((solar?.consumoKwh ?? 0) - consumoAntes) > Math.max(20, consumoAntes * 0.05)
-  const presentBudget = !!solar && mudancaRelevante
+  // acIntent suprime o orçamento automático: com pedido de ar-condicionado o cálculo precisa
+  // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
+  // de mandar um orçamento subdimensionado no consumo atual.
+  const presentBudget = !!solar && mudancaRelevante && !acIntent
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
@@ -863,6 +874,26 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     await prisma.note.create({
       data: { leadId: lead.id, type: 'system', content: 'IA encaminhou para atendimento humano — IA desativada.' },
     })
+  }
+
+  // ❄️ AR-CONDICIONADO: cliente quer instalar/usar mais ar. NÃO mandamos o orçamento simples
+  //    (subdimensionado). Sem BTU+horas → pedimos os dados. Com tudo → confirmamos que vamos
+  //    preparar o projeto considerando os ares (um humano revisa o cálculo com o AC incluído).
+  if (acIntent && !result.handoff) {
+    const completo = !!(acData?.btu && acData?.hoursPerDay != null)
+    if (completo) {
+      const qtd = (acData?.units ?? 1)
+      outboundText = `Perfeito! 😊 Vou preparar um projeto já considerando ${qtd > 1 ? `os ${qtd} ar-condicionados` : 'o ar-condicionado'}${acData?.btu ? ` de ${acData.btu.toLocaleString('pt-BR')} BTU` : ''} — assim o sistema cobre o consumo de hoje + o dos ares. Já te retorno com os números certinhos!`
+    } else {
+      const faltaBtu = !acData?.btu
+      const faltaHoras = acData?.hoursPerDay == null
+      const pede = [
+        faltaBtu ? '*quantos BTUs* cada um (ex.: 9.000, 12.000, 18.000)' : null,
+        faltaHoras ? '*quantas horas por dia* pretende usar' : null,
+      ].filter(Boolean).join(' e ')
+      outboundText = `Que bom que vai colocar ar-condicionado! 😊 Pra eu dimensionar o sistema certinho — já incluindo os ares no cálculo — me diz ${pede || 'os detalhes dos aparelhos (quantidade, BTU e horas de uso por dia)'}?`
+    }
+    outboundSender = 'ai'
   }
 
   // Rede de segurança: IA nunca deixa o cliente sem resposta (reply vazio → fallback)

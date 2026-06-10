@@ -36,7 +36,16 @@ const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCa
 /** Detecta pedido de ar-condicionado na mensagem do cliente (determinístico). */
 export function extrairAc(text: string): { units: number; btu: number | null; hoursPerDay: number | null } | null {
   const t = norm(text)
-  const ehAc = /ar.?condicionad|\bsplit\b|climatizad|\bbtus?\b/.test(t)
+  const ehAc =
+    /ar.?condicionad|\bsplit\b|climatizad|\bbtus?\b/.test(t)
+    // "ar" abreviado em contexto CLARO de ar-condicionado (cliente escreve só "2 ar"):
+    //   • quantificador + ar: "2 ar", "um ar", "mais ar", "outro ar"
+    //   • verbo de instalar/usar + ar: "colocar ar", "instalar 2 ar", "vou por um ar"
+    //   • "o ar / os ares / meu ar" (artigo/possessivo + ar)
+    // Usa limites de palavra pra NÃO casar "ar" dentro de outras palavras (lugar, para, etc.).
+    || /\b(\d+|um|uma|dois|duas|tr[eê]s|mais|outro|outra|novo|nova)\s+ar(es|zinho)?\b/.test(t)
+    || /\b(coloca\w*|instala\w*|bota\w*|p[oô]r|p[oô]e|liga\w*|compra\w*|adiciona\w*|monta\w*)\s+(?:\w+\s+){0,3}ar(es|zinho)?\b/.test(t)
+    || /\b(o|os|meu|meus)\s+ar(es|zinho)?\b/.test(t)
   if (!ehAc) return null
 
   // BTU: "9000 btu", "9.000", ou "9 mil"
