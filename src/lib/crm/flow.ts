@@ -115,7 +115,10 @@ export async function dispatchOutbound(
       await prisma.scheduledAction.create({
         data: {
           leadId: conv.leadId, conversationId, stageId: null, type: 'redeliver',
-          payload: { text, mediaUrl: media?.url ?? null, mediaType: media?.type ?? null, attempts: 0 } as object,
+          // messageId: referência ao registro já criado no DB. O handler de redeliver verifica
+          // se a mensagem já tem externalId (= WA confirmou entrega) — se sim, pula o reenvio
+          // para evitar mensagem duplicada quando o socket caiu APÓS o envio já ter ocorrido.
+          payload: { text, mediaUrl: media?.url ?? null, mediaType: media?.type ?? null, attempts: 0, messageId: createdMsg.id } as object,
           runAt: new Date(Date.now() + 30000),
         },
       }).catch(() => {})
@@ -285,19 +288,37 @@ export async function processDueActions() {
       // 🔁 Reentrega de mensagem que falhou (WhatsApp estava caído). NÃO cria nova mensagem
       // no chat — só reenvia o texto/mídia. Tenta a cada 1 min por ~20 min; depois desiste.
       if (a.type === 'redeliver') {
-        const p = (a.payload as { text?: string; mediaUrl?: string | null; mediaType?: 'image' | 'video' | 'document' | null; attempts?: number }) ?? {}
+        const p = (a.payload as { text?: string; mediaUrl?: string | null; mediaType?: 'image' | 'video' | 'document' | null; attempts?: number; messageId?: string }) ?? {}
         const attempts = p.attempts ?? 0
+
+        // 🛡️ Anti-duplicata: antes de reenviar, verifica se a mensagem original já tem
+        // externalId (= WA confirmou o envio na primeira tentativa, mesmo que o socket tenha
+        // caído logo depois). Se sim, o envio JÁ OCORREU — só marca como concluído.
+        if (p.messageId) {
+          const original = await prisma.message.findUnique({ where: { id: p.messageId }, select: { externalId: true } }).catch(() => null)
+          if (original?.externalId) {
+            console.log('[redeliver] externalId já presente — mensagem entregue, pulando reenvio')
+            await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+            continue
+          }
+        }
+
         const conv = await prisma.conversation.findUnique({ where: { id: a.conversationId }, include: { contact: true } })
         let ok = false
+        let waId: string | null = null
         try {
           if (conv?.channel === 'whatsapp' && conv.accountId && conv.contact?.whatsappId) {
             const wa = await import('./whatsapp')
             const jid = conv.contact.whatsappId
-            if (p.mediaUrl) await wa.sendMedia(conv.accountId, jid, { url: p.mediaUrl, type: p.mediaType ?? 'image', caption: p.text })
-            else if (p.text) await wa.sendText(conv.accountId, jid, p.text)
+            if (p.mediaUrl) waId = await wa.sendMedia(conv.accountId, jid, { url: p.mediaUrl, type: p.mediaType ?? 'image', caption: p.text })
+            else if (p.text) waId = await wa.sendText(conv.accountId, jid, p.text)
             ok = true
           }
         } catch { ok = false }
+        // Após reentrega bem-sucedida, salva o externalId para evitar futuros redeliveries
+        if (ok && waId && p.messageId) {
+          await prisma.message.update({ where: { id: p.messageId }, data: { externalId: waId } }).catch(() => {})
+        }
         if (ok || attempts >= 20) {
           await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         } else {
