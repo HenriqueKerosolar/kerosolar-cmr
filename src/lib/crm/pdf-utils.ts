@@ -24,18 +24,32 @@ export async function extractPdfText(buf: Buffer): Promise<string> {
 export function parseBillText(raw: string): string {
   const brl = (s: string) => { const m = s.match(/r\$\s*([\d.,]+)/i); return m ? parseFloat(m[1].replace(/\./g,'').replace(',','.')) : null }
 
-  // 1) Consumo kWh — coleta candidatos e valida faixa realista (20 a 50.000 kWh).
-  // Contas de luz têm muitos números (código de instalação, barras) que não são consumo.
+  // 1) Consumo kWh — valida faixa realista (20 a 50.000 kWh).
   let kwh: number | null = null
   const noRange = (n: number) => n >= 20 && n <= 50000
-  const cands: number[] = []
-  const push = (s?: string) => { if (s) { const n = parseInt(s.replace(/\D/g, ''), 10); if (!isNaN(n)) cands.push(n) } }
-  push(raw.match(/quant\.?\s*\n?\s*(\d{2,4})\s*(?:\n|$)/i)?.[1])
-  push(raw.match(/consumo[^0-9]{0,30}?(\d{2,5})\s*kwh/i)?.[1])
-  push(raw.match(/(\d{2,5})\s*kwh/i)?.[1])
-  push(raw.match(/kwh\D{0,10}?(\d{2,5})/i)?.[1])
-  push(raw.match(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/\d{2}[^0-9]{0,20}(\d{3,4})/i)?.[1])
-  for (const c of cands) { if (noRange(c)) { kwh = c; break } }
+
+  // 1a) MÉDIA ANUAL — se a fatura tiver HISTÓRICO DE CONSUMO (vários meses, ex.: "MAI/26 ... 538"),
+  //     soma todos os meses e tira a média (o orçamento solar é feito pela média anual, não 1 mês).
+  const historico: number[] = []
+  for (const m of raw.matchAll(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/\d{2}[^\d]{0,25}?(\d{2,5})/gi)) {
+    const n = parseInt(m[1], 10)
+    if (n >= 50 && n <= 50000) historico.push(n)   // >= 50 evita pegar a coluna de "nº de dias" (~28-33)
+  }
+  if (historico.length >= 3) {
+    kwh = Math.round(historico.reduce((a, b) => a + b, 0) / historico.length)
+  }
+
+  // 1b) Fallback: um único valor de consumo (quando não há histórico de vários meses).
+  if (!kwh) {
+    const cands: number[] = []
+    const push = (s?: string) => { if (s) { const n = parseInt(s.replace(/\D/g, ''), 10); if (!isNaN(n)) cands.push(n) } }
+    push(raw.match(/quant\.?\s*\n?\s*(\d{2,4})\s*(?:\n|$)/i)?.[1])
+    push(raw.match(/consumo[^0-9]{0,30}?(\d{2,5})\s*kwh/i)?.[1])
+    push(raw.match(/(\d{2,5})\s*kwh/i)?.[1])
+    push(raw.match(/kwh\D{0,10}?(\d{2,5})/i)?.[1])
+    push(raw.match(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/\d{2}[^0-9]{0,20}(\d{3,4})/i)?.[1])
+    for (const c of cands) { if (noRange(c)) { kwh = c; break } }
+  }
 
   // 2) Valor total a pagar — valida faixa realista (R$ 30 a R$ 100.000)
   let valor: number | null = null

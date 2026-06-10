@@ -341,6 +341,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     if (isAfterHours && !lead.afterHoursProceed) {
       const querDepois = /(so |apenas )?(registr|deixa registr|deixar registr|pode deixar|depois|amanha|horario comercial|outro dia|mais tarde)/.test(norm)
       const querAgora = /(prossegu|continu|agora|atende|atender|quero sim|pode seguir|vamos|sim quero|seguir)/.test(norm)
+      // Lead que JÁ conversou (tem mensagens nossas) NÃO é novo → não recebe a pergunta de fora do horário
+      const jaConversou = (await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })) > 0
       const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
 
       if (querDepois) {
@@ -354,6 +356,11 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
         lead.afterHoursProceed = true
         // segue o fluxo normal abaixo
+      } else if (jaConversou) {
+        // Lead já estava EM CONVERSA (não é novo) → NÃO faz a pergunta de "agora ou depois";
+        // segue o atendimento normal (o operador/IA continua de onde parou).
+        await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
+        lead.afterHoursProceed = true
       } else {
         // primeira mensagem fora do horário → recepção + pergunta
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
