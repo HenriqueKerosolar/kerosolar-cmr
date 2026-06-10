@@ -266,6 +266,33 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
   }
 }
 
+/**
+ * 🧮 COMANDO DO OPERADOR: "minha indicação é XXXX kWh" → calcula o orçamento por aquele consumo
+ * e envia o orçamento formatado ao cliente (em vez de mandar o texto literal). Vale em QUALQUER
+ * etapa e tanto pelo CRM quanto pelo app do WhatsApp. Aceita kwh/kw/k.
+ * Retorna true se reconheceu e tratou o comando (aí NÃO se deve enviar/registrar o texto literal).
+ */
+export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string): Promise<boolean> {
+  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico)\b[^\d]{0,15}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
+  if (!ind) return false
+  const raw = ind[1].includes(',') ? ind[1].replace(/\./g, '').replace(',', '.')
+    : (/^\d{1,3}(\.\d{3})+$/.test(ind[1]) ? ind[1].replace(/\./g, '') : ind[1])
+  const kwh = Math.round(parseFloat(raw) || 0)
+  const { calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido } = await import('./solar-calc')
+  if (!consumoKwhValido(kwh)) return false   // fora da faixa realista → não trata (manda texto normal)
+  await carregarTabelaFinanciamento()
+  const solar = calcularSolarPorKwh(kwh)
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
+  const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+  await prisma.lead.update({ where: { id: leadId }, data: {
+    customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
+    value: solar.valorSistema, lastMessageAt: new Date(),
+  } }).catch(() => {})
+  await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'ai')
+  await prisma.note.create({ data: { leadId, type: 'system', content: `Operador indicou ${kwh} kWh → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
+  return true
+}
+
 /** Processa as ações agendadas vencidas. Chamado pelo poller. */
 export async function processDueActions() {
   const due = await prisma.scheduledAction.findMany({

@@ -491,6 +491,14 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
     if (ja) return
   }
 
+  // 🧮 COMANDO DO OPERADOR pelo app: "minha indicação é XXXX kWh" → calcula e envia o orçamento.
+  // (O cliente já recebeu o texto que você digitou no app; aqui não registramos o comando no CRM
+  //  e mandamos o orçamento calculado.)
+  if (textoDigitado.trim() && conversation.leadId) {
+    const { comandoIndicacaoKwh } = await import('./flow')
+    if (await comandoIndicacaoKwh(conversation.leadId, conversation.id, textoDigitado)) return
+  }
+
   await prisma.message.create({
     data: {
       conversationId: conversation.id, direction: 'outbound', senderType: 'human',

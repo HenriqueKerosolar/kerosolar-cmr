@@ -119,6 +119,17 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
   const session = await verifySession()
   const conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
   if (!conv) throw new Error('Esse lead ainda não tem conversa.')
+
+  // 🧮 COMANDO DO OPERADOR: "minha indicação é XXXX kWh" → calcula e envia o orçamento (em vez
+  // do texto literal). Vale em qualquer etapa. (Mesma função usada no app do WhatsApp.)
+  if (text && !media) {
+    const { comandoIndicacaoKwh } = await import('@/lib/crm/flow')
+    if (await comandoIndicacaoKwh(leadId, conv.id, text)) {
+      revalidatePath(`/leads/${leadId}`)
+      return
+    }
+  }
+
   await dispatchOutbound(conv.id, text, media, 'human', session.userId)
   await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } })
   // 📚 Aprende com a resposta do atendente (pergunta do cliente → resposta dada)
