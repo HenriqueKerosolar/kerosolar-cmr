@@ -808,6 +808,29 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
+  // 💳 SIMULAÇÃO NO CARTÃO DE CRÉDITO (tabela PinPag): cliente pede "cartão" → calcula pelo
+  //    valor do sistema. Pergunta as parcelas (até 24x) se ele não disse. Suprime o orçamento
+  //    normal (cartaoMsg vira a resposta).
+  const { extrairCartao } = await import('./card-calc')
+  const cartao = extrairCartao(text)
+  let cartaoMsg: string | null = null
+  if (cartao.intent) {
+    const cfSolar = cf.solar as { valorSistema?: number } | undefined
+    const valorSist = (typeof solar?.valorSistema === 'number' ? solar.valorSistema : null)
+      ?? (typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null)
+    if (!valorSist) {
+      cartaoMsg = 'Pra simular no cartão de crédito, preciso primeiro fazer seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
+    } else if (cartao.parcelas && cartao.parcelas >= 1 && cartao.parcelas <= 24) {
+      const { simularCartao, formatarCartao } = await import('./card-calc')
+      const sim = simularCartao(valorSist, cartao.parcelas)
+      if (sim) cartaoMsg = formatarCartao(sim, valorSist)
+    } else if (cartao.parcelas && cartao.parcelas > 24) {
+      cartaoMsg = 'No cartão de crédito a gente parcela em até *24x* 😊 Em quantas vezes (de 1 a 24) você quer simular?'
+    } else {
+      cartaoMsg = 'No cartão de crédito dá pra parcelar em até *24x*! Em quantas vezes você quer que eu simule? (de 1 a 24) 😊'
+    }
+  }
+
   // Roteamento por NOME da etapa: a IA escolhe, com backup por palavra-chave (garantido)
   let routeName: string | null = result.routeToStage
   if (!routeName) {
@@ -845,7 +868,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // acIntent suprime o orçamento automático: com pedido de ar-condicionado o cálculo precisa
   // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
   // de mandar um orçamento subdimensionado no consumo atual.
-  const presentBudget = !!solar && mudancaRelevante && !acIntent
+  const presentBudget = !!solar && mudancaRelevante && !acIntent && !cartaoMsg
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
@@ -893,6 +916,12 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       ].filter(Boolean).join(' e ')
       outboundText = `Que bom que vai colocar ar-condicionado! 😊 Pra eu dimensionar o sistema certinho — já incluindo os ares no cálculo — me diz ${pede || 'os detalhes dos aparelhos (quantidade, BTU e horas de uso por dia)'}?`
     }
+    outboundSender = 'ai'
+  }
+
+  // 💳 CARTÃO DE CRÉDITO: resposta determinística (simulação da tabela ou pergunta das parcelas).
+  if (cartaoMsg && !result.handoff) {
+    outboundText = cartaoMsg
     outboundSender = 'ai'
   }
 

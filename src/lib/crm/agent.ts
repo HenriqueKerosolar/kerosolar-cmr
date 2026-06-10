@@ -382,8 +382,9 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
     `OU que demonstra forte intenção de FECHAR, marque highPriority=true (esses clientes têm prioridade total).`
   system += `\n\n## INDICAÇÃO: se o cliente disser que veio por indicação, marque isReferral=true e responda algo como: ` +
     `"Que bom! Então você já conhece como trabalhamos 😊" e siga gentilmente.`
-  system += `\n\n## FINANCIAMENTO NO CARTÃO: parcelamos no cartão em até 24 meses. Se perguntarem sobre cartão, confirme isso. ` +
-    `(A tabela detalhada de parcelas no cartão será fornecida; por enquanto informe apenas "até 24x no cartão".)`
+  system += `\n\n## CARTÃO DE CRÉDITO: parcelamos em até 24x no cartão. Quando o cliente pedir simulação no cartão, ` +
+    `o sistema JÁ calcula e envia os valores pela tabela oficial automaticamente — você NÃO precisa (e NÃO deve) inventar parcela/valor. ` +
+    `Se faltar saber o número de parcelas, apenas pergunte "em quantas vezes? (até 24x)". NUNCA invente o valor da parcela no cartão.`
 
   // Regra fixa: pré-aprovação de financiamento
   system += `\n\n## PRÉ-APROVAÇÃO DE FINANCIAMENTO: se o cliente perguntar sobre pré-aprovação, aprovação de crédito ou como saber se consegue financiar, ` +
