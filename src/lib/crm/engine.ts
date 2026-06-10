@@ -306,7 +306,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       await simularDigitacao(msg)
       await dispatchOutbound(conversation.id, msg, undefined, 'ai')
       await enterStage(lead.id, firstStage.id).catch(() => {})
-      return { ...base, reply: msg, aiHandled: true, stage: firstStage.name }
+      // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
+      return { ...base, reply: null, aiHandled: true, stage: firstStage.name }
     }
   }
 
@@ -343,8 +344,11 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     if (isAfterHours && !lead.afterHoursProceed) {
       const querDepois = /(so |apenas )?(registr|deixa registr|deixar registr|pode deixar|depois|amanha|horario comercial|outro dia|mais tarde)/.test(norm)
       const querAgora = /(prossegu|continu|agora|atende|atender|quero sim|pode seguir|vamos|sim quero|seguir)/.test(norm)
-      // Lead que JÁ conversou (tem mensagens nossas) NÃO é novo → não recebe a pergunta de fora do horário
-      const jaConversou = (await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })) > 0
+      // Lead que JÁ conversou NÃO é novo → não recebe a pergunta de fora do horário.
+      // Usa lastMessageAt (carregado do banco antes de qualquer update desta chamada) —
+      // mais confiável que contar mensagens na DB (que pode estar vazia para clientes
+      // migrados, leads criados manualmente ou reconexões do Baileys).
+      const jaConversou = !isNewLead && !!lead.lastMessageAt
       const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
 
       if (querDepois) {
@@ -352,7 +356,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const msg = `Perfeito! Deixei seu contato registrado e retomo no horário comercial (a partir das 9h). ${saud === 'Boa noite' ? 'Tenha uma ótima noite' : 'Até já'}! 😊`
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-        return { ...base, reply: msg, aiHandled: true }
+        // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
+        return { ...base, reply: null, aiHandled: true }
       }
       if (querAgora || lead.afterHoursAsked) {
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
@@ -370,7 +375,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua no horário comercial (a partir das 9h)?`).replace(/\{SAUDACAO\}/g, saud)
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-        return { ...base, reply: msg, aiHandled: true }
+        // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
+        return { ...base, reply: null, aiHandled: true }
       }
     }
   }
@@ -397,7 +403,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         const { scheduleNoReply } = await import('./flow-blocks')
         await scheduleNoReply(lead.id, conversation.id, lead.stageId).catch(() => {})
       }
-      return { ...base, reply: msg, aiHandled: true }
+      // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
+      return { ...base, reply: null, aiHandled: true }
     }
   }
 
@@ -649,7 +656,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     await prisma.lead.update({ where: { id: lead.id }, data: { aiEnabled: false, humanOnly: true } })
     await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
     await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '🚫 Cliente pediu para NÃO receber mais mensagens — adicionado à black list (opt-out).' } })
-    return { ...base, reply: result.reply, aiHandled: true }
+    // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
+    return { ...base, reply: null, aiHandled: true }
   }
 
   // 6) Aplica no CRM
