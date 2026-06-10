@@ -492,9 +492,25 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   //    também desconta na simulação de cartão. Fluxo de 2 passos (pergunta → recalcula).
   {
     const cfNow = (lead.customFields as Record<string, unknown> | null) ?? {}
-    const { extrairEntrada } = await import('./solar-calc')
+    const { extrairEntrada, orcamentoTexto } = await import('./solar-calc')
     const ent = extrairEntrada(text)
     const entradaAsked = !!cfNow.entradaAsked
+    const temEntrada = typeof cfNow.entrada === 'number' && (cfNow.entrada as number) > 0
+
+    // ➖ REMOVER a entrada ("sem entrada", "tirar a entrada") → zera e reenvia o orçamento cheio
+    if (ent.remover && (temEntrada || entradaAsked)) {
+      const cfSolar = cfNow.solar as Parameters<typeof orcamentoTexto>[0] | undefined
+      await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, entrada: null, entradaAsked: false } as object } })
+      const { dispatchOutbound } = await import('./flow')
+      const msg = cfSolar
+        ? `Sem problema, removi a entrada! 😊 Segue o orçamento sem entrada:\n\n${orcamentoTexto(cfSolar)}`
+        : 'Sem problema, removi a entrada! 😊'
+      await simularDigitacao(msg)
+      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Cliente removeu a entrada — financiamento volta ao valor cheio.' } }).catch(() => {})
+      return { ...base, reply: null, aiHandled: true }
+    }
+
     // só trata número solto como entrada se já perguntamos E não é mensagem de consumo/conta
     const valorPasso2 = entradaAsked && ent.valor != null && !/kwh|kw\b|\bk\b|placa|painel|conta|fatura|cart[aã]o/i.test(text)
     if (ent.intent || valorPasso2) {

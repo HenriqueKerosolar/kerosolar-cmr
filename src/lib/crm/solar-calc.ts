@@ -209,9 +209,11 @@ export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: numb
 const brl = (n: number) => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 // ── 💰 ENTRADA / SINAL ────────────────────────────────────────────────────────
-/** Detecta pedido de entrada/sinal e o valor (se informado). Use o valor só em contexto de entrada. */
-export function extrairEntrada(text: string): { intent: boolean; valor: number | null } {
+/** Detecta pedido de entrada/sinal, valor (se informado) e pedido de REMOVER a entrada. */
+export function extrairEntrada(text: string): { intent: boolean; valor: number | null; remover: boolean } {
   const t = (text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  // remover/zerar a entrada: "sem entrada", "não quero (dar) entrada", "tirar/remover a entrada", "sem sinal"
+  const remover = /\bsem (entrada|sinal)\b|n[aã]o (quero|vou|pretendo)\s+(dar\s+)?(entrada|sinal)|(tira|tirar|remov|remover|zera|zerar|cancela|cancelar)\w*\s+(a\s+)?(entrada|sinal)|sem dar (entrada|sinal)/.test(t)
   const intent = /\b(sinal|entrada)\b|dar (uma |um )?(entrada|sinal)|de entrada|com entrada|adiantar|adiantamento/.test(t)
   let valor: number | null = null
   const mil = t.match(/([\d.,]+)\s*mil\b/)
@@ -221,7 +223,7 @@ export function extrairEntrada(text: string): { intent: boolean; valor: number |
     if (m) valor = parseBrNumber(m[1])
   }
   if (valor != null && (!isFinite(valor) || valor < 50 || valor > 1_000_000)) valor = null
-  return { intent, valor }
+  return { intent, valor, remover }
 }
 
 /** Mensagem de financiamento COM ENTRADA: financia (valorSistema − entrada) e mostra 3 prazos. */
