@@ -599,14 +599,15 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       const { calcularCore: _ignore, ...kitBase } = kit as typeof kit & { calcularCore?: unknown }
       void _ignore
       solar = { ...kit, valorSistema: MINIMO_KIT_PRECO }
-      // Recalcula financiamento e payback com o preço real do kit mínimo
-      const { TAXAS_FINANCIAMENTO } = await import('./solar-calc')
-      const taxas = Object.keys(TAXAS_FINANCIAMENTO).map(Number).sort((a, b) => a - b)
-        .map((prazo) => {
-          const taxa = TAXAS_FINANCIAMENTO[prazo] / 100
-          const parcela = MINIMO_KIT_PRECO * (taxa * Math.pow(1 + taxa, prazo)) / (Math.pow(1 + taxa, prazo) - 1)
-          return { prazo, taxa: TAXAS_FINANCIAMENTO[prazo], parcela: Math.round(parcela * 100) / 100 }
-        })
+      // Recalcula financiamento e payback com o preço real do kit mínimo, usando os
+      // fatores reais do banco (carência 120 dias + IOF + seguro embutidos).
+      const { TABELA_FINANCIAMENTO, parcelaFinanciamento } = await import('./solar-calc')
+      const taxas = Object.keys(TABELA_FINANCIAMENTO).map(Number).sort((a, b) => a - b)
+        .map((prazo) => ({
+          prazo,
+          taxa: TABELA_FINANCIAMENTO[prazo].taxa,
+          parcela: Math.round(parcelaFinanciamento(MINIMO_KIT_PRECO, prazo) * 100) / 100,
+        }))
       const menorParcela = Math.min(...taxas.map((f) => f.parcela))
       solar = {
         ...solar,

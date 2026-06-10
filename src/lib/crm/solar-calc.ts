@@ -29,9 +29,35 @@ export function contaReaisValida(n: number | null | undefined): n is number {
   return typeof n === 'number' && isFinite(n) && n >= CONTA_MIN_REAIS && n <= CONTA_MAX_REAIS
 }
 
-// Taxas de financiamento (% ao mês) por prazo
-export const TAXAS_FINANCIAMENTO: Record<number, number> = {
-  24: 1.49, 36: 1.60, 48: 1.64, 60: 1.68, 72: 1.72, 84: 1.76, 96: 1.80,
+// 💳 TABELA DE FINANCIAMENTO REAL DO BANCO PARCEIRO — calibrada pela simulação oficial.
+// O "fator" (valor da parcela por R$ 1,00 financiado) já EMBUTE tudo que o banco cobra:
+// taxa de juros, CARÊNCIA de 120 dias (1ª parcela), IOF e seguro prestamista. Por isso
+// reproduz EXATAMENTE a tabela do banco — diferente da fórmula PMT pura (que dava parcela
+// menor por ignorar carência/IOF/seguro).
+// Referência: simulação oficial de R$ 20.870,00 com 1º vencimento em 120 dias.
+//   parcela(prazo) = valorFinanciado × fator(prazo)
+export const TABELA_FINANCIAMENTO: Record<number, { taxa: number; fator: number }> = {
+  24: { taxa: 1.54, fator: 0.0573407 },
+  30: { taxa: 1.60, fator: 0.0484193 },
+  36: { taxa: 1.65, fator: 0.0425946 },
+  48: { taxa: 1.69, fator: 0.0352367 },
+  60: { taxa: 1.73, fator: 0.0310968 },
+  72: { taxa: 1.82, fator: 0.0290436 },
+  84: { taxa: 1.91, fator: 0.0279641 },
+  96: { taxa: 1.95, fator: 0.0270057 },
+}
+
+// Compatibilidade: taxas (% a.m.) por prazo, derivadas da tabela real acima.
+export const TAXAS_FINANCIAMENTO: Record<number, number> = Object.fromEntries(
+  Object.entries(TABELA_FINANCIAMENTO).map(([prazo, v]) => [Number(prazo), v.taxa]),
+) as Record<number, number>
+
+/** Parcela de financiamento (R$) para um valor e prazo, usando o fator real do banco
+ *  (já com carência de 120 dias, IOF e seguro embutidos). */
+export function parcelaFinanciamento(valor: number, prazo: number): number {
+  const f = TABELA_FINANCIAMENTO[prazo]
+  if (!f || valor <= 0) return 0
+  return valor * f.fator
 }
 
 export type SolarResult = {
@@ -69,13 +95,6 @@ export function reaisParaKwh(reais: number): number {
   return reais / TARIFA_KWH
 }
 
-function calcularParcela(valor: number, meses: number, taxaMensalPercent: number): number {
-  if (valor <= 0) return 0
-  const taxa = taxaMensalPercent / 100
-  if (taxa === 0) return valor / meses
-  return valor * (taxa * Math.pow(1 + taxa, meses)) / (Math.pow(1 + taxa, meses) - 1)
-}
-
 /**
  * Núcleo do cálculo. valorSistema é informado explicitamente:
  * - quando o cliente dá kWh:   valorSistema = kWh × 20,87
@@ -107,8 +126,8 @@ function calcularCore(
   for (let i = 0; i < 30; i++) { rendimentoPoupanca += invPoup * 0.05; invPoup *= 1.05 }
   const vsPoupanca = rendimentoPoupanca > 0 ? Math.round(economia30Anos / rendimentoPoupanca) : 0
 
-  const financiamento = Object.keys(TAXAS_FINANCIAMENTO).map(Number).sort((a, b) => a - b).map((prazo) => ({
-    prazo, taxa: TAXAS_FINANCIAMENTO[prazo], parcela: calcularParcela(valorSistema, prazo, TAXAS_FINANCIAMENTO[prazo]),
+  const financiamento = Object.keys(TABELA_FINANCIAMENTO).map(Number).sort((a, b) => a - b).map((prazo) => ({
+    prazo, taxa: TABELA_FINANCIAMENTO[prazo].taxa, parcela: parcelaFinanciamento(valorSistema, prazo),
   }))
   const menorParcela = Math.min(...financiamento.map((f) => f.parcela).filter((p) => p > 0))
 
