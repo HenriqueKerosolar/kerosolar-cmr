@@ -122,6 +122,10 @@ export async function toggleLeadAi(leadId: string, enabled: boolean) {
   await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: enabled, ...(enabled ? { humanOnly: false } : {}) } })
   const conv = await prisma.conversation.findFirst({ where: { leadId } })
   if (conv) await prisma.conversation.update({ where: { id: conv.id }, data: { aiEnabled: enabled } })
+  // Ao DESLIGAR a IA: cancela follow-ups/reengajamento/cobranças pendentes (nada do bot dispara)
+  if (!enabled) {
+    await prisma.scheduledAction.updateMany({ where: { leadId, done: false }, data: { done: true } })
+  }
   await prisma.note.create({ data: { leadId, type: 'system', content: enabled ? 'IA reativada (bloqueio liberado).' : 'Atendente assumiu a conversa.' } })
   revalidatePath(`/leads/${leadId}`)
 }

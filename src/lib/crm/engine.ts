@@ -231,8 +231,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   const fullPipeline = await prisma.pipeline.findUnique({ where: { id: lead.pipelineId } })
   const currentStage = await prisma.stage.findUnique({ where: { id: lead.stageId } })
 
-  // Bloqueio TOTAL: cliente já recusou bot antes → só humano, nenhuma automação
-  if (lead.humanOnly) return base
+  // Bloqueio TOTAL: cliente recusou o bot (humanOnly) OU o operador DESLIGOU a IA deste lead
+  // (aiEnabled=false) → NENHUMA automação/IA responde (só o humano atende). A mensagem do
+  // cliente já foi salva acima — apenas não acionamos nada do bot.
+  if (lead.humanOnly || !lead.aiEnabled) return base
 
   // 🕑 Operador respondendo manualmente? A IA AGUARDA 2 min de inatividade dele antes de
   //    voltar a responder (cada mensagem do operador reinicia o tempo). Vale tanto p/ respostas
