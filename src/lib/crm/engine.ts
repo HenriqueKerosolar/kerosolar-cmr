@@ -236,6 +236,27 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // cliente já foi salva acima — apenas não acionamos nada do bot.
   if (lead.humanOnly || !lead.aiEnabled) return base
 
+  // 📢 SAUDAÇÃO DE ANÚNCIO META (WhatsApp Click-to-WhatsApp)
+  // Quando alguém clica num anúncio Meta (Facebook / Instagram → WhatsApp), o WhatsApp
+  // pré-preenche automaticamente a frase: "Oi! Como podemos ajudar?" / "Oi, como podemos
+  // te ajudar?". Identificamos esse padrão e tratamos SEMPRE como ENTRADA — mesmo que o lead
+  // já exista no funil (pode ter clicado o anúncio de novo = novo interesse). Isso garante:
+  //   • Reset do estado de fora-de-horário (recebe prompt "agora ou depois?" se for noite)
+  //   • Saudação de boas-vindas completa durante o horário comercial
+  //   • Lead marcado como origem 'meta' para rastreamento de campanha
+  const isMetaAdEntry = /^(oi|ol[aá])[\s!,.]*como\s+podemos\s+(te\s+)?ajudar/i.test(text.trim())
+  if (isMetaAdEntry) {
+    // Reset estado anterior de fora-de-horário para garantir o prompt correto
+    if (lead.afterHoursAsked || lead.afterHoursProceed) {
+      await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: false, afterHoursProceed: false } })
+      lead = { ...lead, afterHoursAsked: false, afterHoursProceed: false }
+    }
+    // Para leads existentes: cria nota de retorno via anúncio (sem duplicar para novos)
+    if (!isNewLead) {
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '📢 Lead retornou via anúncio Meta (WhatsApp Click-to-WhatsApp).' } })
+    }
+  }
+
   // 🕑 Operador respondendo manualmente? A IA AGUARDA 2 min de inatividade dele antes de
   //    voltar a responder (cada mensagem do operador reinicia o tempo). Vale tanto p/ respostas
   //    pelo CRM quanto pelo app do WhatsApp (ambas ficam como outbound 'human'). A mensagem do
@@ -348,7 +369,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       // Usa lastMessageAt (carregado do banco antes de qualquer update desta chamada) —
       // mais confiável que contar mensagens na DB (que pode estar vazia para clientes
       // migrados, leads criados manualmente ou reconexões do Baileys).
-      const jaConversou = !isNewLead && !!lead.lastMessageAt
+      // Exceção: saudação de anúncio Meta → sempre tratada como novo contato (isMetaAdEntry).
+      const jaConversou = !isNewLead && !!lead.lastMessageAt && !isMetaAdEntry
       const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
 
       if (querDepois) {
@@ -391,7 +413,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const jaRespondemos = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })
     const txtC = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const jaTemConsumo = /\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC)
-    if (horarioComercial && jaRespondemos === 0 && !jaTemConsumo && !lead.humanOnly) {
+    // isMetaAdEntry: anúncio Meta sempre dispara a saudação mesmo que jaRespondemos > 0
+    // (lead pode ter clicado o anúncio de novo depois de uma conversa anterior).
+    if (horarioComercial && (jaRespondemos === 0 || isMetaAdEntry) && !jaTemConsumo && !lead.humanOnly) {
       const saud = spHourC < 12 ? 'Bom dia' : spHourC < 18 ? 'Boa tarde' : 'Boa noite'
       const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
       const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`).replace(/\{SAUDACAO\}/g, saud)
