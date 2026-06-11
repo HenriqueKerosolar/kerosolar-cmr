@@ -303,8 +303,22 @@ export async function processDueActions() {
   const { nextAllowedSlot, respeitaHorarioGlobal, tempoDigitacaoMs, janelaDoFunil } = await import('./schedule-window')
   let cursor = Date.now()   // garante espaçamento entre envios desta rodada
 
+  // Tipos de NUDGE automático da IA. Se a IA estiver pausada no lead (operador assumiu) ou for
+  // atendimento humano, NENHUM desses dispara — evita cobrança/follow-up no meio de uma
+  // negociação que você assumiu.
+  const NUDGE_TYPES = new Set(['flow_continue', 'flow_noreply', 'budget_followup', 'budget_validity', 'reengage', 'chegada_followup', 'after_hours_resume', 'no_reply', 'ac_followup'])
+
   for (const a of due) {
     try {
+      // 🤖 IA pausada no lead (aiEnabled=false → operador assumiu) ou humanOnly → cancela o nudge.
+      if (NUDGE_TYPES.has(a.type)) {
+        const ld = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { aiEnabled: true, humanOnly: true } })
+        if (ld && (!ld.aiEnabled || ld.humanOnly)) {
+          await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+          continue
+        }
+      }
+
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
       //    do funil). Se a ação vencer fora do horário, reagenda pro próximo horário válido
       //    (ex.: 9h do próximo dia útil) em vez de mandar de madrugada/fim de semana.

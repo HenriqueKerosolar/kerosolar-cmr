@@ -55,7 +55,8 @@ export async function scheduleNoReply(leadId: string, conversationId: string, st
 export async function handleFlowNoReply(action: { leadId: string; conversationId: string; stageId: string | null; payload: unknown; createdAt: Date }) {
   if (!action.stageId) return
   const lead = await prisma.lead.findUnique({ where: { id: action.leadId } })
-  if (!lead || lead.humanOnly || lead.stageId !== action.stageId) return // já mudou de etapa → não move
+  // IA pausada (operador assumiu) / humanOnly / mudou de etapa → não dispara a cobrança.
+  if (!lead || lead.humanOnly || !lead.aiEnabled || lead.stageId !== action.stageId) return
 
   // Cliente respondeu depois que a checagem foi agendada? → cancela
   const inbound = await prisma.message.count({
