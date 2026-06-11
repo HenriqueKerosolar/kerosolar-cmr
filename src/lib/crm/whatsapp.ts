@@ -12,7 +12,7 @@ import { numeroNaLista } from './lists'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>> }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>>; __waInflight?: { n: number } }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
 
 // 🔒 FILA POR CONVERSA: processa UMA mensagem por vez por número (jid). Sem isso, 2 mensagens
@@ -39,6 +39,19 @@ function markSentByCrm(id?: string) {
   if (!id) return
   sentByCrm.add(id)
   if (sentByCrm.size > 1000) { for (const x of sentByCrm) { sentByCrm.delete(x); if (sentByCrm.size <= 800) break } }
+}
+
+// 🛑 Desligamento gracioso: conta mensagens EM PROCESSAMENTO. No SIGTERM (deploy/restart), o
+// servidor espera elas terminarem (salvar no banco) antes de sair — pra o deploy NÃO perder lead.
+const inflightBox: { n: number } = (g.__waInflight ??= { n: 0 })
+/** Quantas mensagens estão sendo processadas agora. */
+export function emProcessamento(): number { return inflightBox.n }
+/** Aguarda as mensagens em processamento terminarem (até maxMs). */
+export async function aguardarProcessamento(maxMs = 18000): Promise<void> {
+  const ini = Date.now()
+  while (inflightBox.n > 0 && Date.now() - ini < maxMs) {
+    await new Promise((r) => setTimeout(r, 100))
+  }
 }
 
 // Em produção Railway usa volume persistente em /data; em dev usa pasta local
@@ -226,9 +239,16 @@ export async function startSession(accountId: string): Promise<void> {
           const ts = typeof tsRaw === 'number' ? tsRaw : (tsRaw?.toNumber ? tsRaw.toNumber() : Number(tsRaw) || 0)
           if (ts && ts < cutoff) continue // histórico antigo → ignora
         }
-        // FILA por conversa: serializa o processamento por número (evita saudação duplicada)
+        // FILA por conversa: serializa o processamento por número (evita saudação duplicada).
+        // inflightBox conta a mensagem como "em processamento" até salvar — pro desligamento
+        // gracioso esperar antes de o deploy reiniciar (não perde lead).
         const jidKey = msg.key?.remoteJid || 'sem-jid'
-        await serialPorJid(jidKey, () => handleIncoming(accountId, msg).catch((e) => console.error('[wa incoming]', e)))
+        inflightBox.n++
+        try {
+          await serialPorJid(jidKey, () => handleIncoming(accountId, msg).catch((e) => console.error('[wa incoming]', e)))
+        } finally {
+          inflightBox.n--
+        }
       }
     })
 
