@@ -1,7 +1,8 @@
 # KeroSolar CRM — Estado do Projeto
 
-> Documentação viva do CRM. Atualizada em 2026-06-09.
+> Documentação viva do CRM. Atualizada em 2026-06-11.
 > Objetivo: retomar o contexto rapidamente após limpar a conversa.
+> ⚡ Mudanças recentes (10–11/06): ver **seção 9 — Novidades**.
 
 ---
 
@@ -302,3 +303,61 @@ Arquivos: `learning.ts`, tabela `LearnedAnswer`, `ai.ts` (`embedText`/`cosineSim
 - **Webchat (site):** endpoint `/api/public/webchat`, key `kerosolar-webchat-7Yq2Lp9XmZ`.
 
 > Segredos completos estão nas variáveis do Railway — nunca commitar no git.
+
+---
+
+## 9. Novidades (10–11/06/2026)
+
+### Pagamento — orçamento, financiamento, cartão e entrada
+- **Financiamento = tabela real do banco** (`solar-calc.ts`): parcela = valor × **fator por prazo**
+  (o fator já embute juros + carência 120 dias + IOF + seguro → bate com a simulação do banco).
+  **Editável em Configurações** (chave `financing_table`): admin cola valor de referência + parcela
+  por prazo; o sistema deriva o fator. Sem config válida → tabela padrão. `carregarTabelaFinanciamento()`.
+- **Cartão de crédito (PinPag)** — `card-calc.ts`: `total = valor × (1 + taxaAcumulada/100)`,
+  `parcela = total/nº`. **Até 3x SEM JUROS** (parcela = valor/nº); 4x–24x pela tabela; máx 24x.
+  Pergunta "tem cartão sem juros?" → "até 3x sem juros".
+- **Entrada / sinal:** cliente fala em dar entrada → bot **pergunta o valor** → recalcula o
+  financiamento sobre (sistema − entrada). Guarda `cf.entrada` (vale também no cartão).
+  "sem entrada"/"tirar a entrada" → zera e reenvia o orçamento cheio.
+- **Simulação unificada** (`engine.ts`, bloco único cartão/financiamento/entrada) com **memória de
+  contexto** (`cf.simMode`, `cf.cartaoParcelas`, `cf.entrada`): "cartão" → pergunta parcelas →
+  responde só "24" → cartão 24x (tabela do cartão, não do financiamento). `dispatchOutbound`
+  ganhou `skipDedup` p/ simulações repetidas não travarem.
+- **Extração de consumo melhorada:** aceita "kw"/"k" como kWh ("700kw"/"700k"=700 kWh); prioriza
+  "quero X"; **número puro** (só dígitos) = valor da CONTA em reais (nº de instalação é descartado pela faixa).
+- **Comando do operador** "minha indicação é XXXX kWh" (CRM ou app) → calcula e envia o orçamento
+  por aquele consumo (`comandoIndicacaoKwh`).
+
+### Atendimento / fluxo
+- **Entrada de anúncio Meta** (`isMetaAdEntry`): reconhece "Oi! Como podemos ajudar?" E
+  "Tenho interesse e queria mais informações" como entrada → trata como novo contato.
+- **Retomada das 9h** (`after_hours_resume`): quem chega fora do horário e não responde é retomado
+  no horário comercial. Botão "Retomar agora os leads parados" em Configurações.
+- **Lead manual recebe saudação** mesmo quando a etapa não tem fluxo de abertura (`iniciarSaudacaoManual`).
+- **Visita técnica só após a forma de pagamento definida** (regra no `agent.ts`): se não definiu,
+  oferece à vista/cartão/financiamento antes de pedir dia/horário.
+- **Ar-condicionado:** reconhece "2 ar" abreviado; não manda orçamento subdimensionado — pede
+  BTU+horas e sinaliza revisão (não some com o lead).
+
+### Automações (regras reforçadas)
+- **IA pausada (`aiEnabled=false`) → NENHUM nudge dispara** (operador assumiu = silêncio). Guard
+  central em `processDueActions` + check em `handleFlowNoReply`.
+- **Mudar de etapa cancela as automações das etapas ANTERIORES** (`enterStage`). Só as da etapa
+  atual seguem.
+- Nudges (`no_reply`, `ac_followup` incluídos) só em **horário comercial**.
+
+### WhatsApp / infraestrutura
+- **`@lid` (anúncios):** `resolverNumeroReal` usa `msg.key.remoteJidAlt` (telefone, síncrono) pra
+  casar no mesmo contato e **não duplicar lead**. ⚠️ **NÃO usar `getPNForLID`** — ele TRAVA e fazia
+  leads de anúncio se perderem. Sem `remoteJidAlt`, mantém o `@lid` (ingere e responde mesmo assim).
+- **Desligamento gracioso:** no SIGTERM (deploy) o servidor espera as mensagens em processamento
+  terminarem (até 18s) antes de sair → deploy não perde mais lead (`inflightBox` + `instrumentation.ts`).
+- **Auto-refresh suave** de todas as páginas do CRM a cada 12s (`components/auto-refresh.tsx`).
+- **Card do lead** mostra a "Próxima atividade automática" (ScheduledActions pendentes).
+
+### ⚠️ Armadilhas confirmadas (não repetir)
+1. **`getPNForLID` trava** → perde lead de anúncio. Usar só `remoteJidAlt`.
+2. **Nudge sem checar `aiEnabled`** → cobrança no lead que o operador assumiu.
+3. **Deploys em excesso** derrubam o WhatsApp (503) e perdem mensagem (WhatsApp dá ACK e não reenvia).
+   Juntar mudanças e subir poucas vezes.
+4. **Duplicação `@lid` + telefone** do mesmo lead → limpar manualmente, dando o telefone real ao mantido.
