@@ -132,6 +132,17 @@ export async function dispatchOutbound(
  * Mensagens com delay 0 saem na hora; as demais ficam agendadas.
  */
 export async function enterStage(leadId: string, stageId: string) {
+  // 🧹 Ao ENTRAR numa etapa, cancela as automações PENDENTES das OUTRAS etapas (etapas anteriores
+  //    não "carregam" sua automação pra cá). Mantém só as da etapa atual (que serão (re)armadas
+  //    abaixo). Roda sempre, mesmo se a etapa nova não tiver bot.
+  await prisma.scheduledAction.updateMany({
+    where: {
+      leadId, done: false, stageId: { not: stageId },
+      type: { in: ['flow_noreply', 'flow_continue', 'no_reply', 'chegada_followup', 'ac_followup', 'after_hours_resume', 'reengage', 'budget_followup', 'budget_validity'] },
+    },
+    data: { done: true },
+  }).catch(() => {})
+
   // Cliente recusou bot → nenhuma automação dispara
   const leadCheck = await prisma.lead.findUnique({ where: { id: leadId }, select: { humanOnly: true } })
   if (leadCheck?.humanOnly) return
