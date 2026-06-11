@@ -133,6 +133,28 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     (idField ? await prisma.contact.findFirst({ where: { [idField]: externalId } }) : null) ||
     (matchPhone ? await prisma.contact.findFirst({ where: { phone: matchPhone } }) : null)
 
+  // 🔗 ANTI-DUPLICATA por NOME (WhatsApp): se não casou por id/telefone mas JÁ EXISTE um contato
+  //    com o MESMO NOME do TIPO OPOSTO (um @lid de anúncio, outro telefone), reaproveita esse
+  //    contato em vez de criar duplicado. Só funde lid↔telefone (nunca dois telefones de mesmo
+  //    nome) e só com 1 candidato (sem ambiguidade). Resolve o caso anúncio @lid + telefone real.
+  if (!contact && channel === 'whatsapp' && (input.name?.trim().length ?? 0) >= 4) {
+    const ehLid = (n?: string | null) => !!n && !/^55\d{10,11}$/.test(n)
+    const incomingLid = ehLid(externalId)
+    const mesmoNome = await prisma.contact.findMany({
+      where: { name: { equals: input.name!.trim(), mode: 'insensitive' } },
+      select: { id: true, whatsappId: true, phone: true },
+    })
+    const opostos = mesmoNome.filter((c) => ehLid(c.whatsappId) !== incomingLid)
+    if (opostos.length === 1) {
+      contact = await prisma.contact.findUnique({ where: { id: opostos[0].id } })
+      // chegou pelo TELEFONE e o contato só tinha @lid → grava o telefone real (vira localizável)
+      if (contact && !incomingLid) {
+        contact = await prisma.contact.update({ where: { id: contact.id }, data: { phone: externalId } }).catch(() => contact)
+      }
+      if (contact) console.log('[ingest] contato reaproveitado por nome (anti-duplicata @lid/telefone):', input.name)
+    }
+  }
+
   if (!contact) {
     contact = await prisma.contact.create({
       data: {
