@@ -245,7 +245,11 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   //   • Reset do estado de fora-de-horário (recebe prompt "agora ou depois?" se for noite)
   //   • Saudação de boas-vindas completa durante o horário comercial
   //   • Lead marcado como origem 'meta' para rastreamento de campanha
+  // Frases pré-preenchidas dos anúncios da Meta (Click-to-WhatsApp / Insta / Face):
+  //  • "Oi! Como podemos ajudar?" (saudação automática)
+  //  • "Olá! Tenho interesse e queria mais informações, por favor." (texto do botão do anúncio)
   const isMetaAdEntry = /^(oi|ol[aá])[\s!,.]*como\s+podemos\s+(te\s+)?ajudar/i.test(text.trim())
+    || /tenho\s+interesse\s+e\s+queria\s+mais\s+inform/i.test(text)
   if (isMetaAdEntry) {
     // Reset estado anterior de fora-de-horário para garantir o prompt correto
     if (lead.afterHoursAsked || lead.afterHoursProceed) {
