@@ -12,7 +12,7 @@ import { numeroNaLista } from './lists'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>>; __waInflight?: { n: number } }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>>; __waInflight?: { n: number }; __waLastActivity?: { t: number }; __waWatchdog?: NodeJS.Timeout }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
 
 // 🔒 FILA POR CONVERSA: processa UMA mensagem por vez por número (jid). Sem isso, 2 mensagens
@@ -52,6 +52,38 @@ export async function aguardarProcessamento(maxMs = 18000): Promise<void> {
   while (inflightBox.n > 0 && Date.now() - ini < maxMs) {
     await new Promise((r) => setTimeout(r, 100))
   }
+}
+
+// 🐕 VIGIA da conexão: registra a última ATIVIDADE do WhatsApp (qualquer evento recebido —
+// mensagem, recibo, reconexão). Se ficar muito tempo sem nada EM HORÁRIO COMERCIAL, a conexão
+// provavelmente "zumbificou" (conectada mas sem receber) → o vigia força a reconexão.
+const activityBox: { t: number } = (g.__waLastActivity ??= { t: Date.now() })
+function marcarAtividade() { activityBox.t = Date.now() }
+
+/** Inicia o vigia da conexão (1 instância via global). Em horário comercial (8h–21h), se ficar
+ *  IDLE_MIN minutos sem NENHUMA atividade do WhatsApp, força a reconexão — resolve a conexão
+ *  "zumbi" (conectada mas sem receber). A reconexão re-sincroniza as mensagens perdidas. */
+export function startWatchdog() {
+  if (g.__waWatchdog) return
+  const IDLE_MIN = 20
+  g.__waWatchdog = setInterval(() => {
+    try {
+      const minsIdle = (Date.now() - activityBox.t) / 60000
+      const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
+      const horarioComercial = spHour >= 8 && spHour < 21
+      if (!horarioComercial || minsIdle < IDLE_MIN) return
+      let forcou = false
+      for (const [accountId, sess] of sessions) {
+        if (sess.status === 'connected' && sess.sock) {
+          console.warn(`[wa watchdog] ${Math.round(minsIdle)} min sem atividade em horário comercial → forçando reconexão de ${accountId}`)
+          try { (sess.sock as any)?.end?.(new Error('watchdog: sem atividade, reconectando')) } catch { /* ignora */ }
+          forcou = true
+        }
+      }
+      if (forcou) marcarAtividade()   // evita disparar de novo antes da reconexão assentar
+    } catch (e) { console.error('[wa watchdog]', e) }
+  }, 5 * 60 * 1000)
+  console.log(`[wa watchdog] ativo — reconecta após ${IDLE_MIN} min sem atividade (horário comercial)`)
 }
 
 // Em produção Railway usa volume persistente em /data; em dev usa pasta local
@@ -183,6 +215,7 @@ export async function startSession(accountId: string): Promise<void> {
       if (connection === 'open' && sess) {
         sess.status = 'connected'
         sess.qr = null
+        marcarAtividade()   // conexão fresca → zera o contador do vigia
         const phone = (sock.user?.id || '').split(':')[0].split('@')[0] || null
         sess.phone = phone
         await setStatus(accountId, { status: 'connected', qr: null, phone, connectedAt: new Date(), lastError: null })
@@ -224,6 +257,7 @@ export async function startSession(accountId: string): Promise<void> {
     })
 
     sock.ev.on('messages.upsert', async (ev: any) => {
+      marcarAtividade()   // recebeu evento → conexão viva (pro vigia)
       // 'notify'  = mensagens novas em tempo real.
       // 'append'  = mensagens reentregues após reconexão (ex.: chegaram enquanto o deploy
       //             reiniciava o servidor). Precisamos processá-las pra NÃO PERDER lead —
@@ -254,6 +288,7 @@ export async function startSession(accountId: string): Promise<void> {
 
     // Recibo de leitura (✓✓ azul): marca nossas mensagens como "lidas" pra métrica de visualizado.
     sock.ev.on('messages.update', async (updates: any[]) => {
+      marcarAtividade()   // recibo de leitura também conta como conexão viva
       for (const u of updates) {
         const st = u.update?.status
         const lido = st === 4 || st === 5 || st === 'READ' || st === 'PLAYED'

@@ -31,8 +31,9 @@ export async function register() {
   // Delay de 3s para o banco estar pronto antes de começar as reconexões
   setTimeout(async () => {
     try {
-      const { reconnectAllOnStartup } = await import('@/lib/crm/whatsapp')
+      const { reconnectAllOnStartup, startWatchdog } = await import('@/lib/crm/whatsapp')
       await reconnectAllOnStartup()
+      startWatchdog()   // 🐕 vigia: reconecta sozinho se a conexão parar de receber
     } catch (e) {
       console.error('[instrumentation] restore wa:', e)
     }
