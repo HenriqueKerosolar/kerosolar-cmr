@@ -302,6 +302,12 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   } }).catch(() => {})
   await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'ai')
   await prisma.note.create({ data: { leadId, type: 'system', content: `Operador indicou ${kwh} kWh → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
+  // Enviou orçamento → move pra etapa "Recebeu orçamento automático" (se ainda não estiver lá).
+  const alvo = await prisma.stage.findFirst({ where: { name: { contains: 'Recebeu orçamento autom', mode: 'insensitive' } } })
+  const ld = await prisma.lead.findUnique({ where: { id: leadId }, select: { stageId: true } })
+  if (alvo && ld && ld.stageId !== alvo.id) {
+    await moveLeadToStage(leadId, alvo.id, 'Operador enviou orçamento (indicação) — movido para "Recebeu orçamento automático".').catch(() => {})
+  }
   return true
 }
 

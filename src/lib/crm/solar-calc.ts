@@ -349,6 +349,9 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     t.match(/r\$\s*([\d.,]+)/) ||
     t.match(/([\d.,]+)\s*reais/) ||
     t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/) ||
+    // valor dito em frase: "deve ir para 1000", "vai pra 1000", "fica em 1000", "chega a 1000",
+    // "deve dar uns 800" — verbo de projeção + (a/para/em/uns/R$) + número. A faixa R$30–100k filtra.
+    t.match(/(?:ir|vai|vou|deve|dever[áa]|fica|ficar|chega|chegar|sobe|subir|d[áa]|dar)\s+(?:a |para |pra |pro |em |de |uns? |r\$\s*)*([\d.,]+)/) ||
     (/^[\d.,\s]+$/.test(t.trim()) ? t.trim().match(/([\d.,]+)/) : null)
   if (reaisMatch) { const v = parseBrNumber(reaisMatch[1]); if (contaReaisValida(v)) reais = v }
 
