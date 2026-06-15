@@ -284,18 +284,18 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     }
   }
 
-  // 🕑 Operador respondendo manualmente? A IA AGUARDA 2 min de inatividade dele antes de
+  // 🕑 Operador respondendo manualmente? A IA AGUARDA 30 min de inatividade dele antes de
   //    voltar a responder (cada mensagem do operador reinicia o tempo). Vale tanto p/ respostas
   //    pelo CRM quanto pelo app do WhatsApp (ambas ficam como outbound 'human'). A mensagem do
   //    cliente já foi salva acima — só não acionamos nenhuma resposta automática agora.
   {
-    const MS_INATIVIDADE = 2 * 60 * 1000
+    const MS_INATIVIDADE = 30 * 60 * 1000
     const ultimaHumana = await prisma.message.findFirst({
       where: { conversationId: conversation.id, direction: 'outbound', senderType: 'human' },
       orderBy: { createdAt: 'desc' }, select: { createdAt: true },
     })
     if (ultimaHumana && Date.now() - new Date(ultimaHumana.createdAt).getTime() < MS_INATIVIDADE) {
-      console.log('[engine] operador ativo (<2min) → IA aguarda')
+      console.log('[engine] operador ativo (<30min) → IA aguarda')
       return base
     }
   }
