@@ -201,6 +201,9 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
 ## REGRA DE EQUIVALÊNCIA: se o cliente perguntar quanto um kit (em kWh) equivale em reais, ` +
     `responda que "atende uma conta de aproximadamente R$ X", onde X = kWh × 1,22. Ex: kit de 300 kWh → atende conta de ~R$ 366.`
 
+  // Regra fixa: consumo abaixo do mínimo → honestidade + kit de entrada (valores em solar-calc.ts)
+  system += `\n\n## CONSUMO BAIXO / KIT DE ENTRADA: se o consumo do cliente for ABAIXO de ~250 kWh/mês (ou a conta for pequena, até ~R$ 300/mês), seja HONESTO: diga que o consumo é baixo e que, por isso, o retorno do solar costuma demorar um pouco mais. MAS, mesmo assim, ofereça o nosso KIT DE ENTRADA de 300 kWh, com preço fixo de R$ 7.670 (instalado e homologado). NÃO fique recalculando nem pedindo a conta de novo — para contas pequenas o sistema indicado é SEMPRE esse kit de entrada (não existe sistema menor). Ex.: "Pelo seu consumo, que é mais baixo, o solar leva um pouquinho mais de tempo pra se pagar — só sendo transparente com você 😊 Mesmo assim dá pra fazer com o nosso kit de entrada de 300 kWh por R$ 7.670, já instalado e homologado. Quer que eu te explique como fica?"`
+
   // Regra fixa: tipo de ligação (medidor) e custo de disponibilidade
   system += `\n\n## REGRA DE LIGAÇÃO (medidor monofásico/bifásico/trifásico):
 - Custo de disponibilidade (mínimo que sempre se paga, mesmo com solar): monofásico 30 kWh, bifásico 50 kWh, trifásico 100 kWh.
