@@ -539,7 +539,21 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
 
     if (pedeCartao || pedeEntrada) {
       const cfSolar = cfNow.solar as { valorSistema?: number } | undefined
-      const valorSist = typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null
+      // 🔢 VALOR DO SISTEMA = sempre o do ÚLTIMO orçamento ENVIADO nesta conversa. Vale mesmo quando
+      //    o orçamento mais recente foi mandado MANUALMENTE pelo operador (fora do fluxo automático,
+      //    que não atualiza o cf.solar). Fallback: o valor guardado no lead (cf.solar).
+      let valorSist: number | null = typeof cfSolar?.valorSistema === 'number' ? cfSolar.valorSistema : null
+      {
+        const ultimoOrc = await prisma.message.findFirst({
+          where: { conversationId: conversation.id, direction: 'outbound', content: { contains: 'Sistema completo' } },
+          orderBy: { createdAt: 'desc' }, select: { content: true },
+        })
+        const m = ultimoOrc?.content.match(/sistema completo[:\s]*r\$\s*([\d.,]+)/i)
+        if (m) {
+          const v = parseFloat(m[1].replace(/\./g, '').replace(',', '.'))
+          if (isFinite(v) && v > 0) valorSist = v
+        }
+      }
       const { dispatchOutbound } = await import('./flow')
       const responder = async (msg: string) => { await simularDigitacao(msg); await dispatchOutbound(conversation.id, msg, undefined, 'ai', undefined, true) }
 
