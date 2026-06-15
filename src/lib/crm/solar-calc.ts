@@ -278,6 +278,14 @@ export function orcamentoTexto(r: SolarResult): string {
     .map((f) => `• ${f.prazo}x de *${brl(f.parcela)}*`)
     .join('\n')
 
+  // Consumo abaixo do kit mínimo → o kit gera MAIS do que ele usa. Vira argumento de venda:
+  // conforto (mais ar-condicionado) e transferência do excedente p/ outro medidor da mesma concessionária.
+  const obsExcedente = r.baixoConsumo
+    ? `\n\n🔋 *Como seu consumo é baixo, o kit gera mais energia do que você usa hoje — e isso é uma vantagem:*
+• Dá pra aproveitar essa geração a mais com mais conforto (ligar mais o ar-condicionado, por exemplo).
+• E se você tiver outro imóvel com medidor na *mesma concessionária*, dá pra transferir o excedente pra lá e abater a conta dessa outra unidade também 😊`
+    : ''
+
   return (
 `☀️ *ORÇAMENTO SOLAR · KEROSOLAR*
 
@@ -293,7 +301,7 @@ _Instalado e homologado, pronto pra gerar energia._
 💳 *Financiamento* — 1ª parcela só daqui a 120 dias:
 ${planos}
 
-✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.
+✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.${obsExcedente}
 
 📄 *Pra um orçamento 100% certo, o ideal é a sua conta de luz* — o cálculo é feito pela *média anual de kWh* (e não por um mês só). Se ainda não enviou, me manda a conta (foto ou PDF) que sai perfeito! E se quiser uma marca específica de painel/inversor, é só falar 😊
 
