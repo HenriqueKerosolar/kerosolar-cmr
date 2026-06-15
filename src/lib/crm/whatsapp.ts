@@ -690,13 +690,39 @@ function comTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ])
 }
 
+/** Resolve o JID REAL de envio. Para número "cru" (@s.whatsapp.net) consulta o WhatsApp
+ *  (onWhatsApp) e pega o endereço CANÔNICO — corrige o problema do 9º dígito no Brasil e
+ *  confirma se o número existe no WhatsApp. Endereços completos (@lid de anúncio, @g.us,
+ *  chatJid já com @) passam direto. Retorna null se o número NÃO está no WhatsApp. */
+async function resolverJidEnvio(sess: Session, jid: string): Promise<string | null> {
+  // Já é um endereço final (chatJid vindo de uma mensagem real, @lid de anúncio, ou grupo) → confia.
+  if (jid.includes('@')) return jid
+  // Só número CRU (reconstruído do telefone, ex.: lead criado manualmente) → resolve o endereço
+  // canônico no WhatsApp. Corrige o 9º dígito (BR) e confirma se o número existe.
+  const numero = jid
+  try {
+    const res = await comTimeout<any[]>(sess.sock.onWhatsApp(numero), 8000, 'onWhatsApp')
+    const hit = Array.isArray(res) ? res.find((r) => r?.exists && r?.jid) : null
+    if (hit?.jid) {
+      if (hit.jid !== `${numero}@s.whatsapp.net`) console.log(`[wa] jid corrigido: ${numero} → ${hit.jid}`)
+      return hit.jid
+    }
+    console.warn(`[wa] número não está no WhatsApp: ${numero} — envio cancelado`)
+    return null
+  } catch (e) {
+    console.error('[wa onWhatsApp] falhou, usando número original:', e)
+    return `${numero}@s.whatsapp.net`   // fallback: tenta como estava
+  }
+}
+
 export async function sendText(accountId: string, jid: string, text: string): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   // BLACK LIST: nunca envia pra quem está na lista de "não enviar"
   if (await numeroNaLista(jid.split('@')[0], 'no_send')) { console.log('[wa] black list — envio bloqueado:', jid); return null }
-  const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
-  const sent = await comTimeout<any>(sess.sock.sendMessage(fullJid, { text }), 15000, 'sendText')
+  const alvo = await resolverJidEnvio(sess, jid)
+  if (!alvo) return null   // número não está no WhatsApp → não há o que enviar
+  const sent = await comTimeout<any>(sess.sock.sendMessage(alvo, { text }), 15000, 'sendText')
   markSentByCrm(sent?.key?.id)
   return sent?.key?.id ?? null
 }
@@ -706,12 +732,13 @@ export async function sendMedia(accountId: string, jid: string, opts: { url: str
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   if (await numeroNaLista(jid.split('@')[0], 'no_send')) { console.log('[wa] black list — envio (mídia) bloqueado:', jid); return null }
-  const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
+  const alvo = await resolverJidEnvio(sess, jid)
+  if (!alvo) return null   // número não está no WhatsApp
   const payload: any =
     opts.type === 'image'    ? { image: { url: opts.url }, caption: opts.caption } :
     opts.type === 'video'    ? { video: { url: opts.url }, caption: opts.caption } :
                                { document: { url: opts.url }, fileName: opts.fileName ?? 'arquivo', caption: opts.caption }
-  const sent = await comTimeout<any>(sess.sock.sendMessage(fullJid, payload), 20000, 'sendMedia')
+  const sent = await comTimeout<any>(sess.sock.sendMessage(alvo, payload), 20000, 'sendMedia')
   markSentByCrm(sent?.key?.id)
   return sent?.key?.id ?? null
 }
