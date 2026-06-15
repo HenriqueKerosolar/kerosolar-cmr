@@ -680,13 +680,23 @@ async function registrarMensagemOperador(accountId: string, msg: any, jid: strin
 }
 
 /** Envia mensagem de texto. Devolve o ID da mensagem no WhatsApp (pra rastrear "lido"). */
+// ⏱️ TIMEOUT de envio: o sock.sendMessage do Baileys pode TRAVAR pra sempre (número problemático,
+// socket meio-caído) — e travamento não cai no try/catch. Sem isso, um envio pendurado segura a
+// ação inteira (ex.: "Criar lead" não voltava). Estourado o tempo, vira ERRO → o chamador re-enfileira.
+function comTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout ${label} (${ms}ms)`)), ms)),
+  ])
+}
+
 export async function sendText(accountId: string, jid: string, text: string): Promise<string | null> {
   const sess = sessions.get(accountId)
   if (!sess || sess.status !== 'connected') throw new Error('WhatsApp não conectado.')
   // BLACK LIST: nunca envia pra quem está na lista de "não enviar"
   if (await numeroNaLista(jid.split('@')[0], 'no_send')) { console.log('[wa] black list — envio bloqueado:', jid); return null }
   const fullJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`
-  const sent = await sess.sock.sendMessage(fullJid, { text })
+  const sent = await comTimeout<any>(sess.sock.sendMessage(fullJid, { text }), 15000, 'sendText')
   markSentByCrm(sent?.key?.id)
   return sent?.key?.id ?? null
 }
@@ -701,7 +711,7 @@ export async function sendMedia(accountId: string, jid: string, opts: { url: str
     opts.type === 'image'    ? { image: { url: opts.url }, caption: opts.caption } :
     opts.type === 'video'    ? { video: { url: opts.url }, caption: opts.caption } :
                                { document: { url: opts.url }, fileName: opts.fileName ?? 'arquivo', caption: opts.caption }
-  const sent = await sess.sock.sendMessage(fullJid, payload)
+  const sent = await comTimeout<any>(sess.sock.sendMessage(fullJid, payload), 20000, 'sendMedia')
   markSentByCrm(sent?.key?.id)
   return sent?.key?.id ?? null
 }

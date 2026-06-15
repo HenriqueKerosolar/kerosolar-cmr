@@ -102,11 +102,15 @@ export async function createManualLead(data: {
     const stage = await prisma.stage.findUnique({ where: { id: data.stageId } })
     const flow = (stage?.flow as { openingMessages?: unknown[]; blocks?: unknown[] } | null) ?? null
     const temAbertura = !!(flow?.openingMessages?.length || flow?.blocks?.length)
+    // ⚠️ NÃO await: o envio da saudação vai pelo WhatsApp e pode demorar/travar. A ação precisa
+    // RETORNAR já (lead criado) pra tela fechar e mostrar o lead — senão parece que "não fez nada"
+    // e o operador clica de novo, duplicando. O servidor é persistente, então o envio segue em
+    // segundo plano; se falhar, o dispatchOutbound re-enfileira (redeliver).
     if (temAbertura) {
-      await enterStage(lead.id, data.stageId).catch((e) => console.error('[manual startBot]', e))
+      void enterStage(lead.id, data.stageId).catch((e) => console.error('[manual startBot]', e))
     } else {
       const { iniciarSaudacaoManual } = await import('@/lib/crm/flow')
-      await iniciarSaudacaoManual(lead.id, conversationId, data.stageId).catch((e) => console.error('[manual saudacao]', e))
+      void iniciarSaudacaoManual(lead.id, conversationId, data.stageId).catch((e) => console.error('[manual saudacao]', e))
     }
   }
 
