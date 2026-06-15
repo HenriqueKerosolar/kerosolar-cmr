@@ -950,8 +950,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     else if (/ja sou cliente|ja instalei|ja comprei com voc|sou cliente de voc|ja tenho sistema com voc/.test(txtNorm))
       routeName = 'Já é cliente'
     // Orçamento calculado automaticamente nesta interação → move pra "Recebeu orçamento automático".
+    // Inclui o KIT MÍNIMO (consumo baixo) — o kit de entrada também é um orçamento recebido.
     // (Não move quando há pedido de ar-condicionado pendente: ainda não enviamos orçamento.)
-    else if (solar && !kitMinimo && !acIntent)
+    else if (solar && !acIntent)
       routeName = 'Recebeu orçamento automático'
   }
   let movedToStageId: string | null = null
