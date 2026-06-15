@@ -195,8 +195,10 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
     }
   }
 
-  // Regra fixa: equivalência kWh → R$ ao comunicar
-  system += `\n\n## REGRA DE EQUIVALÊNCIA: se o cliente perguntar quanto um kit (em kWh) equivale em reais, ` +
+  // Regra fixa: NUNCA travar / nunca prometer uma ação que depende de uma próxima mensagem sua
+  system += `\n\n## NUNCA "TRAVE" (proibido prometer ação futura): é TERMINANTEMENTE PROIBIDO terminar uma resposta com promessa de algo que viria numa PRÓXIMA mensagem sua — NÃO diga "vou recalcular", "deixa eu calcular", "vou refazer o orçamento", "um momento", "já te envio", "aguarde um instante", "vou verificar e já volto" (a ÚNICA exceção são as frases EXATAS que outras regras mandam usar, ex.: agendamento fora do horário/dia não útil). Motivo: o ORÇAMENTO é enviado AUTOMATICAMENTE pelo sistema — você não anuncia nem dispara cálculo. Toda resposta sua deve ser COMPLETA e auto-suficiente: se já existe orçamento/conta no contexto, APRESENTE ou EXPLIQUE o que foi perguntado AGORA; se falta um dado, PEÇA o dado objetivamente. Se o cliente só esclareceu algo que NÃO muda o orçamento (ex.: "o valor que passei era em reais" e o valor já estava certo / é abaixo do mínimo), explique o resultado que você JÁ tem (ex.: pra contas menores o sistema indicado é o kit de entrada) — sem prometer recalcular. Em hipótese alguma deixe o cliente esperando uma mensagem que você não vai mandar.
+
+## REGRA DE EQUIVALÊNCIA: se o cliente perguntar quanto um kit (em kWh) equivale em reais, ` +
     `responda que "atende uma conta de aproximadamente R$ X", onde X = kWh × 1,22. Ex: kit de 300 kWh → atende conta de ~R$ 366.`
 
   // Regra fixa: tipo de ligação (medidor) e custo de disponibilidade
