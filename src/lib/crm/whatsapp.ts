@@ -12,7 +12,7 @@ import { numeroNaLista } from './lists'
 // Sessões Baileys vivem no processo do servidor. Guardamos num global pra
 // sobreviver ao Hot Reload do Next em desenvolvimento.
 type Session = { sock: any; status: string; qr: string | null; phone: string | null }
-const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>>; __waInflight?: { n: number }; __waLastActivity?: { t: number }; __waWatchdog?: NodeJS.Timeout }
+const g = globalThis as unknown as { __waSessions?: Map<string, Session>; __waSeenMsgs?: Set<string>; __waSentByCrm?: Set<string>; __waChains?: Map<string, Promise<unknown>>; __waInflight?: { n: number }; __waLastActivity?: { t: number }; __waWatchdog?: NodeJS.Timeout; __waPendingPwdPdf?: Map<string, { buffer: Buffer; ts: number }> }
 const sessions: Map<string, Session> = (g.__waSessions ??= new Map())
 
 // 🔒 FILA POR CONVERSA: processa UMA mensagem por vez por número (jid). Sem isso, 2 mensagens
@@ -52,6 +52,43 @@ export async function aguardarProcessamento(maxMs = 18000): Promise<void> {
   while (inflightBox.n > 0 && Date.now() - ini < maxMs) {
     await new Promise((r) => setTimeout(r, 100))
   }
+}
+
+// 🔑 CONTA PDF COM SENHA: quando o cliente manda uma conta protegida que não abre sem senha,
+// guardamos o PDF aqui (por accountId|jid). Quando ele responde a senha, reabrimos o arquivo COM
+// ela e lemos os números reais. Em memória — janela curta (cliente responde em minutos).
+const pendingPwdPdf: Map<string, { buffer: Buffer; ts: number }> = (g.__waPendingPwdPdf ??= new Map())
+const PWD_PDF_TTL = 60 * 60 * 1000   // 60 min
+function guardarPdfComSenha(key: string, buffer: Buffer) {
+  const agora = Date.now()
+  // limpa expirados pra não vazar memória
+  for (const [k, v] of pendingPwdPdf) if (agora - v.ts > PWD_PDF_TTL) pendingPwdPdf.delete(k)
+  pendingPwdPdf.set(key, { buffer, ts: agora })
+}
+/** Gera candidatos de senha a partir do texto do cliente (CPF com/sem pontuação, tokens, só dígitos). */
+function senhaCandidatos(text: string): string[] {
+  const limpo = text.trim()
+  const cands = new Set<string>()
+  if (limpo) cands.add(limpo)
+  const soDigitos = limpo.replace(/\D/g, '')
+  if (soDigitos.length >= 3) {
+    cands.add(soDigitos)
+    if (soDigitos.length >= 5) cands.add(soDigitos.slice(0, 5))   // ENEL: 5 primeiros dígitos do CPF
+    if (soDigitos.length >= 6) cands.add(soDigitos.slice(0, 6))
+  }
+  // tokens individuais (ex.: "senha 12345" → "12345")
+  for (const tk of limpo.split(/\s+/)) {
+    const t = tk.trim(); if (t.length >= 3) cands.add(t)
+    const d = t.replace(/\D/g, ''); if (d.length >= 3) cands.add(d)
+  }
+  return [...cands].slice(0, 10)
+}
+/** O texto parece uma TENTATIVA de senha (curto, ou menciona senha/CPF)? */
+function pareceSenha(text: string): boolean {
+  const t = text.trim().toLowerCase()
+  if (!t) return false
+  if (/senha|c\.?p\.?f/.test(t)) return true
+  return t.length <= 40 && /\d/.test(t)   // curto e com dígitos
 }
 
 // 🐕 VIGIA da conexão: registra a última ATIVIDADE do WhatsApp (qualquer evento recebido —
@@ -424,6 +461,7 @@ async function handleIncoming(accountId: string, msg: any) {
         mediaType = 'document'
         // Extrai texto do PDF com unpdf (serverless — sem worker nativo, funciona no Railway)
         let pdfText = ''
+        let pdfProtegido = false   // PDF com senha/criptografia → não dá pra ler
         try {
           const { extractText, getDocumentProxy } = await import('unpdf')
           const pdf = await getDocumentProxy(new Uint8Array(buffer))
@@ -431,6 +469,9 @@ async function handleIncoming(accountId: string, msg: any) {
           pdfText = (Array.isArray(pdfRaw) ? pdfRaw.join('\n') : pdfRaw ?? '').trim().slice(0, 3000)
           console.log('[wa pdf] extraído', pdfText.length, 'chars')
         } catch (e) {
+          // PasswordException / "No password given" / "Incorrect Password" → conta protegida por senha
+          const msgErr = (e instanceof Error ? e.message : String(e)).toLowerCase()
+          if (msgErr.includes('password') || (e as { name?: string })?.name === 'PasswordException') pdfProtegido = true
           console.error('[wa pdf] erro:', e)
         }
         if (pdfText) {
@@ -447,9 +488,15 @@ async function handleIncoming(accountId: string, msg: any) {
             text = `Segue um documento PDF. Leia o conteúdo abaixo e responda qualquer dúvida sobre ele:\n\n${pdfText}`
             displayText = '📄 Documento enviado (PDF)'
           }
+        } else if (pdfProtegido) {
+          // PDF com SENHA → guarda o arquivo; quando o cliente mandar a senha, reabrimos com ela.
+          // NUNCA enviar/reenviar orçamento agora — os números da conta ainda não foram lidos.
+          guardarPdfComSenha(`${accountId}|${jid}`, buffer)
+          text = '[O cliente enviou a conta de luz em PDF PROTEGIDO POR SENHA e não foi possível abrir. NÃO envie nem reenvie nenhum orçamento agora — os números ainda não foram lidos. Peça gentilmente a SENHA da conta (na ENEL costuma ser os 5 primeiros dígitos do CPF do titular) para você conseguir abrir. Se ele preferir, pode mandar a conta como FOTO ou informar o consumo médio em kWh. Assim que tiver a senha (ou a foto/kWh), siga normalmente.]'
+          displayText = '📄 Conta em PDF com senha (aguardando senha do cliente)'
         } else {
           // PDF sem texto extraível (provavelmente escaneado/imagem) → instrui a IA
-          text = '[O cliente enviou um PDF que não pôde ser lido automaticamente. NUNCA peça senha (não usamos senha). Se ele ainda não tem orçamento, peça gentilmente o consumo médio em kWh ou o valor médio da conta, ou que reenvie como FOTO. Se já tem orçamento, siga normalmente.]'
+          text = '[O cliente enviou um PDF que não pôde ser lido automaticamente (provavelmente escaneado). NÃO invente nem reenvie orçamento com base nele. Peça gentilmente que reenvie a conta como FOTO ou informe o consumo médio em kWh / o valor médio da conta, e só então calcule.]'
           displayText = '📄 PDF enviado (não foi possível ler o conteúdo)'
         }
       }
@@ -480,6 +527,46 @@ async function handleIncoming(accountId: string, msg: any) {
       if (!displayText) displayText = '📷 Foto enviada'
     } catch (e) {
       console.error('[wa image]', e)
+    }
+  }
+
+  // 🔑 SENHA de conta PDF protegida: se há uma conta travada aguardando senha deste chat e o
+  // cliente acabou de mandar algo que parece senha, reabre o PDF COM ela e lê os números reais.
+  if (!isDoc && !isImage && text.trim() && pareceSenha(text)) {
+    const pwdKey = `${accountId}|${jid}`
+    const pend = pendingPwdPdf.get(pwdKey)
+    if (pend && Date.now() - pend.ts < PWD_PDF_TTL) {
+      let abriu = false
+      try {
+        const { extractText, getDocumentProxy } = await import('unpdf')
+        for (const senha of senhaCandidatos(text)) {
+          try {
+            const pdf = await getDocumentProxy(new Uint8Array(pend.buffer), { password: senha })
+            const { text: pdfRaw } = await extractText(pdf, { mergePages: true })
+            const raw = (Array.isArray(pdfRaw) ? pdfRaw.join('\n') : pdfRaw ?? '').trim().slice(0, 3000)
+            if (!raw) continue
+            const { parseBillText, isBillPdf } = await import('./pdf-utils')
+            const summary = parseBillText(raw)
+            console.log('[wa pdf] aberto com senha —', isBillPdf(summary) ? 'conta de luz' : 'documento')
+            if (isBillPdf(summary)) {
+              text = `Segue minha conta de luz (PDF, aberta com a senha):\n\n${summary}\n\nIMPORTANTE: use o consumo em kWh para o cálculo do sistema.`
+              displayText = '🔓 Conta aberta com a senha'
+            } else {
+              text = `Segue um documento PDF (aberto com a senha). Leia e responda qualquer dúvida:\n\n${raw}`
+              displayText = '🔓 Documento aberto com a senha'
+            }
+            abriu = true
+            break
+          } catch { /* senha errada, tenta o próximo candidato */ }
+        }
+      } catch (e) { console.error('[wa pdf senha]', e) }
+      if (abriu) {
+        pendingPwdPdf.delete(pwdKey)
+      } else {
+        // Senha não abriu → mantém a conta guardada e pede pra conferir (não descarta a tentativa).
+        text = '[O cliente mandou uma senha para a conta em PDF, mas ela NÃO abriu o arquivo. Peça gentilmente que confira a senha (na ENEL costuma ser os 5 primeiros dígitos do CPF do titular) e reenvie, ou que mande a conta como FOTO / informe o consumo em kWh. NÃO invente orçamento.]'
+        displayText = '🔒 Senha não abriu a conta'
+      }
     }
   }
 

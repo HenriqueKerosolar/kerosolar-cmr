@@ -16,18 +16,24 @@ export function NewLeadButton({ pipelineId, stages }: { pipelineId: string; stag
   const [stageId, setStageId] = useState(stages[0]?.id ?? '')
   const [value, setValue] = useState('')
   const [startBot, setStartBot] = useState(true)
+  const [erro, setErro] = useState('')
 
   function salvar() {
     if (!name.trim() && !phone.trim()) return
+    setErro('')
     startTransition(async () => {
-      await createManualLead({
-        name, phone, email,
-        pipelineId, stageId,
-        value: value ? parseFloat(value) : 0,
-        startBot,
-      })
-      setOpen(false); setName(''); setPhone(''); setEmail(''); setValue('')
-      router.refresh()
+      try {
+        await createManualLead({
+          name, phone, email,
+          pipelineId, stageId,
+          value: value ? parseFloat(value) : 0,
+          startBot,
+        })
+        setOpen(false); setName(''); setPhone(''); setEmail(''); setValue('')
+        router.refresh()
+      } catch (e) {
+        setErro(e instanceof Error ? e.message : 'Erro ao criar o lead. Tente de novo.')
+      }
     })
   }
 
@@ -77,6 +83,8 @@ export function NewLeadButton({ pipelineId, stages }: { pipelineId: string; stag
               <input type="checkbox" checked={startBot} onChange={(e) => setStartBot(e.target.checked)} />
               Acionar o bot da etapa agora (manda a 1ª mensagem se houver WhatsApp conectado)
             </label>
+
+            {erro && <p className="text-sm text-red-600 bg-red-50 dark:bg-red-950/40 rounded-lg px-3 py-2">{erro}</p>}
 
             <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setOpen(false)} className="px-3 py-1.5 text-sm text-[--muted-foreground]">Cancelar</button>

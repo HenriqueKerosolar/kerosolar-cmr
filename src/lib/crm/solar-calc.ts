@@ -321,22 +321,24 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   let kwh: number | undefined
   let reais: number | undefined
 
-  // Pedido por nº de placas/painéis/módulos → converte para kWh (1 painel = 60 kWh)
-  // Ex.: "5 painéis" = 300 kWh, "10 placas" = 600 kWh. Ignora a potência em W ("540w").
-  const painelMatch = t.match(/(\d+)\s*(pain[eé]is|painel|placas?|m[oó]dulos?)/)
-  if (painelMatch) { const n = parseInt(painelMatch[1], 10); const k = n * KWH_POR_PAINEL; if (consumoKwhValido(k)) kwh = k }
-
-  if (!kwh) {
-    // Unidade de consumo: além de "kwh", "kw/h", "kw h" e "quilowatt", aceita também
-    // "kw" (sem o h) e "k" colados ao número — o cliente costuma escrever "700kw" ou
-    // "700k" no lugar de "700kWh". A faixa realista (>=30 kWh em consumoKwhValido) filtra
-    // naturalmente valores de potência tipo "5kw"/"5k".
+  // 1º) CONSUMO em kWh informado pelo cliente — tem PRIORIDADE sobre nº de placas.
+  // Unidade: "kwh", "kw/h", "kw h", "quilowatt", e também "kw"/"k" colados ao número
+  // (cliente escreve "700kw"/"700k"). A faixa realista (>=30 kWh) filtra potência tipo "5kw".
+  {
     const reUni = /([\d.,]+)\s*(kwh|kw\s*\/?\s*h|quilowatts?|kw|k)\b/i
     // Se o cliente disser "quero/preciso/gostaria … N", prioriza ESSE valor (o desejado).
     // Ex.: "hoje o consumo é 500kw, mas QUERO 700kw" → usa 700, não 500.
     const reWant = /(?:quero|queria|quer|preciso|gostaria|pretendo|desejo)[^\d]{0,25}([\d.,]+)\s*(kwh|kw\s*\/?\s*h|quilowatts?|kw|k)\b/i
     const m = t.match(reWant) || t.match(reUni)
     if (m) { const k = parseBrNumber(m[1]); if (consumoKwhValido(k)) kwh = k }
+  }
+
+  // 2º) Só se NÃO informou consumo em kWh: pedido por nº de placas/painéis/módulos vira kWh
+  // (1 painel = 60 kWh). Ex.: "quero 5 painéis" = 300 kWh. É um chute de tamanho — nunca pode
+  // sobrescrever o consumo real ("750/800 kWh, quero 8 placas" usa 800, não as 8 placas).
+  if (!kwh) {
+    const painelMatch = t.match(/(\d+)\s*(pain[eé]is|painel|placas?|m[oó]dulos?)/)
+    if (painelMatch) { const n = parseInt(painelMatch[1], 10); const k = n * KWH_POR_PAINEL; if (consumoKwhValido(k)) kwh = k }
   }
 
   // Valor da fatura: "Valor a pagar: R$ 294,41" ou "R$ 294,41" ou variações.

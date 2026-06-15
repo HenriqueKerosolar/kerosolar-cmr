@@ -127,6 +127,25 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
     `Caso seja um orçamento, me manda a foto da conta de luz, ou só me diz seu consumo médio em kWh ou o valor médio da conta em reais — qualquer um já serve. Fico no seu aguardo! 😊" ` +
     `Nas mensagens seguintes, cumprimente com ${saudacao} apenas quando fizer sentido.`
 
+  // DATA DE HOJE (fuso de Brasília) — a IA precisa saber o dia da semana pra NUNCA propor visita
+  // em fim de semana/feriado. Ela não calcula dia da semana de forma confiável, então entregamos pronto.
+  {
+    const agoraSP = new Date()
+    const fmtData = (d: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d)
+    const weekdayEn = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', weekday: 'short' }).format(d)
+    const feriadosFixos = ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '11-20', '12-25']
+    const mmddSP = (d: Date) => { const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' }).formatToParts(d); return `${p.find((x) => x.type === 'month')?.value}-${p.find((x) => x.type === 'day')?.value}` }
+    const ehUtil = (d: Date) => { const w = weekdayEn(d); return w !== 'Sat' && w !== 'Sun' && !feriadosFixos.includes(mmddSP(d)) }
+    const hojeUtil = ehUtil(agoraSP)
+    let prox = new Date(agoraSP.getTime() + 24 * 60 * 60 * 1000)
+    for (let i = 0; i < 10 && !ehUtil(prox); i++) prox = new Date(prox.getTime() + 24 * 60 * 60 * 1000)
+    system += `\n\n## DATA DE HOJE: hoje é ${fmtData(agoraSP)} (fuso de Brasília). ` +
+      (hojeUtil ? `Hoje é dia útil. ` : `⚠️ HOJE NÃO É DIA ÚTIL (fim de semana ou feriado) — é PROIBIDO marcar ou propor visita técnica para hoje. `) +
+      `O próximo dia útil é ${fmtData(prox)}. ` +
+      `Quando o cliente disser "hoje", "amanhã", "segunda", "essa semana", etc., calcule a data SEMPRE a partir da data de hoje acima. ` +
+      `NUNCA proponha, sugira ou confirme visita técnica em sábado, domingo ou feriado. Se o dia que o cliente pedir (ou "hoje"/"amanhã") cair em dia NÃO útil, NÃO ofereça esse dia — ofereça gentilmente o próximo dia útil.`
+  }
+
   // Base de conhecimento: respostas que a EQUIPE já deu para perguntas parecidas.
   // A IA usa como REFERÊNCIA (mesmo sentido/conteúdo), adaptando ao contexto — não copia cego.
   if (opts.learned) {
@@ -161,7 +180,7 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
       ? (storedSolar.financiamento as { prazo: number; parcela: number }[])
       : []
     if (sistema) {
-      let s = `\n\n## ⚠️ ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO. É PROIBIDO pedir a conta de luz, o consumo ou qualquer dado para orçar de novo — você JÁ TEM os números abaixo. Se ele pedir para AGENDAR VISITA, PODE prosseguir com o agendamento (NÃO exija orçamento, ele já tem).\n`
+      let s = `\n\n## ⚠️ ESTE CLIENTE JÁ RECEBEU UM ORÇAMENTO. É PROIBIDO pedir a conta de luz, o consumo ou qualquer dado para orçar de novo — você JÁ TEM os números abaixo. Se ele pedir para AGENDAR VISITA, NÃO exija orçamento de novo (ele já tem); MAS o agendamento da visita só acontece DEPOIS de definida a forma de pagamento (veja a seção "VISITA TÉCNICA / AGENDAMENTO") — e se a forma for FINANCIAMENTO, só DEPOIS da APROVAÇÃO do crédito. NÃO ofereça dia/horário antes disso.\n`
       if (conta)    s += `- Conta de luz atual: ${brl(conta)}/mês\n`
       if (consumo)  s += `- Consumo: ${consumo} kWh/mês\n`
       s += `- *Valor do sistema: ${brl(sistema)}*\n`
@@ -309,11 +328,11 @@ Existem 3 situações possíveis:
 2) Cliente JÁ recebeu orçamento e PEDE a visita técnica → ⚠️ ANTES de agendar, a FORMA DE PAGAMENTO precisa estar definida (a visita técnica é etapa de FECHAMENTO — vem DEPOIS de resolver como o cliente vai pagar).
    • Se o cliente JÁ definiu que paga À VISTA ou no CARTÃO → pode agendar. Pergunte SOMENTE o melhor DIA e HORÁRIO. É TERMINANTEMENTE PROIBIDO perguntar "qual canal/meio prefere" (WhatsApp, ligação, videochamada) — a VISITA TÉCNICA é PRESENCIAL, alguém vai ao endereço do cliente. O channel do appointment é SEMPRE "visit".
    • Se o cliente AINDA NÃO definiu como vai pagar → NÃO agende ainda. PRIMEIRO trate o pagamento: pergunte como ele pretende pagar e, com naturalidade, apresente a opção de FINANCIAMENTO (a menor parcela costuma ficar MENOR que a conta de luz — economiza já no 1º mês), além de à vista e cartão. Ex.: "Antes de marcar a visita, como você prefere fazer o investimento — à vista, no cartão ou no financiamento? 😊 No financiamento a parcela já fica menor que sua conta de luz." Só ofereça o dia/horário da visita DEPOIS que a forma de pagamento estiver clara.
-   • Se ele optar pelo FINANCIAMENTO → siga a seção "FINANCIAMENTO — COLETA DE DADOS".
+   • Se ele optar pelo FINANCIAMENTO → siga a seção "FINANCIAMENTO — COLETA DE DADOS". ⚠️ COM FINANCIAMENTO, A VISITA TÉCNICA SÓ É AGENDADA DEPOIS QUE O CRÉDITO FOR APROVADO. Enquanto não houver aprovação, é PROIBIDO oferecer dia/horário ou preencher "appointment" — colete os dados, encaminhe para análise e diga que, assim que o crédito for aprovado, vocês marcam a visita. Ex.: "A visita técnica a gente agenda assim que seu financiamento for aprovado, combinado? 😊 Vou encaminhar seus dados para análise e te aviso assim que sair a aprovação."
 
 3) Cliente quer TENTAR O FINANCIAMENTO ou saber se tem crédito liberado (ex.: "quero financiar", "quero ver o financiamento", "como faço pra financiar", "quero saber se tenho crédito", "quero parcelar") → veja a seção "FINANCIAMENTO — COLETA DE DADOS" abaixo (peça os 5 dados e routeToStage = "Financiamento pedido de documentos").
 
-⛔ REGRA DE OURO: É PROIBIDO pular direto para "me diga o dia e o horário da visita" se a FORMA DE PAGAMENTO (à vista, cartão ou financiamento) ainda NÃO foi definida nesta conversa. Mesmo que o cliente peça a visita, primeiro resolva o pagamento (oferecendo o financiamento) e só então agende.
+⛔ REGRA DE OURO: É PROIBIDO pular direto para "me diga o dia e o horário da visita" se a FORMA DE PAGAMENTO (à vista, cartão ou financiamento) ainda NÃO foi definida nesta conversa. SEMPRE pergunte ANTES como o cliente vai pagar — inclusive se vai ser FINANCIAMENTO. Mesmo que o cliente peça a visita (ou diga "qualquer horário"), primeiro resolva o pagamento (oferecendo o financiamento) e só então agende. E se for FINANCIAMENTO, a visita só é marcada DEPOIS da aprovação do crédito — nunca antes.
 
 ⚠️ NÃO transforme a situação 3 num DESVIO. Se o cliente fizer uma PERGUNTA (taxas/juros do financiamento, garantia, prazo de instalação, como funciona, qualquer dúvida), RESPONDA a pergunta usando as informações JÁ PROGRAMADAS acima (garantias, formas de pagamento, taxas/parcelas do financiamento, prazos, etc.) ANTES de pedir qualquer dado. É PROIBIDO responder "me passa CPF/seus dados" a uma pergunta — só peça os dados quando o cliente DECIDIR prosseguir com o financiamento.
 

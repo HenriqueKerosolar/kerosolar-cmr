@@ -285,7 +285,9 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
  * Retorna true se reconheceu e tratou o comando (aí NÃO se deve enviar/registrar o texto literal).
  */
 export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string): Promise<boolean> {
-  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico)\b[^\d]{0,15}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
+  // [^\d]{0,40}: tolera frases naturais entre "indicação" e o número, ex.: "minha indicação é de
+  // um kit de 700 kWh" (o trecho " é de um kit de " sozinho já tem 16 chars — o limite antigo de 15 barrava).
+  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico)\b[^\d]{0,40}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
   if (!ind) return false
   const raw = ind[1].includes(',') ? ind[1].replace(/\./g, '').replace(',', '.')
     : (/^\d{1,3}(\.\d{3})+$/.test(ind[1]) ? ind[1].replace(/\./g, '') : ind[1])
