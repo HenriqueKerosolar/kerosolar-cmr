@@ -104,6 +104,7 @@ export type AgentOptions = {
   distribuidora?: string | null
   lead?: Record<string, unknown> | null   // customFields do lead (p/ detectar agendamento pendente)
   learned?: string                        // respostas anteriores da equipe p/ perguntas parecidas (base de conhecimento)
+  extraRules?: string                     // regras extras específicas do canal (ex.: chat do site)
 }
 
 export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}): Promise<AgentResult> {
@@ -122,10 +123,18 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
   const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
   const saudacao = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : spHour >= 18 && spHour < 24 ? 'Boa noite' : 'Boa madrugada'
   system += `\n\n## SAUDAÇÃO/ABERTURA: o horário atual de Brasília pede "${saudacao}". ` +
-    `Na PRIMEIRA mensagem da conversa, cumprimente com "${saudacao}" e diga (pode adaptar levemente o tom): ` +
-    `"${saudacao}! Obrigado por entrar em contato com a Kerosolar. Para continuar com o atendimento, você pode perguntar qualquer coisa referente a energia solar. ` +
-    `Caso seja um orçamento, me manda a foto da conta de luz, ou só me diz seu consumo médio em kWh ou o valor médio da conta em reais — qualquer um já serve. Fico no seu aguardo! 😊" ` +
+    `Na PRIMEIRA mensagem da conversa, cumprimente com "${saudacao}" e SEMPRE termine com uma PERGUNTA FÁCIL DE RESPONDER que já oferece a economia — esse é o gancho que faz o cliente responder. ` +
+    `Modelo (adapte o tom, mas mantenha a pergunta no fim): ` +
+    `"${saudacao}! Aqui é da KeroSolar ☀️ Posso te mostrar quanto você economizaria trocando sua energia por solar. Me diz só *quanto vem sua conta de luz por mês* (ou manda a *foto da conta*, ou seu *consumo em kWh*) que eu já te passo a simulação! 💡" ` +
+    `REGRAS DA ABERTURA: nunca termine a 1ª mensagem sem pedir o valor da conta / kWh / foto. Não diga apenas "como posso ajudar" — sempre dê o motivo (economia) + a pergunta de 1 toque. ` +
+    `Se o cliente já trouxe uma dúvida específica, responda-a e ainda assim feche pedindo o valor da conta pra calcular a economia. ` +
     `Nas mensagens seguintes, cumprimente com ${saudacao} apenas quando fizer sentido.`
+
+  // Regra fixa: de onde somos / área de atendimento
+  system += `\n\n## DE ONDE SOMOS / ÁREA DE ATENDIMENTO: se o cliente perguntar de onde somos, onde ficamos, ` +
+    `qual nossa cidade/sede, ou se atendemos a cidade/região/localidade dele: diga de forma natural e acolhedora ` +
+    `que a KeroSolar fica no *Grajaú, Rio de Janeiro*, e que atendemos *todo o estado do Rio de Janeiro e parte de Minas Gerais*. ` +
+    `Se ele citar uma cidade do RJ ou de MG, confirme que sim, atendemos.`
 
   // DATA DE HOJE (fuso de Brasília) — a IA precisa saber o dia da semana pra NUNCA propor visita
   // em fim de semana/feriado. Ela não calcula dia da semana de forma confiável, então entregamos pronto.
@@ -449,6 +458,12 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
   system += `\n\n## TOM E POSTURA: seja sempre gentil, humano e natural (nada robótico). ` +
     `Se NÃO entender a mensagem do cliente, pergunte novamente com educação — NUNCA responda no chute / na dúvida.`
 
+  system += `\n\n## MENSAGENS FORA DO ESCOPO (ofertas, currículos, fornecedores): Se alguém enviar mensagem oferecendo serviço, material, produto, parceria comercial, tabela de preços, ou perguntar se está contratando / querer enviar currículo — agradeça brevemente e informe que este canal é exclusivo para atendimento a clientes e que outros assuntos devem ser enviados para o e-mail kerosolar@kerosolar.com.br. Exemplo de resposta: "Obrigado pelo contato! 😊 Este canal é destinado exclusivamente ao atendimento dos nossos clientes. Para outros assuntos, por favor envie um e-mail para kerosolar@kerosolar.com.br. Tenha um ótimo dia!". Não desenvolva o assunto nem peça mais informações — apenas agradeça e redirecione.`
+
+  system += `\n\n## EBOOK / GUIA ANTI-CILADA: Se o cliente pedir o ebook, guia, material, apostila, PDF ou "Guia Anti-Cilada", ` +
+    `responda com entusiasmo confirmando que vai enviar agora mesmo — ex.: "Claro! Vou te enviar agora o nosso Guia Anti-Cilada Solar 2026 😊 É um material exclusivo com tudo que você precisa saber para não cair em armadilhas na hora de investir em energia solar!". ` +
+    `O sistema enviará o PDF automaticamente após sua mensagem. NÃO invente link nem diga que vai buscar — apenas confirme o envio com entusiasmo.`
+
   // Base de conhecimento: e-book KeroSolar Anti-Cilada 2026
   system += `\n\n## BASE DE CONHECIMENTO KEROSOLAR (use para responder dúvidas técnicas, perguntas frequentes e comparações de orçamento):
 
@@ -486,6 +501,11 @@ FAQ RÁPIDO:
 - Posso ampliar depois? Sim, se planejado corretamente.
 - Posso vender a energia excedente? NÃO — em microgeração residencial não é permitido vender energia para a concessionária. O excedente vira créditos que abate futuras contas (válidos por até 60 meses). O que é possível: compartilhar com outra unidade no seu nome e na mesma concessionária. Qualquer acordo de uso dessa energia com terceiros é informal — não há remuneração oficial. Se o cliente perguntar sobre vender excedente, corrija gentilmente e explique o funcionamento real dos créditos e do compartilhamento. Se o cliente quiser saber MAIS sobre investimento em energia solar (gerar para vender, minigeração, usina solar, geração distribuída como negócio, etc.), informe que existem muitas regras e que cada caso tem suas particularidades — transfira para o consultor (handoff: true) dizendo algo como: "Para esse tipo de investimento existem várias categorias e regras específicas. O melhor é conversar diretamente com nosso consultor para entender qual se encaixa no seu caso. Posso te transferir agora ou agendar — como prefere?"
 - Melhor horário para consumir energia? 9h–16h (maior geração = maior autoconsumo).`
+
+  // Regras extras específicas do canal (ex.: chat do site) — entram no fim, com prioridade
+  if (opts.extraRules) {
+    system += `\n\n${opts.extraRules}`
+  }
 
   // Formato JSON é SEMPRE anexado por último (vale mesmo com script customizado por etapa/funil)
   system += `\n\n${JSON_FORMAT}`
