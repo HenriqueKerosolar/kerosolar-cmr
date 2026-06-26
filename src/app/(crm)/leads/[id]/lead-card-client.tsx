@@ -67,6 +67,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [improving, setImproving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  const [pastedFile, setPastedFile] = useState<File | null>(null)
+  const [pastedPreview, setPastedPreview] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -127,7 +129,27 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
     }
   }
 
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const file = e.clipboardData.files?.[0]
+    if (!file || !file.type.startsWith('image/')) return
+    e.preventDefault()
+    setPastedFile(file)
+    const url = URL.createObjectURL(file)
+    setPastedPreview(url)
+  }
+
+  function cancelPaste() {
+    if (pastedPreview) URL.revokeObjectURL(pastedPreview)
+    setPastedFile(null)
+    setPastedPreview(null)
+  }
+
   async function send() {
+    if (pastedFile) {
+      await uploadFile(pastedFile)
+      cancelPaste()
+      return
+    }
     if (!text.trim() || sending) return
     setSending(true)
     const t = text; setText('')
@@ -293,9 +315,19 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
               </button>
             )}
             <div className="flex-1 flex flex-col gap-1">
-              <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-                placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou anexe um arquivo…'}
-                className={`px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : 'border-[--input] bg-[--background]'}`} />
+              {pastedPreview && (
+                <div className="relative inline-block self-start">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={pastedPreview} alt="preview" className="max-h-32 rounded-lg border border-[--border] object-contain" />
+                  <button onClick={cancelPaste} title="Remover imagem"
+                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center leading-none">✕</button>
+                </div>
+              )}
+              <input value={text} onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && send()}
+                onPaste={handlePaste}
+                placeholder={pastedFile ? 'Legenda (opcional)…' : testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou cole uma imagem (Ctrl+V)…'}
+                className={`px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : pastedFile ? 'border-blue-400 bg-[--background]' : 'border-[--input] bg-[--background]'}`} />
               {!testMode && (
                 <button onClick={melhorarComIA} disabled={improving || !text.trim()}
                   className="text-left px-3 py-1.5 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 font-medium self-start">
@@ -303,9 +335,9 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 </button>
               )}
             </div>
-            <button onClick={send} disabled={sending || !text.trim()}
+            <button onClick={send} disabled={sending || uploading || (!text.trim() && !pastedFile)}
               className={`px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${testMode ? 'bg-violet-600 text-white' : 'bg-[--primary] text-[--primary-foreground]'}`}>
-              {testMode ? '🧪' : 'Enviar'}
+              {testMode ? '🧪' : uploading ? '⏳' : 'Enviar'}
             </button>
           </div>
           <button onClick={() => setTestMode(!testMode)}
