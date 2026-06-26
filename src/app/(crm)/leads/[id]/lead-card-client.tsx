@@ -8,7 +8,7 @@ import {
   sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage,
 } from '@/app/actions/lead'
 
-type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; createdAt: string }
+type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
 
 // Data e hora no horário de Brasília (DD/MM/AAAA HH:mm)
 function horaBrasilia(iso: string): string {
@@ -64,6 +64,9 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [deleting, setDeleting] = useState(false)
   const [testMode, setTestMode] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [improving, setImproving] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -90,17 +93,69 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
 
   const run = (fn: () => Promise<unknown>) => startTransition(async () => { await fn(); router.refresh() })
 
+  async function deletarMensagem(msgId: string) {
+    if (!confirm('Deletar esta mensagem?')) return
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/messages/${msgId}/delete`, { method: 'DELETE' })
+      if (res.ok) {
+        await poll()
+      } else {
+        alert('Erro ao deletar mensagem')
+      }
+    } catch {
+      alert('Erro ao deletar mensagem')
+    }
+  }
+
+  async function salvarEdicao(msgId: string) {
+    if (!editText.trim()) return
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/messages/${msgId}/edit`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editText }),
+      })
+      if (res.ok) {
+        setEditingId(null)
+        setEditText('')
+        await poll()
+      } else {
+        alert('Erro ao editar mensagem')
+      }
+    } catch {
+      alert('Erro ao editar mensagem')
+    }
+  }
+
   async function send() {
     if (!text.trim() || sending) return
     setSending(true)
     const t = text; setText('')
     if (testMode) {
       // modo teste: simula mensagem do cliente → bot responde
-      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'inbound', senderType: 'contact', content: t, mediaUrl: null, createdAt: new Date().toISOString() }])
+      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'inbound', senderType: 'contact', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
       try { await simulateClientMessage(lead.id, t); await poll() } finally { setSending(false) }
     } else {
-      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, createdAt: new Date().toISOString() }])
+      setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
       try { await sendManualMessage(lead.id, t); await poll() } finally { setSending(false) }
+    }
+  }
+
+  async function melhorarComIA() {
+    if (!text.trim()) return
+    setImproving(true)
+    try {
+      const res = await fetch('/api/ai/format-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      const data = await res.json()
+      if (res.ok && data.formatted) {
+        setText(data.formatted)
+      }
+    } catch { /* ignora */ } finally {
+      setImproving(false)
     }
   }
 
@@ -166,19 +221,58 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           {messages.map((m) => {
             if (m.senderType === 'system') return <div key={m.id} className="text-center"><span className="text-[11px] text-[--muted-foreground] bg-[--muted]/50 rounded-full px-2 py-0.5">{m.content} · {horaBrasilia(m.createdAt)}</span></div>
             const isIn = m.direction === 'inbound'
+            const podeEditar = !isIn && m.senderType === 'human'
+            const editando = editingId === m.id
             return (
-              <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
-                <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${isIn ? 'bg-[--muted] rounded-bl-sm' : 'bg-[--primary] text-[--primary-foreground] rounded-br-sm'}`}>
+              <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'} gap-1 group`}>
+                {podeEditar && !editando && (
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                    <button onClick={() => { setEditingId(m.id); setEditText(m.content) }}
+                      className="px-2 py-1 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-950/30 rounded-lg text-xs"
+                      title="Editar mensagem">
+                      ✏️
+                    </button>
+                    <button onClick={() => deletarMensagem(m.id)}
+                      className="px-2 py-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-950/30 rounded-lg text-xs"
+                      title="Deletar mensagem">
+                      🗑️
+                    </button>
+                  </div>
+                )}
+                {editando ? (
+                  <div className="max-w-[75%] flex flex-col gap-2">
+                    <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={3}
+                      className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:border-[--primary]" />
+                    <div className="flex gap-1 justify-end">
+                      <button onClick={() => { setEditingId(null); setEditText('') }}
+                        className="px-3 py-1 rounded-lg text-xs border border-[--border] hover:bg-[--accent]">
+                        Cancelar
+                      </button>
+                      <button onClick={() => salvarEdicao(m.id)}
+                        className="px-3 py-1 rounded-lg text-xs bg-[--primary] text-[--primary-foreground] hover:opacity-90">
+                        Salvar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${isIn ? 'bg-[--muted] rounded-bl-sm' : 'bg-[--primary] text-[--primary-foreground] rounded-br-sm'}`}>
                   {!isIn && <div className="text-[10px] opacity-70 mb-0.5">{m.senderType === 'ai' ? '🤖 IA' : m.senderType === 'human' ? '👤 Você' : 'Sistema'}</div>}
-                  {m.mediaUrl && (
-                    /\.(png|jpe?g|webp|gif)$/i.test(m.mediaUrl)
-                      ? /* eslint-disable-next-line @next/next/no-img-element */
-                        <a href={m.mediaUrl} target="_blank" rel="noreferrer"><img src={m.mediaUrl} alt="anexo" className="max-w-full rounded-lg mb-1 max-h-60 object-contain" /></a>
-                      : <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs underline mb-1">📎 Abrir arquivo</a>
-                  )}
+                  {m.mediaUrl && (() => {
+                    const u = m.mediaUrl as string
+                    const t = (m as any).mediaType || ''
+                    if (t === 'image' || /\.(png|jpe?g|webp|gif)$/i.test(u))
+                      // eslint-disable-next-line @next/next/no-img-element
+                      return <a href={u} target="_blank" rel="noreferrer"><img src={u} alt="foto" className="max-w-full rounded-lg mb-1 max-h-60 object-contain" /></a>
+                    if (t === 'audio' || /\.(ogg|mp3|m4a|aac|amr|wav)$/i.test(u))
+                      return <audio controls src={u} className="mb-1 max-w-[220px]" />
+                    if (t === 'video' || /\.(mp4|mov|3gp|webm)$/i.test(u))
+                      return <video controls src={u} className="rounded-lg max-w-full mb-1 max-h-60" />
+                    return <a href={u} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs underline mb-1">📎 Abrir arquivo</a>
+                  })()}
                   <WhatsAppText text={m.content} />
                   <div className={`text-[10px] mt-1 ${isIn ? 'text-[--muted-foreground]' : 'opacity-70'} text-right`}>{horaBrasilia(m.createdAt)}</div>
                 </div>
+                )}
               </div>
             )
           })}
@@ -198,9 +292,17 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 {uploading ? '⏳' : '📎'}
               </button>
             )}
-            <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-              placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou anexe um arquivo…'}
-              className={`flex-1 px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : 'border-[--input] bg-[--background]'}`} />
+            <div className="flex-1 flex flex-col gap-1">
+              <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
+                placeholder={testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou anexe um arquivo…'}
+                className={`px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : 'border-[--input] bg-[--background]'}`} />
+              {!testMode && (
+                <button onClick={melhorarComIA} disabled={improving || !text.trim()}
+                  className="text-left px-3 py-1.5 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 font-medium self-start">
+                  {improving ? '⏳ Melhorando...' : '✨ Melhorar ou Arrumar'}
+                </button>
+              )}
+            </div>
             <button onClick={send} disabled={sending || !text.trim()}
               className={`px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${testMode ? 'bg-violet-600 text-white' : 'bg-[--primary] text-[--primary-foreground]'}`}>
               {testMode ? '🧪' : 'Enviar'}
