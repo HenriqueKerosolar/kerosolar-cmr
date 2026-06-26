@@ -220,12 +220,13 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           {/* Botão IA — liga/desliga a IA neste lead, vale em qualquer etapa */}
           <button onClick={() => { setAiEnabled(!aiEnabled); run(() => toggleLeadAi(lead.id, !aiEnabled)) }}
             title={aiEnabled ? 'Clique para DESLIGAR a IA (você assume o atendimento)' : 'Clique para LIGAR a IA'}
-            className={`ml-auto shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+            className={`ml-auto shrink-0 px-3 py-2 rounded-lg text-xs font-semibold transition ${
               aiEnabled
                 ? 'bg-[--primary] text-[--primary-foreground] hover:opacity-90'
                 : 'bg-amber-500 text-white hover:opacity-90'
             }`}>
-            {aiEnabled ? '🤖 IA ativa · Desligar' : '👤 Manual · Ligar IA'}
+            <span className="hidden sm:inline">{aiEnabled ? '🤖 IA ativa · Desligar' : '👤 Manual · Ligar IA'}</span>
+            <span className="sm:hidden text-base leading-none">{aiEnabled ? '🤖' : '👤'}</span>
           </button>
         </div>
 
