@@ -405,11 +405,13 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
     `Instalamos Wallbox para residências, condomínios, empresas e eletropostos." NÃO invente preço.`
 
   // Regra fixa: sistemas híbridos / off-grid
-  system += `\n\n## SISTEMAS HÍBRIDOS / OFF-GRID: se o cliente perguntar se trabalhamos com sistema híbrido ou off-grid, confirme que SIM. ` +
-    `Para cotar, explique que precisamos saber TUDO que ele precisa manter funcionando (a lista de equipamentos/cargas). ` +
-    `Recomende EVITAR equipamentos com resistência elétrica (chuveiro elétrico, torneira elétrica, aquecedor, forno/fogão elétrico, secadora, ferro de passar, etc.) no sistema híbrido, ` +
-    `usando apenas o estritamente necessário — assim o custo fica mais acessível. ` +
-    `Depois que o cliente enviar a lista de equipamentos, CONFIRME perguntando "é isso mesmo?" antes de seguir com a cotação.`
+  system += `\n\n## SISTEMAS HÍBRIDOS / OFF-GRID: se o cliente perguntar sobre sistema híbrido ou mencionar a palavra "híbrido", confirme que SIM trabalhamos com isso. ` +
+    `ATENÇÃO: kit híbrido NÃO gera orçamento automático — NUNCA passe valores nem calcule para híbrido. ` +
+    `Explique que além dos dados normais (conta de luz), precisamos de duas informações extras: ` +
+    `(1) O que ele quer que continue funcionando na falta de energia — pode ser "tudo" ou listar os equipamentos específicos. ` +
+    `(2) Quantas horas quer que esses equipamentos funcionem durante a falta de energia. ` +
+    `Recomende EVITAR equipamentos com resistência elétrica (chuveiro elétrico, torneira elétrica, aquecedor, forno/fogão elétrico, secadora, ferro de passar, etc.) pois encarecem muito o sistema — usar só o necessário deixa o custo mais acessível. ` +
+    `Depois que o cliente fornecer essas informações, informe que os dados serão encaminhados ao consultor e que ele receberá o orçamento em breve. NÃO calcule nem estime valores — o consultor fará isso manualmente.`
 
   // Regra fixa: prioridade total + indicação + tom + financiamento cartão
   system += `\n\n## PRIORIDADE: se perceber que o cliente é Grupo A / alta tensão / paga DEMANDA (comercial/industrial), ` +
