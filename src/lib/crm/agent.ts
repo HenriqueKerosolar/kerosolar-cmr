@@ -471,9 +471,9 @@ LEI 14.300 — A "taxa do sol" NÃO existe. Com a Lei 14.300, passou a existir u
 
 TIPOS DE SISTEMAS:
 - String (inversor central): mais barato, ideal para telhados sem sombra. Se um painel cai, afeta o grupo todo.
-- Microinversor: um inversor por painel, máxima eficiência, ideal para telhados com sombra. Investimento mais alto.
+- Microinversor: um inversor por painel, máxima eficiência, ideal para telhados com sombra ou problemas estruturais (múltiplas faces, inclinações diferentes, objetos que projetam sombra). IMPORTANTE: microinversor NÃO é mais caro que inversor híbrido — são categorias diferentes. O microinversor só custa mais que o string convencional. Portanto, se o telhado NÃO tem problema (sem sombra, face única, inclinação ideal), o cliente pagará mais caro SEM necessidade — nesse caso o string ou o híbrido são mais adequados.
 - Otimizadores de potência: inversor central + otimizador individual por painel. Excelente custo-benefício para sombra parcial.
-Regra Kerosolar: telhado simples/sem sombra → string; sombra leve/moderada → otimizado; muita sombra/múltiplas faces → microinversor.
+Regra Kerosolar: telhado simples/sem sombra → string ou híbrido; sombra leve/moderada → otimizado; muita sombra/múltiplas faces/problemas no telhado → microinversor. NUNCA sugira microinversor apenas pelo preço ou como "o melhor" — ele só vale a pena quando o telhado tem um problema específico que ele resolve.
 
 PAINÉIS SOLARES — Tecnologias (da mais comum à mais avançada): Monocristalino → Half-Cell → PERC → TOPCon → HJT. Potência atual: 540W–720W. Certificações obrigatórias: IEC 61215, IEC 61730, INMETRO. Tier 1 (Bloomberg) é classificação financeira, NÃO técnica. Todo painel degrada — garantia de produção: mínimo 80% em 30 anos.
 GARANTIAS KEROSOLAR: Painéis solares: 30 anos. Inversores: 10 anos. Baterias de lítio: 8 anos. Estrutura metálica: 25 anos. Mão de obra: 2 anos. Se perguntarem sobre garantia, informe esses valores de forma clara e natural.
