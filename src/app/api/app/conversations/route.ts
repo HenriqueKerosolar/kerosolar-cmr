@@ -1,0 +1,39 @@
+import { NextResponse } from 'next/server'
+import { getSessionSafe } from '@/lib/dal'
+import { prisma } from '@/lib/prisma'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+/** Lista de conversas pro app de atendimento (mobile). */
+export async function GET() {
+  const session = await getSessionSafe()
+  if (!session) return NextResponse.json({ error: 'unauth' }, { status: 401 })
+
+  const convs = await prisma.conversation.findMany({
+    where: { resolvedAt: null }, // conversas encerradas somem; voltam quando o cliente escrever
+    orderBy: { lastMessageAt: 'desc' },
+    take: 100,
+    include: {
+      contact: true,
+      lead: { include: { stage: true } },
+      messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+    },
+  })
+
+  const list = convs.map((c) => {
+    const last = c.messages[0]
+    return {
+      id: c.id,
+      leadId: c.leadId,
+      channel: c.channel,
+      name: c.contact?.name || c.contact?.phone || 'Cliente',
+      lastText: last ? (last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '✓ ') : '') + (last.content || '') : '',
+      lastAt: c.lastMessageAt,
+      unread: !!last && last.direction === 'inbound' && !last.isRead,
+      stage: c.lead?.stage ? { name: c.lead.stage.name, color: c.lead.stage.color } : null,
+    }
+  })
+
+  return NextResponse.json({ conversations: list })
+}

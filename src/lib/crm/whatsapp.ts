@@ -132,7 +132,7 @@ const UPLOADS_DIR = fs.existsSync('/data')
   : path.join(process.cwd(), 'uploads')
 
 /** Salva um anexo recebido do cliente e devolve a URL pública (servida por /api/uploads/[name]). */
-function salvarMidiaRecebida(buffer: Buffer, ext: string): string | null {
+export function salvarMidiaRecebida(buffer: Buffer, ext: string): string | null {
   try {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true })
     const safeExt = (ext || '').replace(/[^a-zA-Z0-9.]/g, '') || '.bin'

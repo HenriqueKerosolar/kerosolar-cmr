@@ -16,7 +16,30 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
   const [intervalMin, setIntervalMin] = useState('')
   const [vary, setVary] = useState(true)
   const [sending, setSending] = useState(false)
+  const [improving, setImproving] = useState(false)
   const [result, setResult] = useState('')
+
+  async function melhorarComIA() {
+    if (!text.trim()) return
+    setImproving(true)
+    try {
+      const res = await fetch('/api/ai/format-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      const data = await res.json()
+      if (res.ok && data.formatted) {
+        setText(data.formatted)
+      } else {
+        setResult('❌ Erro ao formatar texto')
+      }
+    } catch (err) {
+      setResult('❌ Erro ao formatar texto: ' + (err instanceof Error ? err.message : ''))
+    } finally {
+      setImproving(false)
+    }
+  }
 
   async function send() {
     if (!stageId || !text.trim()) return
@@ -103,7 +126,13 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
                   <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4}
                     placeholder="Oi {nome}! Temos uma condição especial essa semana..."
                     className={inputCls} />
-                  <p className="text-[11px] text-[--muted-foreground] mt-1">Use <b>{'{nome}'}</b> para o nome do cliente.</p>
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={melhorarComIA} disabled={improving || !text.trim()}
+                      className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 font-medium">
+                      {improving ? '⏳ Melhorando...' : '✨ Melhorar ou Arrumar'}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[--muted-foreground] mt-1">Use <b>{'{nome}'}</b> para o nome do cliente. Clique em ✨ pra melhorar com IA.</p>
                 </div>
                 <label className="flex items-start gap-2 text-sm cursor-pointer">
                   <input type="checkbox" checked={vary} onChange={(e) => setVary(e.target.checked)} className="mt-0.5" />

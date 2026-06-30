@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 
 type Cfg = Record<string, string>
+type Variant = { id: string; text: string; enabled?: boolean }
+type PlacarRow = { id: string; sent: number; replied: number; rate: number }
 
 // Tabela de financiamento padrão (usada quando ainda não há configuração salva).
 type FinRow = { prazo: number; taxa: number; parcela: number }
@@ -18,12 +20,25 @@ const FIN_DEFAULT_ROWS: FinRow[] = [
   { prazo: 96, taxa: 1.95, parcela: 563.61 },
 ]
 
-export function ConfigClient({ initial }: { initial: Cfg }) {
+export function ConfigClient({ initial, variants, defaults, placar }: { initial: Cfg; variants: Variant[]; defaults: Variant[]; placar: PlacarRow[] }) {
   const [cfg, setCfg] = useState<Cfg>(initial)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const set = (key: string, value: string) => setCfg((c) => ({ ...c, [key]: value }))
+
+  // ── Saudação inicial: variações (teste A/B com aprendizado) ──
+  const [wVars, setWVars] = useState<Variant[]>(variants.map((v) => ({ ...v, enabled: v.enabled !== false })))
+  useEffect(() => {
+    setCfg((c) => ({ ...c, welcome_variants: JSON.stringify(wVars) }))
+  }, [wVars])
+  const setVarText = (i: number, text: string) => setWVars((vs) => vs.map((v, idx) => (idx === i ? { ...v, text } : v)))
+  const toggleVar = (i: number) => setWVars((vs) => vs.map((v, idx) => (idx === i ? { ...v, enabled: !(v.enabled !== false) } : v)))
+  const removeVar = (i: number) => setWVars((vs) => vs.filter((_, idx) => idx !== i))
+  const addVar = () => setWVars((vs) => [...vs, { id: `var${vs.length + 1}-${Math.random().toString(36).slice(2, 6)}`, text: '', enabled: true }])
+  const resetVars = () => setWVars(defaults.map((v) => ({ ...v, enabled: v.enabled !== false })))
+  const placarDe = (id: string) => placar.find((p) => p.id === id)
+  const melhorId = placar.filter((p) => p.sent >= 5).sort((a, b) => b.rate - a.rate)[0]?.id
 
   // ── Tabela de financiamento (estado próprio, sincronizado para dentro de cfg) ──
   const initialFin = (() => {
@@ -132,6 +147,66 @@ export function ConfigClient({ initial }: { initial: Cfg }) {
           <textarea value={cfg['return_message'] ?? ''} onChange={(e) => set('return_message', e.target.value)} rows={3}
             placeholder="Que bom que você retornou! Vamos continuar..."
             className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
+        </div>
+      </section>
+
+      {/* Saudação inicial — teste A/B com aprendizado */}
+      <section className="space-y-4">
+        <h2 className="font-semibold border-b border-[--border] pb-2">Saudação inicial (teste A/B com aprendizado)</h2>
+        <p className="text-xs text-[--muted-foreground]">
+          Cadastre versões diferentes da <b>primeira mensagem</b>. O sistema alterna entre elas, mede quantas fazem o
+          cliente <b>responder</b> e passa a usar mais a campeã automaticamente (e segue testando as outras de leve).
+          Use <code>{'{SAUDACAO}'}</code> (Bom dia/Boa tarde/Boa noite) e <code>{'{nome}'}</code>.
+          <b> Toda saudação sempre pede a conta de luz automaticamente</b> — se você escrever uma variação que não peça,
+          o sistema completa sozinho com o pedido da conta (é o que mais faz o cliente responder).
+        </p>
+
+        {/* Placar */}
+        <div className="rounded-lg border border-[--border] overflow-hidden">
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 text-xs font-medium text-[--muted-foreground] bg-[--muted]">
+            <span>Variação</span><span className="text-right w-16">Enviadas</span><span className="text-right w-20">Responderam</span><span className="text-right w-16">Taxa</span>
+          </div>
+          {wVars.map((v) => {
+            const p = placarDe(v.id)
+            const sent = p?.sent ?? 0, replied = p?.replied ?? 0
+            const rate = p && p.sent > 0 ? Math.round(p.rate * 100) : null
+            return (
+              <div key={v.id} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 text-sm border-t border-[--border] items-center">
+                <span className="truncate flex items-center gap-1">
+                  {melhorId === v.id && <span title="Campeã até agora">🏆</span>}
+                  <span className={v.enabled !== false ? '' : 'opacity-40 line-through'}>{v.id}</span>
+                </span>
+                <span className="text-right w-16 tabular-nums">{sent}</span>
+                <span className="text-right w-20 tabular-nums">{replied}</span>
+                <span className="text-right w-16 tabular-nums font-medium">{rate == null ? '—' : `${rate}%`}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Editor das variações */}
+        <div className="space-y-3">
+          {wVars.map((v, i) => (
+            <div key={v.id} className="rounded-lg border border-[--border] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input type="checkbox" checked={v.enabled !== false} onChange={() => toggleVar(i)} />
+                  {v.id} {v.enabled === false && <span className="text-xs text-[--muted-foreground]">(desativada)</span>}
+                </label>
+                <button type="button" onClick={() => removeVar(i)} title="Remover variação"
+                  className="px-2 py-1 rounded-lg border border-[--border] text-xs text-red-600 hover:bg-red-50 transition">✕</button>
+              </div>
+              <textarea value={v.text} onChange={(e) => setVarText(i, e.target.value)} rows={3}
+                placeholder="{SAUDACAO}, {nome}! ... me diz quanto vem sua conta de luz que já te mostro a economia ⚡"
+                className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:ring-2 focus:ring-[--ring]" />
+            </div>
+          ))}
+          <div className="flex gap-2">
+            <button type="button" onClick={addVar}
+              className="px-3 py-1.5 rounded-lg border border-[--border] text-sm hover:bg-[--muted] transition">+ Adicionar variação</button>
+            <button type="button" onClick={resetVars}
+              className="px-3 py-1.5 rounded-lg border border-[--border] text-sm text-[--muted-foreground] hover:bg-[--muted] transition">Restaurar padrão</button>
+          </div>
         </div>
       </section>
 

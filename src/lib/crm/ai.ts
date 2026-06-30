@@ -97,18 +97,22 @@ export async function extractBillFromImage(
   cfg: AiConfig,
   imageBase64: string,
   imageMediaType = 'image/jpeg',
-): Promise<{ kwh: number | null; valor: number | null; paineis: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean }> {
-  const fallback = { kwh: null, valor: null, paineis: null, medidor: null, distribuidora: null, isIdentityDoc: false }
-  const prompt = `Você é um leitor de documentos e imagens. Analise a imagem e extraia:
-1. consumo em kWh — REGRA IMPORTANTE:
-   • Se a conta tiver um HISTÓRICO DE CONSUMO (tabela com vários meses — ex.: "CONSUMO/kWh", "CONSUMO FATURADO", lista de MAI/26, ABR/26, ...), some o consumo de TODOS os meses visíveis e divida pela quantidade de meses → retorne essa MÉDIA (a média anual) arredondada. NUNCA use só o mês mais recente nem só um mês.
+): Promise<{ kwh: number | null; valor: number | null; paineis: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean; docType: 'bill' | 'identity' | 'other' }> {
+  const fallback = { kwh: null, valor: null, paineis: null, medidor: null, distribuidora: null, isIdentityDoc: false, docType: 'other' as const }
+  const prompt = `Você é um leitor de documentos e imagens. PRIMEIRO classifique o tipo do documento, DEPOIS extraia os dados.
+
+⚠️ REGRA DE OURO: só extraia kWh e valor de CONTA DE LUZ/ENERGIA elétrica (Enel, Light, CPFL, Cemig, etc.) ou de ANÚNCIO/KIT solar. Para QUALQUER outro documento — IPTU, conta de água, conta de telefone/internet, boleto, nota fiscal, recibo, RG/CNH, foto aleatória — retorne kwh:null e valor:null. NUNCA invente um consumo. Se não enxergar claramente "kWh" / "consumo" numa conta de ENERGIA, retorne kwh:null.
+
+Campos:
+1. consumo em kWh — SOMENTE de conta de ENERGIA ou anúncio/kit solar:
+   • Se a conta tiver HISTÓRICO DE CONSUMO (tabela com vários meses — ex.: "CONSUMO/kWh", "CONSUMO FATURADO", MAI/26, ABR/26, ...), some o consumo de TODOS os meses visíveis e divida pela quantidade → retorne a MÉDIA arredondada. NUNCA use só o mês mais recente.
    • Se aparecer só um valor de consumo (um mês), retorne esse valor.
-   • Também serve geração de anúncio/kit de energia solar (ex.: "geração média de 300 kWh/mês").
-2. valor total a pagar em R$ — SOMENTE se for conta de luz/energia (NÃO use o preço de um anúncio/kit aqui)
+   • Anúncio/kit solar (ex.: "geração média de 300 kWh/mês") também vale.
+2. valor total a pagar em R$ — SOMENTE se for conta de luz/energia (NÃO use preço de anúncio/kit, NÃO use valor de IPTU/água/boleto).
 3. paineis: quantidade de painéis/placas/módulos solares que a imagem indica (ex: anúncio "5 PAINÉIS DE 540 W" → 5). null se não houver.
-4. tipo de medidor/ligação: "monofásico", "bifásico" ou "trifásico" — SOMENTE se for conta de luz
-5. nome da distribuidora (Enel, Light, CPFL, Cemig, Copel, Energisa, etc.) — SOMENTE se for conta de luz
-6. docType: "bill" se for conta de energia/luz, "identity" se for RG, CNH, carteira de identidade, CPF físico ou passaporte, "other" para qualquer outro (incluindo anúncios/kits)
+4. tipo de medidor/ligação: "monofásico", "bifásico" ou "trifásico" — SOMENTE se for conta de luz.
+5. nome da distribuidora (Enel, Light, CPFL, Cemig, Copel, Energisa, etc.) — SOMENTE se for conta de luz.
+6. docType: "bill" SOMENTE se for conta de energia/luz; "identity" se for RG, CNH, identidade, CPF físico ou passaporte; "other" para QUALQUER outro (IPTU, água, telefone, boleto, nota, recibo, anúncios/kits, etc.).
 
 Responda SOMENTE com JSON válido, sem texto fora dele:
 {"kwh": number|null, "valor": number|null, "paineis": number|null, "medidor": string|null, "distribuidora": string|null, "docType": "bill"|"identity"|"other"}`
@@ -144,7 +148,7 @@ Responda SOMENTE com JSON válido, sem texto fora dele:
       if (!res.ok) return fallback
       raw = (await res.json()).choices?.[0]?.message?.content ?? ''
     }
-    const parsed = extractJson<typeof fallback & { docType?: string }>(raw)
+    const parsed = extractJson<{ kwh?: unknown; valor?: unknown; paineis?: unknown; medidor?: unknown; distribuidora?: unknown; docType?: string }>(raw)
     if (!parsed) return fallback
     return {
       kwh:           typeof parsed.kwh === 'number'          ? parsed.kwh           : null,
@@ -153,6 +157,7 @@ Responda SOMENTE com JSON válido, sem texto fora dele:
       medidor:       typeof parsed.medidor === 'string'      ? parsed.medidor       : null,
       distribuidora: typeof parsed.distribuidora === 'string' ? parsed.distribuidora : null,
       isIdentityDoc: parsed.docType === 'identity',
+      docType:       parsed.docType === 'bill' ? 'bill' : parsed.docType === 'identity' ? 'identity' : 'other',
     }
   } catch { return fallback }
 }

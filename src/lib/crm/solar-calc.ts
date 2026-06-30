@@ -151,6 +151,11 @@ function calcularCore(
   consumoKwh: number,
   opts: { economiaPercent?: number; reajuste?: number } = {},
 ): SolarResult {
+  // 🚫 PISO: nenhum sistema sai abaixo do kit mínimo (R$ 7.670). A fórmula kWh × 20,87 só
+  //    alcança esse valor em ~367 kWh, então consumos menores cairiam abaixo do piso — o que
+  //    não pode acontecer. Abaixo do piso, usa o piso (e payback/parcelas recalculam por ele).
+  valorSistema = Math.max(Math.round(valorSistema), MINIMO_KIT_PRECO)
+
   const economiaPercent = Math.min(100, Math.max(0, opts.economiaPercent ?? ECONOMIA_PERCENT_PADRAO))
   const reajuste = opts.reajuste ?? REAJUSTE_PADRAO
 

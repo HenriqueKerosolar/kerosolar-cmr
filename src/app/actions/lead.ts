@@ -168,6 +168,20 @@ export async function resolveConversation(conversationId: string) {
   revalidatePath('/inbox')
 }
 
+/** Encerra a conversa: some da lista e a automação NÃO traz de volta.
+ *  Cancela follow-ups/reengajamento pendentes. Só reabre quando o cliente
+ *  mandar uma nova mensagem (o motor zera o resolvedAt no inbound). */
+export async function encerrarConversa(conversationId: string) {
+  await verifySession()
+  const conv = await prisma.conversation.update({ where: { id: conversationId }, data: { resolvedAt: new Date() } })
+  await prisma.message.updateMany({ where: { conversationId, direction: 'inbound', isRead: false }, data: { isRead: true } })
+  if (conv.leadId) {
+    await prisma.scheduledAction.updateMany({ where: { leadId: conv.leadId, done: false }, data: { done: true } })
+    await prisma.note.create({ data: { leadId: conv.leadId, type: 'system', content: 'Conversa encerrada pelo atendente (automação pausada até o cliente voltar).' } })
+  }
+  revalidatePath('/inbox')
+}
+
 /** Move o lead para outra etapa (dispara a chamada da nova etapa). */
 export async function moveLeadStage(leadId: string, stageId: string) {
   await verifySession()

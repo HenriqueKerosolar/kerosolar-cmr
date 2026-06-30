@@ -234,6 +234,7 @@ model Conversation {
   @@map("conversations")
 }
 
+
 model Message {
   id             String           @id @default(cuid())
   conversationId String
@@ -342,6 +343,18 @@ model LearnedAnswer {
 }
 
 /// Ações agendadas (chamada da etapa com delay, follow-ups, etc.)
+/// Inscrição de notificação push (Web Push) de um aparelho/navegador do operador.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@map("push_subscriptions")
+}
+
 model ScheduledAction {
   id             String   @id @default(cuid())
   leadId         String
@@ -355,6 +368,27 @@ model ScheduledAction {
 
   @@index([done, runAt])
   @@map("scheduled_actions")
+}
+
+// ─── Templates de mensagem WhatsApp (HSM / fora da janela 24h) ───────────────
+
+/// Template aprovado pela Meta para reengajamento fora da janela de 24h.
+model WhatsappTemplate {
+  id          String    @id @default(cuid())
+  name        String    @unique  // snake_case, usado na API da Meta (ex: chegada_followup)
+  displayName String              // nome legível para exibir no painel
+  category    String    @default("MARKETING") // MARKETING | UTILITY | AUTHENTICATION
+  language    String    @default("pt_BR")
+  bodyText    String    // texto do corpo com variáveis {{1}} {{2}}...
+  variables   Json?     // descrição das variáveis: [{ index: 1, description: "nome do lead" }]
+  actionType  String?   // qual ação usa este template: chegada_followup | reengage | budget_followup | etc.
+  metaStatus  String?   // APPROVED | PENDING | REJECTED | PAUSED (sincronizado com a Meta)
+  metaId      String?   // ID do template na Meta
+  lastSyncAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("whatsapp_templates")
 }
 
 // ─── Agenda de consultorias ───────────────────────────────────────────────────
@@ -387,6 +421,10 @@ model WhatsappAccount {
   qr          String?             // dataURL do QR code atual (quando status = qr)
   lastError   String?
   connectedAt DateTime?
+  // Provedor: "baileys" (não-oficial, QR) ou "cloud" (API oficial WhatsApp Cloud da Meta)
+  provider           String  @default("baileys")
+  cloudPhoneNumberId String?          // ID do número na Cloud API (Phone Number ID)
+  cloudWabaId        String?          // ID da conta WhatsApp Business (WABA)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

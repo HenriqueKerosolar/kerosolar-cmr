@@ -1,0 +1,4 @@
+# Instala o ffmpeg no ambiente (necessário pra converter áudio gravado no navegador
+# (webm/opus) para ogg/opus — formato de "voz" que o WhatsApp aceita).
+[phases.setup]
+aptPkgs = ['ffmpeg']

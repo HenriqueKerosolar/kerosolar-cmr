@@ -102,7 +102,7 @@ export type IngestInput = {
   imageBase64?: string           // imagem enviada pelo cliente (conta de luz, foto etc.)
   imageMediaType?: string
   mediaUrl?: string | null       // anexo do cliente salvo (para visualizar no chat)
-  mediaType?: 'image' | 'video' | 'document' | null
+  mediaType?: 'image' | 'video' | 'document' | 'audio' | null
 }
 
 export type IngestResult = {
@@ -204,10 +204,16 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       data: { leadId: lead.id, type: 'system', content: `Lead criado via ${channel}.` },
     })
   }
-  if (conversation.leadId !== lead.id) {
-    conversation = await prisma.conversation.update({
-      where: { id: conversation.id }, data: { leadId: lead.id },
-    })
+  // Atualiza a conversa: vincula ao lead e ADOTA a conta de origem da mensagem. Assim, quando um
+  // contato antigo (Baileys) escreve agora pela API OFICIAL (cloud), as respostas passam a sair
+  // pela conta cloud — e não pela conta Baileys antiga (que pode estar morta).
+  {
+    const updConv: Record<string, unknown> = {}
+    if (conversation.leadId !== lead.id) updConv.leadId = lead.id
+    if (input.accountId && conversation.accountId !== input.accountId) updConv.accountId = input.accountId
+    if (Object.keys(updConv).length) {
+      conversation = await prisma.conversation.update({ where: { id: conversation.id }, data: updConv })
+    }
   }
 
   // 3.5) DEDUPLICAÇÃO — evita resposta duplicada quando a MESMA mensagem chega 2x
@@ -243,6 +249,19 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // cliente respondeu → cancela checagens pendentes (sem-resposta, follow-up de orçamento
   // e a retomada das 9h — já que ele voltou a falar, não precisa do "bom dia, retomando").
   await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup', 'after_hours_resume'] }, done: false }, data: { done: true } })
+  // 🎯 Cliente respondeu → contabiliza a resposta da variação de saudação (idempotente).
+  if (!isSimulator) { const { registrarResposta } = await import('./greeting'); registrarResposta(lead.id).catch(() => {}) }
+
+  // 🔔 Avisa o operador no celular (push) que chegou mensagem nova do cliente.
+  if (!isSimulator) {
+    const { enviarPush } = await import('./push')
+    enviarPush({
+      title: contact.name || contact.phone || 'Cliente',
+      body: (input.displayText ?? text ?? '').slice(0, 120) || 'Nova mensagem',
+      url: `/leads/${lead.id}`,
+      tag: conversation.id,
+    }).catch(() => {})
+  }
 
   const base: IngestResult = {
     contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
@@ -295,8 +314,16 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       orderBy: { createdAt: 'desc' }, select: { createdAt: true },
     })
     if (ultimaHumana && Date.now() - new Date(ultimaHumana.createdAt).getTime() < MS_INATIVIDADE) {
-      console.log('[engine] operador ativo (<30min) → IA aguarda')
-      return base
+      // EXCEÇÃO: se o cliente mandou o que GERA ORÇAMENTO (consumo em kWh, valor da conta, ou
+      //   foto da conta), a IA libera o orçamento mesmo na pausa. Conversa comum continua aguardando.
+      const { extrairConsumo } = await import('./solar-calc')
+      const c = extrairConsumo(text)
+      const gatilhoOrcamento = !!input.imageBase64 || c.kwh != null || c.reais != null
+      if (!gatilhoOrcamento) {
+        console.log('[engine] operador ativo (<30min) → IA aguarda')
+        return base
+      }
+      console.log('[engine] operador ativo (<30min), mas cliente informou consumo → libera o orçamento')
     }
   }
 
@@ -380,6 +407,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
     // Fora do horário: das 21h às 06h (antes das 6h e a partir das 21h). Entre 6h e 9h já atende normal.
     const isAfterHours = spHour >= 21 || spHour < 6
+    // "amanhã" só é correto quando a retomada será no dia seguinte (spHour >= 21).
+    // Entre meia-noite e 05:59h, a retomada é no MESMO dia às 9h → usar "hoje".
+    const diaRetomada = spHour < 6 ? 'hoje' : 'amanhã'
     const norm = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const { dispatchOutbound } = await import('./flow')
 
@@ -435,7 +465,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         // primeira mensagem fora do horário → recepção + pergunta
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
         const cfg = await prisma.systemConfig.findUnique({ where: { key: 'after_hours_message' } })
-        const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua no horário comercial (a partir das 9h)?`).replace(/\{SAUDACAO\}/g, saud)
+        const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua ${diaRetomada} no horário comercial (a partir das 9h)?`)
+          .replace(/\{SAUDACAO\}/g, saud)
+          .replace(/\{DIA_RETOMADA\}/g, diaRetomada)
+          .replace(/\bamanhã\b/g, diaRetomada)   // corrige configs customizadas que hardcodam "amanhã"
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
         await armarRetomada9h()   // se ficar sem responder, a IA retoma às 9h
@@ -652,12 +685,22 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   if (input.imageBase64 && !consumo.kwh && !consumo.reais) {
     const aiCfg = await loadAiConfig()
     billData = await extractBillFromImage(aiCfg, input.imageBase64, input.imageMediaType ?? 'image/jpeg')
-    if (billData.kwh)             consumo = { kwh: billData.kwh }
-    else if (billData.paineis)    consumo = { kwh: billData.paineis * 60 }  // 1 painel = 60 kWh
-    else if (billData.valor)      consumo = { reais: billData.valor }
-    if (billData.medidor || billData.distribuidora) {
-      const billInfo = [billData.medidor, billData.distribuidora].filter(Boolean).join(' | ')
-      text = `${text}\n[Dados lidos da foto: ${billInfo}]`.trim()
+    // 🚫 SÓ gera orçamento de CONTA DE LUZ real (docType 'bill') ou de ANÚNCIO/KIT solar (tem painéis).
+    //    IPTU, conta de água, boleto, RG, foto aleatória (docType 'other'/'identity' sem painéis) → NÃO
+    //    usar nenhum número lido — assim a IA não "inventa" consumo e pede a conta de luz certa.
+    const ehContaOuKit = billData.docType === 'bill' || billData.paineis != null
+    if (ehContaOuKit) {
+      if (billData.kwh)             consumo = { kwh: billData.kwh }
+      else if (billData.paineis)    consumo = { kwh: billData.paineis * 60 }  // 1 painel = 60 kWh
+      else if (billData.valor)      consumo = { reais: billData.valor }
+      if (billData.medidor || billData.distribuidora) {
+        const billInfo = [billData.medidor, billData.distribuidora].filter(Boolean).join(' | ')
+        text = `${text}\n[Dados lidos da foto: ${billInfo}]`.trim()
+      }
+    } else {
+      // Documento que NÃO é conta de luz → avisa a IA pra pedir a conta certa, sem calcular nada.
+      const oQ = billData.isIdentityDoc ? 'um documento de identidade' : 'um documento que não é conta de luz (ex.: IPTU, água, boleto)'
+      text = `${text}\n[A imagem enviada é ${oQ} — NÃO gere orçamento; peça gentilmente a CONTA DE LUZ/ENERGIA (ou o consumo em kWh).]`.trim()
     }
   }
 
@@ -807,6 +850,39 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     learned,
     lead: (lead.customFields as Record<string, unknown> | null) ?? null,
   })
+
+  // 📚 Pedido de ebook/guia → envia o PDF Anti-Cilada automaticamente
+  const normEbook = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const isEbookRequest = /(e-?book|guia|material|apostila|anti.?cilada|manual.*solar|pdf|catalogo)/.test(normEbook)
+  if (isEbookRequest && (aiOn || stageAuto)) {
+    const { dispatchOutbound } = await import('./flow')
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://kerosolar-crm-production.up.railway.app').replace(/\/$/, '')
+    const ebookUrl = `${appUrl}/downloads/ebook-kerosolar.pdf`
+    const nomeCliente = contact.name ? ` ${contact.name.split(' ')[0]}` : ''
+    const ebookMsg = result.reply || `Aqui está${nomeCliente}! 😊 Preparei esse guia exclusivo pra você entender tudo sobre energia solar e não cair em armadilhas do mercado. Qualquer dúvida, é só me chamar! ☀️`
+    await simularDigitacao(ebookMsg)
+    await dispatchOutbound(conversation.id, ebookMsg, undefined, 'ai')
+    // Envia o PDF apenas em canais que suportam (WhatsApp — Baileys ou Cloud API)
+    if (conversation.channel === 'whatsapp' && conversation.accountId) {
+      try {
+        const account = await prisma.whatsappAccount.findUnique({ where: { id: conversation.accountId } })
+        let waId: string | null = null
+        if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+          const toPhone = contact.whatsappId || contact.phone || conversation.externalId || ''
+          if (toPhone) {
+            const cloud = await import('./cloud-api')
+            waId = await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, ebookUrl, 'document', 'Guia-Anti-Cilada-KeroSolar-2026.pdf')
+          }
+        } else if (contact.whatsappId) {
+          const wa = await import('./whatsapp')
+          const jid = (conversation.chatJid && conversation.chatJid.includes('@')) ? conversation.chatJid : contact.whatsappId
+          waId = await wa.sendMedia(conversation.accountId, jid, { url: ebookUrl, type: 'document', fileName: 'Guia-Anti-Cilada-KeroSolar-2026.pdf' })
+        }
+        await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: '[📄 Guia Anti-Cilada KeroSolar 2026.pdf]', mediaUrl: ebookUrl, mediaType: 'document', ...(waId ? { externalId: waId } : {}) } })
+      } catch (e) { console.error('[engine] ebook sendMedia', e) }
+    }
+    return { ...base, reply: null, aiHandled: true }
+  }
 
   // Spam/oferta de produto a nós → responde e descarta (não mantém ativo no CRM)
   if (result.discardLead) {

@@ -52,10 +52,11 @@ export async function moveLeadToStage(leadId: string, targetStageId: string, rea
 export async function dispatchOutbound(
   conversationId: string,
   text: string,
-  media?: { url: string; type: 'image' | 'video' | 'document' },
+  media?: { url: string; type: 'image' | 'video' | 'document' | 'audio' },
   senderType: 'system' | 'human' | 'ai' = 'system',
   senderUserId?: string,
   skipDedup = false,   // simulações que o cliente pede de novo podem repetir o mesmo texto
+  templateActionType?: string, // se informado, usa template aprovado como fallback quando janela 24h fecha
 ) {
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } })
   if (!conv) return
@@ -91,20 +92,59 @@ export async function dispatchOutbound(
 
   // Despacha pro canal de origem
   try {
-    if (conv.channel === 'whatsapp' && conv.accountId && (conv.chatJid || conv.contact?.whatsappId)) {
-      const wa = await import('./whatsapp')
-      // usa o endereço COMPLETO da conversa (ex: ...@lid) quando houver — senão o número do contato
-      const jid = (conv.chatJid && conv.chatJid.includes('@')) ? conv.chatJid : conv.contact!.whatsappId!
-      const waId = media
-        ? await wa.sendMedia(conv.accountId, jid, { url: media.url, type: media.type, caption: text })
-        : await wa.sendText(conv.accountId, jid, text)
-      // guarda o ID do WhatsApp na mensagem pra casar com o recibo de leitura (✓✓ azul)
-      if (waId) await prisma.message.update({ where: { id: createdMsg.id }, data: { externalId: waId } }).catch(() => {})
+    if (conv.channel === 'whatsapp' && conv.accountId) {
+      const account = await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } })
+      if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+        // 📲 API OFICIAL (Meta Cloud): envia pelo número do contato (a Cloud API não usa JID).
+        const toPhone = conv.contact?.whatsappId || conv.contact?.phone || conv.externalId || ''
+        if (toPhone) {
+          const cloud = await import('./cloud-api')
+          let waId: string | null = null
+          try {
+            waId = media
+              ? await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, media.url, media.type, text)
+              : await cloud.sendCloudText(account.cloudPhoneNumberId, toPhone, text)
+          } catch (sendErr) {
+            // Janela de 24h fechada → tenta template configurado para este tipo de ação
+            if (sendErr instanceof cloud.CloudApiError && sendErr.is24hWindow && templateActionType) {
+              const tmpl = await prisma.whatsappTemplate.findFirst({
+                where: { actionType: templateActionType, metaStatus: 'APPROVED' },
+              })
+              if (tmpl) {
+                // Injeta o primeiro nome do lead como {{1}} se o template usa variável
+                const lead = conv.leadId
+                  ? await prisma.lead.findUnique({ where: { id: conv.leadId }, include: { contact: true } })
+                  : null
+                const firstName = lead?.contact?.name?.split(' ')[0] || 'Cliente'
+                const components = tmpl.bodyText.includes('{{1}}')
+                  ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }]
+                  : []
+                waId = await cloud.sendCloudTemplate(account.cloudPhoneNumberId, toPhone, tmpl.name, tmpl.language, components)
+                console.log(`[flow dispatch] janela 24h fechada — enviou template "${tmpl.name}" para ${toPhone}`)
+              } else {
+                console.warn(`[flow dispatch] janela 24h fechada e nenhum template APPROVED para "${templateActionType}" — mensagem não enviada`)
+              }
+            } else {
+              throw sendErr // re-lança para o catch externo enfileirar redeliver
+            }
+          }
+          if (waId) await prisma.message.update({ where: { id: createdMsg.id }, data: { externalId: waId } }).catch(() => {})
+        }
+      } else if (conv.chatJid || conv.contact?.whatsappId) {
+        // 🟢 BAILEYS (não-oficial): envia pelo JID completo (ex: ...@lid) ou número do contato.
+        const wa = await import('./whatsapp')
+        const jid = (conv.chatJid && conv.chatJid.includes('@')) ? conv.chatJid : conv.contact!.whatsappId!
+        const waId = media
+          ? await wa.sendMedia(conv.accountId, jid, { url: media.url, type: media.type === 'audio' ? 'document' : media.type, caption: text })
+          : await wa.sendText(conv.accountId, jid, text)
+        // guarda o ID do WhatsApp na mensagem pra casar com o recibo de leitura (✓✓ azul)
+        if (waId) await prisma.message.update({ where: { id: createdMsg.id }, data: { externalId: waId } }).catch(() => {})
+      }
     } else if (conv.channel === 'facebook' || conv.channel === 'instagram') {
       const meta = await import('./meta')
       const recipient = conv.channel === 'facebook' ? conv.contact?.facebookId : conv.contact?.instagramId
       if (recipient) {
-        if (media) await meta.sendMetaMedia(conv.channel, recipient, media.url, media.type === 'document' ? 'file' : media.type)
+        if (media) await meta.sendMetaMedia(conv.channel, recipient, media.url, (media.type === 'document' || media.type === 'audio') ? 'file' : media.type)
         else if (text) await meta.sendMetaMessage(conv.channel, recipient, text)
       }
     }
@@ -143,9 +183,11 @@ export async function enterStage(leadId: string, stageId: string) {
     data: { done: true },
   }).catch(() => {})
 
-  // Cliente recusou bot → nenhuma automação dispara
-  const leadCheck = await prisma.lead.findUnique({ where: { id: leadId }, select: { humanOnly: true } })
-  if (leadCheck?.humanOnly) return
+  // IA pausada (operador assumiu → aiEnabled=false) OU cliente recusou bot (humanOnly) →
+  // nenhuma automação dispara, INCLUSIVE a mensagem de abertura da etapa. Mover de etapa com a
+  // IA desligada NÃO pode fazer o bot voltar a mandar mensagem (ex.: recepção de "Já é cliente").
+  const leadCheck = await prisma.lead.findUnique({ where: { id: leadId }, select: { humanOnly: true, aiEnabled: true } })
+  if (leadCheck?.humanOnly || leadCheck?.aiEnabled === false) return
 
   const stage = await prisma.stage.findUnique({ where: { id: stageId } })
   if (!stage || !stage.botEnabled) return
@@ -168,9 +210,25 @@ export async function enterStage(leadId: string, stageId: string) {
     const diasMatch = stage.name.match(/(\d+)\s*dias?\s*depois/i)
     if (!isSimulator && (isRepescagem || diasMatch)) {
       const dias = diasMatch ? parseInt(diasMatch[1], 10) : 0
-      await prisma.scheduledAction.updateMany({ where: { leadId, type: 'reengage', done: false }, data: { done: true } })
+      // 🕒 A régua conta a partir do ORÇAMENTO: "15 dias depois" = 15 dias APÓS o orçamento
+      //    (datas fixas, não acumuladas). Âncora = 1ª mensagem do orçamento ("Sistema completo");
+      //    fallback = criação do lead. Repescagem (dias=0) dispara na hora.
+      let alvo = Date.now()
+      if (dias > 0) {
+        const orc = await prisma.message.findFirst({
+          where: { conversationId: conv.id, direction: 'outbound', content: { contains: 'Sistema completo' } },
+          orderBy: { createdAt: 'asc' }, select: { createdAt: true },
+        })
+        const base = orc?.createdAt ?? (await prisma.lead.findUnique({ where: { id: leadId }, select: { createdAt: true } }))?.createdAt
+        alvo = (base ? new Date(base).getTime() : Date.now()) + dias * 24 * 60 * 60 * 1000
+      }
+      // Se a data-alvo já passou (lead chegou atrasado na etapa), dispara logo — nunca no passado.
+      const runAt = new Date(Math.max(alvo, Date.now() + 60 * 1000))
+      // O reengajamento SUBSTITUI o lembrete de orçamento → cancela pendências pra não enviar
+      //    duas mensagens "no mesmo sentido" (validade/follow-up + repescagem) ao mesmo tempo.
+      await prisma.scheduledAction.updateMany({ where: { leadId, type: { in: ['reengage', 'budget_validity', 'budget_followup'] }, done: false }, data: { done: true } })
       await prisma.scheduledAction.create({
-        data: { leadId, conversationId: conv.id, stageId, type: 'reengage', payload: {} as object, runAt: new Date(Date.now() + dias * 24 * 60 * 60 * 1000) },
+        data: { leadId, conversationId: conv.id, stageId, type: 'reengage', payload: {} as object, runAt },
       }).catch(() => {})
       return
     }
@@ -251,31 +309,22 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
   const stage = await prisma.stage.findUnique({ where: { id: stageId } })
   if (!stage?.botEnabled) return
 
-  const { respeitaHorarioGlobal, nextAllowedSlot, JANELA_PADRAO } = await import('./schedule-window')
-  const now = Date.now()
-  const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date(now)), JANELA_PADRAO)
-
-  // Saudação baseada na HORA REAL do envio (agora ou o horário agendado), em Brasília.
-  const sendHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(slot))
+  // Saudação baseada na HORA REAL de agora (Brasília).
+  const sendHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
   const saud = sendHour < 12 ? 'Bom dia' : sendHour < 18 ? 'Boa tarde' : 'Boa noite'
 
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
   const nome = lead?.contact?.name?.split(' ')[0] ?? ''
-  const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
-  const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`)
-    .replace(/\{SAUDACAO\}/g, saud).replace(/\{nome\}/gi, nome)
+  // 🎯 Saudação dinâmica (teste A/B com aprendizado): escolhe a variação que mais faz o
+  // cliente responder e contabiliza o envio. Marca a variação no lead pra medir a resposta.
+  const { escolherSaudacao } = await import('./greeting')
+  const { text: msg } = await escolherSaudacao(leadId, saud, nome)
 
-  if (slot.getTime() <= now + 1500) {
-    // horário comercial → envia agora e arma o "sem resposta" da etapa
-    await dispatchOutbound(conversationId, msg, undefined, 'ai')
-    const { scheduleNoReply } = await import('./flow-blocks')
-    await scheduleNoReply(leadId, conversationId, stageId).catch(() => {})
-  } else {
-    // fora do horário → agenda a saudação pro próximo horário comercial (o scheduler envia)
-    await prisma.scheduledAction.create({
-      data: { leadId, conversationId, stageId, type: 'send_message', payload: { text: msg } as object, runAt: slot },
-    })
-  }
+  // 📤 Lead criado MANUALMENTE = ação deliberada do operador → envia AGORA, mesmo fora da
+  //    janela 9h–18h. (O lead automático/inbound continua respeitando o horário comercial.)
+  await dispatchOutbound(conversationId, msg, undefined, 'ai')
+  const { scheduleNoReply } = await import('./flow-blocks')
+  await scheduleNoReply(leadId, conversationId, stageId).catch(() => {})
 }
 
 /**
@@ -313,6 +362,54 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   return true
 }
 
+/**
+ * 📣 DISPARO EM MASSA por TEMPLATE (API oficial). Envia um template aprovado pra TODOS os contatos
+ *    de WhatsApp, espaçando os envios (anti-flood/rate-limit) e respeitando a lista de opt-out.
+ *    Se o template ainda não estiver APROVADO pela Meta, reagenda +1h (tenta de novo depois).
+ *    payload: { templateName, lang? }
+ */
+async function enviarBroadcastTemplate(a: { id: string; payload: unknown }): Promise<{ rescheduled?: boolean } | void> {
+  const pl = (a.payload as { templateName?: string; lang?: string }) ?? {}
+  if (!pl.templateName) return
+  const account = await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+  if (!account?.cloudPhoneNumberId) { console.error('[broadcast] sem conta cloud configurada'); return }
+  const { sendCloudTemplate } = await import('./cloud-api')
+  const { numeroNaLista } = await import('./lists')
+
+  // 1) Só dispara se o template já foi APROVADO pela Meta. Senão, reagenda +1h e tenta de novo.
+  try {
+    if (account.cloudWabaId && process.env.WHATSAPP_CLOUD_TOKEN) {
+      const res = await fetch(`https://graph.facebook.com/v23.0/${account.cloudWabaId}/message_templates?name=${pl.templateName}&access_token=${process.env.WHATSAPP_CLOUD_TOKEN}`)
+      const d = await res.json() as { data?: Array<{ status?: string }> }
+      const st = d?.data?.[0]?.status
+      if (st && st !== 'APPROVED') {
+        console.log(`[broadcast] template "${pl.templateName}" está ${st} (não aprovado) — reagendando +1h`)
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { runAt: new Date(Date.now() + 60 * 60 * 1000) } }).catch(() => {})
+        return { rescheduled: true }
+      }
+    }
+  } catch (e) { console.error('[broadcast] erro checando aprovação (segue):', e) }
+
+  // 2) Alvos: todas as conversas de whatsapp com telefone, exceto quem está na lista de não-receber.
+  const convs = await prisma.conversation.findMany({ where: { channel: 'whatsapp' }, include: { contact: true } })
+  let ok = 0, fail = 0, skip = 0
+  for (const c of convs) {
+    const phone = c.contact?.whatsappId || c.contact?.phone
+    if (!phone) { skip++; continue }
+    try { if (await numeroNaLista(phone, 'no_receive')) { skip++; continue } } catch { /* segue */ }
+    try {
+      const id = await sendCloudTemplate(account.cloudPhoneNumberId, phone, pl.templateName, pl.lang || 'pt_BR')
+      if (id) {
+        ok++
+        await prisma.message.create({ data: { conversationId: c.id, direction: 'outbound', senderType: 'ai', content: '📣 Mensagem de retomada de atendimento (disparo em massa).', externalId: id } }).catch(() => {})
+        await prisma.conversation.update({ where: { id: c.id }, data: { lastMessageAt: new Date() } }).catch(() => {})
+      } else fail++
+    } catch { fail++ }
+    await new Promise((r) => setTimeout(r, 1500)) // espaça ~1,5s por envio (anti-flood)
+  }
+  console.log(`[broadcast] template "${pl.templateName}": ${ok} enviados, ${fail} falhas, ${skip} pulados (de ${convs.length} conversas)`)
+}
+
 /** Processa as ações agendadas vencidas. Chamado pelo poller. */
 export async function processDueActions() {
   const due = await prisma.scheduledAction.findMany({
@@ -336,6 +433,15 @@ export async function processDueActions() {
           await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
           continue
         }
+        // 🔒 Conversa ENCERRADA pelo atendente (resolvedAt) → automação não reabre.
+        //    Só volta quando o cliente escrever (o motor zera o resolvedAt no inbound).
+        if (a.conversationId) {
+          const cv = await prisma.conversation.findUnique({ where: { id: a.conversationId }, select: { resolvedAt: true } })
+          if (cv?.resolvedAt) {
+            await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+            continue
+          }
+        }
       }
 
       // ⏰ Mensagens automáticas ENTRE ETAPAS só saem em HORÁRIO COMERCIAL (dia útil + janela
@@ -358,6 +464,11 @@ export async function processDueActions() {
       if (a.type === 'ac_followup') {
         await handleAcFollowup(a)
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      if (a.type === 'broadcast_template') {
+        const res = await enviarBroadcastTemplate(a)
+        if (!res?.rescheduled) await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
       if (a.type === 'flow_continue') {
@@ -407,12 +518,23 @@ export async function processDueActions() {
         let ok = false
         let waId: string | null = null
         try {
-          if (conv?.channel === 'whatsapp' && conv.accountId && conv.contact?.whatsappId) {
-            const wa = await import('./whatsapp')
-            const jid = conv.contact.whatsappId
-            if (p.mediaUrl) waId = await wa.sendMedia(conv.accountId, jid, { url: p.mediaUrl, type: p.mediaType ?? 'image', caption: p.text })
-            else if (p.text) waId = await wa.sendText(conv.accountId, jid, p.text)
-            ok = true
+          if (conv?.channel === 'whatsapp' && conv.accountId) {
+            const account = await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } })
+            if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+              const toPhone = conv.contact?.whatsappId || conv.contact?.phone || conv.externalId || ''
+              if (toPhone) {
+                const cloud = await import('./cloud-api')
+                if (p.mediaUrl) waId = await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, p.mediaUrl, p.mediaType ?? 'image', p.text)
+                else if (p.text) waId = await cloud.sendCloudText(account.cloudPhoneNumberId, toPhone, p.text)
+                ok = true
+              }
+            } else if (conv.contact?.whatsappId) {
+              const wa = await import('./whatsapp')
+              const jid = conv.contact.whatsappId
+              if (p.mediaUrl) waId = await wa.sendMedia(conv.accountId, jid, { url: p.mediaUrl, type: p.mediaType ?? 'image', caption: p.text })
+              else if (p.text) waId = await wa.sendText(conv.accountId, jid, p.text)
+              ok = true
+            }
           }
         } catch { ok = false }
         // Após reentrega bem-sucedida, salva o externalId para evitar futuros redeliveries
@@ -451,7 +573,7 @@ export async function processDueActions() {
           if (step === 1) {
             const nome = lead.contact?.name?.split(' ')[0] ?? ''
             const msg = `${nome ? nome + ', ' : ''}quer que eu já prepare seu orçamento? 😊 É só me mandar a foto da sua conta de luz, ou me dizer seu consumo médio em kWh ou o valor médio da conta.`
-            await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'chegada_followup')
             await prisma.scheduledAction.create({ data: { leadId: a.leadId, conversationId: a.conversationId, stageId: a.stageId, type: 'chegada_followup', payload: { step: 2 } as object, runAt: new Date(Date.now() + 2 * 60 * 60 * 1000) } }).catch(() => {})
           } else {
             const target = await prisma.stage.findFirst({ where: { name: { equals: 'Repescagem', mode: 'insensitive' } } })
@@ -514,7 +636,7 @@ export async function processDueActions() {
           const { gerarMensagemReengajamento } = await import('./reengage')
           const msg = await gerarMensagemReengajamento(a.leadId, a.conversationId)
           if (msg) {
-            await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'reengage')
             // arma o "sem resposta" da etapa (Repescagem → 15 dias depois em 24h)
             if (a.stageId) {
               const { scheduleNoReply } = await import('./flow-blocks')
@@ -593,7 +715,7 @@ async function handleBudgetFollowup(a: { leadId: string; conversationId: string;
   const cfg = await prisma.systemConfig.findUnique({ where: { key: 'budget_followup_message' } })
   const nome = lead.contact?.name?.split(' ')[0] ?? ''
   const msg = (cfg?.value || DEFAULT_BUDGET_FOLLOWUP).replace(/\{nome\}/gi, nome)
-  await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+  await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'budget_followup')
 }
 
 /** Fallback de AC: cliente não informou as horas em 30 min → manda 2 orçamentos (sem AC e com AC 8h). */
