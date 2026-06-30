@@ -69,6 +69,9 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [editText, setEditText] = useState('')
   const [pastedFile, setPastedFile] = useState<File | null>(null)
   const [pastedPreview, setPastedPreview] = useState<string | null>(null)
+  const [tplOpen, setTplOpen] = useState(false)
+  const [tplList, setTplList] = useState<{ id: string; displayName: string; bodyText: string; actionType: string | null }[]>([])
+  const [tplSending, setTplSending] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -161,6 +164,32 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
       setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
       try { await sendManualMessage(lead.id, t); await poll() } finally { setSending(false) }
     }
+  }
+
+  async function abrirTemplates() {
+    if (tplOpen) { setTplOpen(false); return }
+    if (tplList.length === 0) {
+      const res = await fetch('/api/templates')
+      const data = await res.json() as { templates?: { id: string; displayName: string; bodyText: string; metaStatus: string | null; actionType: string | null }[] }
+      setTplList((data.templates ?? []).filter(t => (t.metaStatus ?? '').toUpperCase() === 'APPROVED'))
+    }
+    setTplOpen(true)
+  }
+
+  async function enviarTemplate(tplId: string, bodyText: string) {
+    setTplSending(tplId)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/send-template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId: tplId }),
+      })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!data.ok) { alert(data.error ?? 'Erro ao enviar template'); return }
+      setMessages(m => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: bodyText, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
+      setTplOpen(false)
+      await poll()
+    } finally { setTplSending(null) }
   }
 
   async function melhorarComIA() {
@@ -303,6 +332,29 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         </div>
 
         <div className="border-t border-[--border] p-3 space-y-2">
+          {/* Painel de templates */}
+          {tplOpen && (
+            <div className="rounded-xl border border-[--border] bg-[--card] overflow-hidden">
+              <div className="px-3 py-2 border-b border-[--border] flex items-center justify-between">
+                <p className="text-xs font-semibold">📋 Escolha um template para enviar</p>
+                <button onClick={() => setTplOpen(false)} className="text-xs text-[--muted-foreground] hover:text-[--foreground]">✕</button>
+              </div>
+              {tplList.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-[--muted-foreground] text-center">Nenhum template aprovado ainda. Aguarde a aprovação da Meta.</p>
+              ) : (
+                <div className="max-h-52 overflow-y-auto divide-y divide-[--border]">
+                  {tplList.map(t => (
+                    <button key={t.id} onClick={() => enviarTemplate(t.id, t.bodyText)} disabled={tplSending === t.id}
+                      className="w-full text-left px-3 py-2.5 hover:bg-[--accent] transition-colors disabled:opacity-50">
+                      <p className="text-xs font-semibold">{t.displayName}</p>
+                      <p className="text-[11px] text-[--muted-foreground] mt-0.5 line-clamp-2">{t.bodyText.replace('{{1}}', lead.contact?.name?.split(' ')[0] ?? 'Cliente')}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 items-center">
             {/* Anexar documento/imagem — só no envio real (não no modo teste) */}
             <input ref={fileRef} type="file" className="hidden"
@@ -313,6 +365,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 title="Anexar documento ou imagem"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-[--input] text-lg hover:bg-[--accent] disabled:opacity-50">
                 {uploading ? '⏳' : '📎'}
+              </button>
+            )}
+            {!testMode && (
+              <button onClick={abrirTemplates} title="Enviar template aprovado"
+                className={`shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border text-lg hover:bg-[--accent] transition-colors ${tplOpen ? 'border-[--primary] bg-[--primary]/10' : 'border-[--input]'}`}>
+                📋
               </button>
             )}
             <div className="flex-1 flex flex-col gap-1">
