@@ -247,6 +247,7 @@ model Message {
   mediaType      String?
   externalId     String?
   isRead         Boolean          @default(false)
+  deliveredAt    DateTime?        // ✓✓ entregue ao celular do cliente
   readAt         DateTime?        // ✓✓ azul do WhatsApp (lido pelo cliente) — para métricas de "visualizado"
   createdAt      DateTime         @default(now())
 

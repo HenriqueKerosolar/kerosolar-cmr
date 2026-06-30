@@ -8,7 +8,7 @@ import {
   sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage,
 } from '@/app/actions/lead'
 
-type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
+type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null }
 
 // Data e hora no horário de Brasília (DD/MM/AAAA HH:mm)
 function horaBrasilia(iso: string): string {
@@ -49,6 +49,14 @@ const ACTION_LABELS: Record<string, string> = {
   redeliver: '🔄 Reenvio de mensagem',
 }
 const actionLabel = (t: string) => ACTION_LABELS[t] ?? `⚙️ ${t}`
+
+function msgTick(m: Msg) {
+  if (m.direction !== 'outbound') return null
+  if (m.readAt)      return <span title="Lido" className="text-blue-400 text-[11px]">✓✓</span>
+  if (m.deliveredAt) return <span title="Entregue" className="text-[--muted-foreground] text-[11px]">✓✓</span>
+  if (m.externalId)  return <span title="Enviado" className="text-[--muted-foreground] text-[11px]">✓</span>
+  return <span title="Aguardando" className="text-[--muted-foreground] text-[11px] opacity-50">⏳</span>
+}
 
 const fmtBRL = (n?: unknown) => typeof n === 'number' ? n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'
 const channelIcon: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
@@ -322,7 +330,10 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                     return <a href={u} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs underline mb-1">📎 Abrir arquivo</a>
                   })()}
                   <WhatsAppText text={m.content} />
-                  <div className={`text-[10px] mt-1 ${isIn ? 'text-[--muted-foreground]' : 'opacity-70'} text-right`}>{horaBrasilia(m.createdAt)}</div>
+                  <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isIn ? 'text-[--muted-foreground]' : 'opacity-70'}`}>
+                    <span>{horaBrasilia(m.createdAt)}</span>
+                    {msgTick(m)}
+                  </div>
                 </div>
                 )}
               </div>

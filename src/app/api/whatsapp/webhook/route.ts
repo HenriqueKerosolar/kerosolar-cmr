@@ -68,13 +68,19 @@ export async function POST(req: NextRequest) {
           change?.field, value?.metadata?.phone_number_id, value?.messages?.length || 0, value?.statuses?.length || 0)
         const phoneNumberId = value?.metadata?.phone_number_id as string | undefined
 
-        // Recibos de entrega/leitura (statuses) → atualiza readAt na mensagem
+        // Recibos de entrega/leitura (statuses) → atualiza deliveredAt / readAt na mensagem
         if (change?.field === 'messages' && value?.statuses?.length) {
           for (const st of value.statuses as { id: string; status: string }[]) {
-            if (st.status === 'read' && st.id) {
+            if (!st.id) continue
+            if (st.status === 'delivered') {
               await prisma.message.updateMany({
-                where: { externalId: st.id, readAt: null },
-                data: { readAt: new Date() },
+                where: { externalId: st.id, deliveredAt: null },
+                data: { deliveredAt: new Date() },
+              }).catch(() => {})
+            } else if (st.status === 'read') {
+              await prisma.message.updateMany({
+                where: { externalId: st.id },
+                data: { readAt: new Date(), deliveredAt: new Date() },
               }).catch(() => {})
             }
           }
