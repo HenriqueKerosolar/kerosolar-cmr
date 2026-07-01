@@ -94,7 +94,13 @@ export async function dispatchOutbound(
   try {
     if (conv.channel === 'whatsapp' && conv.accountId) {
       const account = await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } })
-      if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+      // Prioridade: Cloud API (oficial). Se a conta vinculada à conversa for Baileys, ainda assim
+      // procura uma conta cloud disponível — isso garante que conversas antigas (criadas quando o
+      // sistema usava Baileys) continuem funcionando após a migração para Cloud API.
+      const cloudAccount = (account?.provider === 'cloud' && account.cloudPhoneNumberId)
+        ? account
+        : await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+      if (cloudAccount?.cloudPhoneNumberId) {
         // 📲 API OFICIAL (Meta Cloud): envia pelo número do contato (a Cloud API não usa JID).
         const toPhone = conv.contact?.whatsappId || conv.contact?.phone || conv.externalId || ''
         if (toPhone) {
@@ -102,8 +108,8 @@ export async function dispatchOutbound(
           let waId: string | null = null
           try {
             waId = media
-              ? await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, media.url, media.type, text)
-              : await cloud.sendCloudText(account.cloudPhoneNumberId, toPhone, text)
+              ? await cloud.sendCloudMedia(cloudAccount.cloudPhoneNumberId, toPhone, media.url, media.type, text)
+              : await cloud.sendCloudText(cloudAccount.cloudPhoneNumberId, toPhone, text)
           } catch (sendErr) {
             // Janela de 24h fechada → tenta template configurado para este tipo de ação
             if (sendErr instanceof cloud.CloudApiError && sendErr.is24hWindow && templateActionType) {
@@ -119,7 +125,7 @@ export async function dispatchOutbound(
                 const components = tmpl.bodyText.includes('{{1}}')
                   ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }]
                   : []
-                waId = await cloud.sendCloudTemplate(account.cloudPhoneNumberId, toPhone, tmpl.name, tmpl.language, components)
+                waId = await cloud.sendCloudTemplate(cloudAccount.cloudPhoneNumberId, toPhone, tmpl.name, tmpl.language, components)
                 console.log(`[flow dispatch] janela 24h fechada — enviou template "${tmpl.name}" para ${toPhone}`)
               } else {
                 console.warn(`[flow dispatch] janela 24h fechada e nenhum template APPROVED para "${templateActionType}" — mensagem não enviada`)
@@ -131,7 +137,7 @@ export async function dispatchOutbound(
           if (waId) await prisma.message.update({ where: { id: createdMsg.id }, data: { externalId: waId } }).catch(() => {})
         }
       } else if (conv.chatJid || conv.contact?.whatsappId) {
-        // 🟢 BAILEYS (não-oficial): envia pelo JID completo (ex: ...@lid) ou número do contato.
+        // 🟢 BAILEYS (não-oficial): fallback quando não há conta cloud configurada.
         const wa = await import('./whatsapp')
         const jid = (conv.chatJid && conv.chatJid.includes('@')) ? conv.chatJid : conv.contact!.whatsappId!
         const waId = media
@@ -520,12 +526,15 @@ export async function processDueActions() {
         try {
           if (conv?.channel === 'whatsapp' && conv.accountId) {
             const account = await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } })
-            if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+            const cloudAccount = (account?.provider === 'cloud' && account.cloudPhoneNumberId)
+              ? account
+              : await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+            if (cloudAccount?.cloudPhoneNumberId) {
               const toPhone = conv.contact?.whatsappId || conv.contact?.phone || conv.externalId || ''
               if (toPhone) {
                 const cloud = await import('./cloud-api')
-                if (p.mediaUrl) waId = await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, p.mediaUrl, p.mediaType ?? 'image', p.text)
-                else if (p.text) waId = await cloud.sendCloudText(account.cloudPhoneNumberId, toPhone, p.text)
+                if (p.mediaUrl) waId = await cloud.sendCloudMedia(cloudAccount.cloudPhoneNumberId, toPhone, p.mediaUrl, p.mediaType ?? 'image', p.text)
+                else if (p.text) waId = await cloud.sendCloudText(cloudAccount.cloudPhoneNumberId, toPhone, p.text)
                 ok = true
               }
             } else if (conv.contact?.whatsappId) {
