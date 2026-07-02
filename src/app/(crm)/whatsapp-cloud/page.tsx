@@ -13,6 +13,7 @@ export default async function WhatsappCloudPage() {
     displayName: t.displayName,
     category: t.category,
     language: t.language,
+    bodyText: t.bodyText,
     metaStatus: t.metaStatus,
     actionType: t.actionType,
     lastSyncAt: t.lastSyncAt?.toISOString() ?? null,
