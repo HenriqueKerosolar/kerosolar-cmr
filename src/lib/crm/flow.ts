@@ -216,6 +216,16 @@ export async function enterStage(leadId: string, stageId: string) {
     const diasMatch = stage.name.match(/(\d+)\s*dias?\s*depois/i)
     if (!isSimulator && (isRepescagem || diasMatch)) {
       const dias = diasMatch ? parseInt(diasMatch[1], 10) : 0
+      // ⚠️ CONFORMIDADE META: etapas de 90d/180d só disparam se o lead JÁ respondeu ao menos
+      // uma vez. Enviar mensagem após 90+ dias para quem nunca respondeu é considerado spam
+      // pela Meta e pode resultar em banimento do número.
+      if (dias >= 90) {
+        const jaRespondeu = await prisma.message.count({ where: { conversationId: conv.id, direction: 'inbound' } })
+        if (!jaRespondeu) {
+          console.log(`[flow enterStage] ${dias}d: lead nunca respondeu — automação bloqueada por conformidade Meta`)
+          return
+        }
+      }
       // 🕒 A régua conta a partir do ORÇAMENTO: "15 dias depois" = 15 dias APÓS o orçamento
       //    (datas fixas, não acumuladas). Âncora = 1ª mensagem do orçamento ("Sistema completo");
       //    fallback = criação do lead. Repescagem (dias=0) dispara na hora.
@@ -581,7 +591,7 @@ export async function processDueActions() {
         if (aplica) {
           if (step === 1) {
             const nome = lead.contact?.name?.split(' ')[0] ?? ''
-            const msg = `${nome ? nome + ', ' : ''}quer que eu já prepare seu orçamento? 😊 É só me mandar a foto da sua conta de luz, ou me dizer seu consumo médio em kWh ou o valor médio da conta.`
+            const msg = `${nome ? nome + ', ' : ''}quer que eu já prepare seu orçamento? 😊 É só me mandar a foto da sua conta de luz, ou me dizer seu consumo médio em kWh ou o valor médio da conta.\n\n_Para não receber mais mensagens, responda PARAR._`
             await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'chegada_followup')
             await prisma.scheduledAction.create({ data: { leadId: a.leadId, conversationId: a.conversationId, stageId: a.stageId, type: 'chegada_followup', payload: { step: 2 } as object, runAt: new Date(Date.now() + 2 * 60 * 60 * 1000) } }).catch(() => {})
           } else {
@@ -697,14 +707,16 @@ export async function processDueActions() {
 const DEFAULT_BUDGET_FOLLOWUP =
   '{nome}, ficou com alguma dúvida sobre o orçamento? 😊 Se quiser um orçamento mais personalizado e preciso, ' +
   'posso agendar uma conversa com nosso Consultor especialista — em geral o valor fica ainda melhor! ' +
-  'Quer que eu agende, ou prefere que eu te transfira agora para o Consultor?'
+  'Quer que eu agende, ou prefere que eu te transfira agora para o Consultor?\n\n' +
+  '_Para não receber mais mensagens, responda PARAR._'
 
 // Lembrete de validade do orçamento — enviado 1 dia depois (configurável em system_configs: budget_validity_message)
 const DEFAULT_BUDGET_VALIDITY =
   '{SAUDACAO}! Passando só pra lembrar 😊 Os orçamentos que enviamos ficam *ativos na nossa plataforma por 3 dias* ' +
   'a partir da data em que você recebeu. Depois disso eles saem do sistema e é preciso fazer uma *nova cotação* — ' +
   'e nesse novo pedido o valor pode mudar (por exemplo, se o modelo/marca não estiver mais disponível para cotação, ' +
-  'ou por algum reajuste de preço). Se quiser seguir com a sua, é só me avisar que eu te ajudo! 🌞'
+  'ou por algum reajuste de preço). Se quiser seguir com a sua, é só me avisar que eu te ajudo! 🌞\n\n' +
+  '_Para não receber mais mensagens, responda PARAR._'
 
 /**
  * Follow-up do orçamento (~90s após o orçamento automático):

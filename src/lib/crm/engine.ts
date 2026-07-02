@@ -278,6 +278,26 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // cliente já foi salva acima — apenas não acionamos nada do bot.
   if (lead.humanOnly || !lead.aiEnabled) return base
 
+  // 🚫 OPT-OUT IMEDIATO: cliente mandou PARAR / STOP / CANCELAR / SAIR / NÃO QUERO
+  // Detectado via keyword ANTES da IA (resposta mais rápida, sem custo de LLM).
+  // Cancela todas as automações, adiciona à blacklist e confirma ao cliente.
+  const normText = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+  const isOptOut = /^(parar?|stop|cancelar?|sair|nao\s+quero|nao\s+manda|para\s+de\s+mandar|nao\s+quero\s+mais|remov[ea]r?\s+d[ao]\s+list|nao\s+me\s+mande)/.test(normText)
+    || normText === 'parar' || normText === 'stop' || normText === 'cancelar' || normText === 'sair'
+  if (isOptOut && !isSimulator) {
+    const { dispatchOutbound } = await import('./flow')
+    const { addNaLista } = await import('./lists')
+    const msgConfirm = 'Tudo bem! 😊 Você foi removido da nossa lista e não receberá mais mensagens automáticas da KeroSolar. Se mudar de ideia, é só nos escrever novamente.'
+    await dispatchOutbound(conversation.id, msgConfirm, undefined, 'ai')
+    const numero = contact.phone || contact.whatsappId || conversation.externalId
+    if (numero) await addNaLista(numero, 'no_send', 'Cliente pediu opt-out via palavra-chave PARAR.')
+    await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } })
+    await prisma.lead.update({ where: { id: lead.id }, data: { aiEnabled: false, humanOnly: true } })
+    await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
+    await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '🚫 Opt-out via keyword — adicionado à blacklist e automações canceladas.' } })
+    return { ...base, reply: null, aiHandled: true }
+  }
+
   // 📢 SAUDAÇÃO DE ANÚNCIO META (WhatsApp Click-to-WhatsApp)
   // Quando alguém clica num anúncio Meta (Facebook / Instagram → WhatsApp), o WhatsApp
   // pré-preenche automaticamente a frase: "Oi! Como podemos ajudar?" / "Oi, como podemos

@@ -52,6 +52,7 @@ Regras OBRIGATÓRIAS:
 - Mostre de forma GENTIL que a inação dele pode trazer PREJUÍZO (ex.: continuar pagando conta de luz cara todo mês, o orçamento perder a validade, perder uma condição/aprovação) — adapte ao que faz sentido pelo contexto.
 - Curta (estilo WhatsApp), no máximo ~4 linhas. No máximo 1 emoji.
 - NÃO invente valores, prazos ou aprovações que não apareçam no histórico.
+- OBRIGATÓRIO: termine SEMPRE com uma linha em branco e depois: "_Para não receber mais mensagens, responda PARAR._"
 - Responda SOMENTE com o texto da mensagem (sem aspas, sem explicação, sem JSON).
 
 CONVERSA ATÉ AGORA:
