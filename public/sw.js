@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kerosolar-crm-v1'
+const CACHE_NAME = 'kerosolar-crm-v3'
 const urlsToCache = [
   '/',
   '/icon-192.png',
