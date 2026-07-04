@@ -675,10 +675,27 @@ export async function processDueActions() {
           const msg = await gerarMensagemReengajamento(a.leadId, a.conversationId)
           if (msg) {
             await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'reengage')
-            // arma o "sem resposta" da etapa (Repescagem → 15 dias depois em 24h)
+            // Sem resposta após reengajamento → Leads adquiridos (não adianta continuar tentando)
             if (a.stageId) {
-              const { scheduleNoReply } = await import('./flow-blocks')
-              await scheduleNoReply(a.leadId, a.conversationId, a.stageId).catch(() => {})
+              const lead = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipelineId: true, stageId: true } })
+              const leadsAdq = lead ? await prisma.stage.findFirst({
+                where: { name: { contains: 'adquiridos', mode: 'insensitive' }, pipelineId: lead.pipelineId },
+              }) : null
+              if (leadsAdq) {
+                await prisma.scheduledAction.updateMany({ where: { leadId: a.leadId, type: { in: ['no_reply', 'flow_noreply'] }, done: false }, data: { done: true } }).catch(() => {})
+                await prisma.scheduledAction.create({
+                  data: {
+                    leadId: a.leadId, conversationId: a.conversationId, stageId: a.stageId,
+                    type: 'no_reply',
+                    payload: { fromStageId: a.stageId, targetStageId: leadsAdq.id } as object,
+                    runAt: new Date(Date.now() + 24 * 3600 * 1000),
+                  },
+                }).catch(() => {})
+              } else {
+                // fallback: usa configuração padrão da etapa
+                const { scheduleNoReply } = await import('./flow-blocks')
+                await scheduleNoReply(a.leadId, a.conversationId, a.stageId).catch(() => {})
+              }
             }
           }
         }
