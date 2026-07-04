@@ -336,16 +336,26 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
   system += `\n\n## OFERTAS/SPAM (alguém querendo VENDER algo PARA a Kerosolar):
 
 Esta regra cobre QUALQUER pessoa que não seja um consumidor residencial/comercial buscando energia solar para si. Os sinais são:
-- Se apresenta como representante de empresa ("Sou o X da empresa Y", "Sou da empresa X", "meu nome é X, trabalho com Y")
-- Faz perguntas de qualificação de vendas B2B ("vocês conseguem acompanhar?", "vocês têm dificuldade com?", "como vocês gerenciam?", "vocês usam algum sistema para?")
+
+**Profissional da área solar oferecendo serviço para a Kerosolar:**
+- Se apresenta como Engenheiro Eletricista, integrador solar, instalador fotovoltaico ou similar ("Sou Engenheiro Eletricista", "trabalho com projetos e homologações", "sou integrador solar", "atuo com instalação fotovoltaica")
+- Pergunta se a Kerosolar terceiriza engenharia, homologação, instalação ou projetos ("vocês terceirizam esse processo?", "contam com equipe própria de engenharia?", "terceirizam as homologações?")
+- Menciona "usinas fotovoltaicas", "homologação junto à distribuidora", "projetos elétricos" como serviço que presta
+
+**Vendedor de produto/serviço genérico:**
+- Se apresenta como representante de empresa ("Sou o X da empresa Y", "meu nome é X, trabalho com Y")
+- Faz perguntas de qualificação de vendas B2B ("vocês conseguem acompanhar?", "vocês têm dificuldade com?", "vocês usam algum sistema para?")
 - Oferece produto, serviço, software, plataforma, treinamento, consultoria, leads, marketing
-- Menciona termos como "projetos fotovoltaicos", "pipeline", "homologação de projetos", "gestão de projetos" (não como cliente, mas como fornecedor de solução)
 - Faz pitch disfarçado de pergunta ("Hoje vocês conseguem ver claramente o que está parado?")
+- Menciona "projetos fotovoltaicos", "pipeline", "homologação de projetos", "gestão de projetos" como fornecedor de solução
+
+**⚠️ ATENÇÃO: "encontrei vocês no Instagram/anúncio" NÃO significa que é cliente se o restante da mensagem for claramente B2B. Ignore esse detalhe e julgue pelo CONTEÚDO da mensagem.**
 
 Ações:
+- Se for profissional da área solar (engenheiro, integrador, instalador) oferecendo serviço → responda gentilmente dizendo que pode entrar em contato pelo número 21 98383-7434, e marque discardLead = true.
 - Se for oferta de produto/serviço GENÉRICO → responda gentilmente dizendo que pode entrar em contato pelo número 21 98383-7434, e marque discardLead = true.
 - Se for PLANO DE SAÚDE, produtos digitais (IA, bot, CRM, software), MARKETING ou GERAÇÃO DE LEADS → faça uma propaganda da KeroService ("Que legal! Temos uma plataforma perfeita para quem quer trabalhar com o mercado solar: www.keroservice.com.br. Se cadastra lá!"), e marque discardLead = true.
-- Em caso de dúvida (não consegue identificar se é cliente ou vendedor): NÃO descarte — responda normalmente e aguarde mais contexto.`
+- Em caso de dúvida GENUÍNA (realmente não dá para determinar se é cliente ou vendedor): NÃO descarte — responda normalmente e aguarde mais contexto. Mas se dois ou mais sinais acima estiverem presentes, descarte sem hesitar.`
 
   // Regra fixa: contato sem interesse / desistência precoce / clique acidental
   system += `\n\n## CONTATO SEM INTERESSE — desistência precoce ou clique acidental:
