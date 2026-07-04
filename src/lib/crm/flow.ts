@@ -593,7 +593,7 @@ export async function processDueActions() {
           const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
           const saud = spHour < 12 ? 'Bom dia' : spHour < 18 ? 'Boa tarde' : 'Boa noite'
           const msg = (cfg?.value || DEFAULT_BUDGET_VALIDITY).replace(/\{SAUDACAO\}/g, saud)
-          await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+          await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'budget_validity')
         }
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
@@ -674,7 +674,16 @@ export async function processDueActions() {
           const { gerarMensagemReengajamento } = await import('./reengage')
           const msg = await gerarMensagemReengajamento(a.leadId, a.conversationId)
           if (msg) {
-            await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'reengage')
+            // Escolhe o template da ETAPA da régua (15/30/90/180 dias — já aprovados na Meta).
+            // Se a etapa não casar com nenhum, cai no genérico 'reengage'.
+            let tplAction = 'reengage'
+            if (a.stageId) {
+              const st = await prisma.stage.findUnique({ where: { id: a.stageId }, select: { name: true } })
+              const dias = st?.name.match(/(\d+)\s*dias?\s*depois/i)?.[1]
+              if (dias && ['15', '30', '90', '180'].includes(dias)) tplAction = `${dias}dias`
+              else if (/repescagem/i.test(st?.name ?? '')) tplAction = 'repescagem'
+            }
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, tplAction)
             // Sem resposta após reengajamento → Leads adquiridos (não adianta continuar tentando)
             if (a.stageId) {
               const lead = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipelineId: true, stageId: true } })
