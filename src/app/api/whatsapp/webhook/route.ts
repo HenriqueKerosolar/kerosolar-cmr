@@ -82,6 +82,11 @@ export async function POST(req: NextRequest) {
                 where: { externalId: st.id },
                 data: { readAt: new Date(), deliveredAt: new Date() },
               }).catch(() => {})
+            } else if (st.status === 'failed') {
+              await prisma.message.updateMany({
+                where: { externalId: st.id },
+                data: { failedReason: 'meta_rejeitou' },
+              }).catch(() => {})
             }
           }
         }

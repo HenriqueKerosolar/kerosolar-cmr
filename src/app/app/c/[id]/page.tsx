@@ -75,7 +75,9 @@ export default function ChatPage() {
   const [texto, setTexto] = useState('')
   const [enviando, setEnviando] = useState(false)
   const fimRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const primeiraRef = useRef(true)
+  const nearBottomRef = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const [gravando, setGravando] = useState(false)
   const recRef = useRef<MediaRecorder | null>(null)
@@ -104,7 +106,9 @@ export default function ChatPage() {
   }, [convId])
 
   useEffect(() => {
-    fimRef.current?.scrollIntoView({ behavior: primeiraRef.current ? 'auto' : 'smooth' })
+    if (primeiraRef.current || nearBottomRef.current) {
+      fimRef.current?.scrollIntoView({ behavior: primeiraRef.current ? 'auto' : 'smooth' })
+    }
     primeiraRef.current = false
   }, [msgs.length])
 
@@ -270,7 +274,14 @@ export default function ChatPage() {
       )}
 
       {/* Mensagens */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 bg-zinc-100">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 bg-zinc-100"
+        onScroll={() => {
+          const el = scrollContainerRef.current
+          if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+        }}
+      >
         {msgs.map((m, i) => {
           const meu = m.direction === 'outbound'
           const dataMudou = i === 0 || new Date(msgs[i - 1]!.createdAt).toDateString() !== new Date(m.createdAt).toDateString()

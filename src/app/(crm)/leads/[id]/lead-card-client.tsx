@@ -8,7 +8,7 @@ import {
   sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage,
 } from '@/app/actions/lead'
 
-type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null }
+type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
 
 // Data e hora no horário de Brasília (DD/MM/AAAA HH:mm)
 function horaBrasilia(iso: string): string {
@@ -52,6 +52,7 @@ const actionLabel = (t: string) => ACTION_LABELS[t] ?? `⚙️ ${t}`
 
 function msgTick(m: Msg) {
   if (m.direction !== 'outbound') return null
+  if (m.failedReason) return <span title="Não entregue" className="text-amber-400 text-[11px]">⚠️</span>
   if (m.readAt)      return <span title="Lido" className="text-blue-400 text-[11px]">✓✓</span>
   if (m.deliveredAt) return <span title="Entregue" className="text-[--muted-foreground] text-[11px]">✓✓</span>
   if (m.externalId)  return <span title="Enviado" className="text-[--muted-foreground] text-[11px]">✓</span>
@@ -335,6 +336,14 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                     {msgTick(m)}
                   </div>
                 </div>
+                )}
+                {m.failedReason && m.direction === 'outbound' && (
+                  <div className="flex justify-end">
+                    <button onClick={abrirTemplates}
+                      className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1 mt-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition text-left">
+                      ⚠️ Mensagem não enviada — janela de 24h expirada. Clique para enviar um template →
+                    </button>
+                  </div>
                 )}
               </div>
             )

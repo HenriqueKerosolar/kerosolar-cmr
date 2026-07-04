@@ -331,6 +331,9 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   // ⚠️ Comparação com CONCORRENTE ("recebi um orçamento R$ X mais barato", "outra empresa")
   // → o valor citado é o PREÇO do concorrente, NÃO o consumo/conta do cliente. Não extrai nada.
   if (/mais barato|mais em conta|bem barato|concorrent|outra empresa|outro or[çc]amento|outro lugar/i.test(t)) return {}
+  // ⚠️ Prospecção / oferta de serviço PARA a empresa (vendedor, não cliente)
+  // → números citados são exemplos de negócio, não consumo. Não extrai nada.
+  if (/projeto\s+\d+\s+dias|vender.*projetos|n[aã]o\s+vender\s+nada|garantia\s+em\s+contrato|treinamento\s+comercial|plano\s+de\s+sa[úu]de|bot\s+de\s+atendimento|agência\s+de\s+marketing|bate\s+papo\s+sem\s+compromisso.*para\s+te\s+mostrar|ajudamos\s+mais\s+de\s+\d+/i.test(t)) return {}
   let kwh: number | undefined
   let reais: number | undefined
 
@@ -344,6 +347,13 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     const reWant = /(?:quero|queria|quer|preciso|gostaria|pretendo|desejo)[^\d]{0,25}([\d.,]+)\s*(kwh|kw\s*\/?\s*h|quilowatts?|kw|k)\b/i
     const m = t.match(reWant) || t.match(reUni)
     if (m) { const k = parseBrNumber(m[1]); if (consumoKwhValido(k)) kwh = k }
+    // Número SEM unidade mas em contexto de consumo/energia: "meu consumo é 160", "chegou até 300",
+    // "fica em 250", "consumo de 400". Só aceita se não tiver reais (R$) no texto e valor ≥30.
+    if (!kwh && !/r\$/.test(t)) {
+      const reConsumoCtx = /(?:consumo|kwh|kilowatt|energia|gasto\s+de\s+luz|conta\s+de\s+luz)[^\d]{0,30}([\d.,]+)|(?:chegou?|chega|fica|ficou|é\s+de|foi\s+de|est[aá]\s+em|media|m[eé]dia)\s+(?:[^\d]{0,10})?([\d.,]+)/i
+      const mc = t.match(reConsumoCtx)
+      if (mc) { const k = parseBrNumber(mc[1] ?? mc[2]); if (consumoKwhValido(k) && k <= 2000) kwh = k }
+    }
   }
 
   // 2º) Só se NÃO informou consumo em kWh: pedido por nº de placas/painéis/módulos vira kWh
@@ -366,7 +376,7 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/) ||
     // valor dito em frase: "deve ir para 1000", "vai pra 1000", "fica em 1000", "chega a 1000",
     // "deve dar uns 800" — verbo de projeção + (a/para/em/uns/R$) + número. A faixa R$30–100k filtra.
-    t.match(/(?:ir|vai|vou|deve|dever[áa]|fica|ficar|chega|chegar|sobe|subir|d[áa]|dar)\s+(?:a |para |pra |pro |em |de |uns? |r\$\s*)*([\d.,]+)/) ||
+    t.match(/(?:ir|vai|vou|deve|dever[áa]|fica|ficou|ficar|chega|chegou|chegar|sobe|subiu|subir|d[áa]|dar)\s+(?:a |para |pra |pro |em |de |até |uns? |r\$\s*)*([\d.,]+)/) ||
     (/^[\d.,\s]+$/.test(t.trim()) ? t.trim().match(/([\d.,]+)/) : null)
   if (reaisMatch) { const v = parseBrNumber(reaisMatch[1]); if (contaReaisValida(v)) reais = v }
 

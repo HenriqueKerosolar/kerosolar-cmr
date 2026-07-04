@@ -39,9 +39,12 @@ export function SimuladorClient({ aiConfigured }: { aiConfigured: boolean }) {
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef(true)
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    if (nearBottomRef.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    }
   }, [messages])
 
   const loadSlot = useCallback(async (n: number) => {
@@ -173,7 +176,7 @@ export function SimuladorClient({ aiConfigured }: { aiConfigured: boolean }) {
       <div className="flex-1 grid gap-4 lg:grid-cols-[1fr_320px] min-h-0">
         {/* Chat */}
         <div className="flex flex-col border border-[--border] rounded-2xl overflow-hidden bg-[--card]">
-          <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
+          <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3" onScroll={() => { const el = scrollRef.current; if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120 }}>
             {messages.length === 0 && !switching && (
               <div className="text-center text-sm text-[--muted-foreground] mt-10 space-y-3">
                 <p>Envie uma mensagem como se fosse o cliente 👇</p>

@@ -107,6 +107,18 @@ export function ConfigClient({ initial, variants, defaults, placar }: { initial:
         <Field label="Modelo" k="ai_model" placeholder="claude-3-5-sonnet-20241022 ou gpt-4o-mini" />
       </section>
 
+      {/* Alerta de fechamento */}
+      <section className="space-y-4">
+        <h2 className="font-semibold border-b border-[--border] pb-2">🔥 Alerta de fechamento (WhatsApp)</h2>
+        <div>
+          <label className="block text-sm font-medium mb-1">Número para receber alertas de cliente pronto para fechar</label>
+          <p className="text-xs text-[--muted-foreground] mb-1">Quando um cliente aceitar o orçamento ou pedir para financiar, o sistema envia uma mensagem de alerta para este número via WhatsApp. Use o formato internacional sem + (ex.: 5521999999999).</p>
+          <input value={cfg['alert_phone'] ?? ''} onChange={(e) => set('alert_phone', e.target.value)}
+            placeholder="5521999999999"
+            className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none" />
+        </div>
+      </section>
+
       {/* Transferência para humano */}
       <section className="space-y-4">
         <h2 className="font-semibold border-b border-[--border] pb-2">Transferência para humano</h2>

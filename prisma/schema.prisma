@@ -249,6 +249,7 @@ model Message {
   isRead         Boolean          @default(false)
   deliveredAt    DateTime?        // ✓✓ entregue ao celular do cliente
   readAt         DateTime?        // ✓✓ azul do WhatsApp (lido pelo cliente) — para métricas de "visualizado"
+  failedReason   String?          // preenchido quando a mensagem não pôde ser entregue (ex: janela_24h_sem_template, meta_rejeitou)
   createdAt      DateTime         @default(now())
 
   @@index([conversationId])

@@ -13,6 +13,24 @@ type StageFlow = {
 const normalize = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 /**
+ * Envia uma mensagem de alerta para o dono/responsável via WhatsApp (Cloud API).
+ * O número é lido de SystemConfig{ key: 'alert_phone' } — ex.: "5521999999999".
+ * Se não configurado ou sem Cloud API, apenas loga e não falha.
+ */
+export async function notificarDono(mensagem: string): Promise<void> {
+  try {
+    const cfg = await prisma.systemConfig.findUnique({ where: { key: 'alert_phone' } })
+    if (!cfg?.value) return
+    const cloudAccount = await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+    if (!cloudAccount?.cloudPhoneNumberId) return
+    const { sendCloudText } = await import('./cloud-api')
+    await sendCloudText(cloudAccount.cloudPhoneNumberId, cfg.value, mensagem)
+  } catch (e) {
+    console.error('[notificarDono]', e)
+  }
+}
+
+/**
  * Verifica se a mensagem do cliente contém alguma palavra-chave (ou variação)
  * configurada na etapa atual. Retorna a etapa de destino, se houver.
  */
@@ -129,6 +147,7 @@ export async function dispatchOutbound(
                 console.log(`[flow dispatch] janela 24h fechada — enviou template "${tmpl.name}" para ${toPhone}`)
               } else {
                 console.warn(`[flow dispatch] janela 24h fechada e nenhum template APPROVED para "${templateActionType}" — mensagem não enviada`)
+                await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
               }
             } else {
               throw sendErr // re-lança para o catch externo enfileirar redeliver

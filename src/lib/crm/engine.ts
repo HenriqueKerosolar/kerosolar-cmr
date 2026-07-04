@@ -696,13 +696,17 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
 
   // 4.7) Cálculo solar — extrai dados da mensagem ou da imagem (conta de luz)
   const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida, carregarTabelaFinanciamento } = await import('./solar-calc')
+  // Clientes pós-venda ("Já é cliente") não recebem cálculo solar — evita orçamentos indevidos
+  const isPosSaleStage = /j[aá]\s*[eé]\s*cliente|p[oó]s.?venda/i.test(currentStage?.name ?? '')
   // Carrega a tabela de financiamento das Configurações (ou usa a padrão) ANTES dos cálculos.
   await carregarTabelaFinanciamento()
-  let consumo = extrairConsumo(text)
+  let consumo = isPosSaleStage ? {} : extrairConsumo(text)
 
   // Se veio imagem → extrai via visão da IA (conta de luz OU detecta documento de identidade)
   let billData: Awaited<ReturnType<typeof extractBillFromImage>> | null = null
-  if (input.imageBase64 && !consumo.kwh && !consumo.reais) {
+  const cfImg = (lead.customFields as Record<string, unknown> | null) ?? {}
+  const jaTemOrcamento = !!(cfImg.solar || cfImg.consumoKwh || cfImg.billValue)
+  if (input.imageBase64 && !consumo.kwh && !consumo.reais && !jaTemOrcamento) {
     const aiCfg = await loadAiConfig()
     billData = await extractBillFromImage(aiCfg, input.imageBase64, input.imageMediaType ?? 'image/jpeg')
     // 🚫 SÓ gera orçamento de CONTA DE LUZ real (docType 'bill') ou de ANÚNCIO/KIT solar (tem painéis).
@@ -759,6 +763,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
     await prisma.task.create({ data: { leadId: lead.id, title: '🎉 ORÇAMENTO ACEITO — iniciar processo de financiamento', type: 'call', dueAt: now } })
     await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Cliente aceitou o orçamento — encaminhado para financiamento e IA desativada.' } })
+    const { notificarDono } = await import('./flow')
+    const nomeAlerta = contact.name || contact.phone || conversation.externalId || 'cliente'
+    await notificarDono(`🔥 *FECHAMENTO — PRIORIDADE MÁXIMA*\n\nO cliente *${nomeAlerta}* aceitou o orçamento e quer prosseguir!\n\n➡️ Acesse o CRM agora para dar continuidade.`).catch(() => {})
 
     await simularDigitacao(reply)
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: reply } })
@@ -869,6 +876,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     estimate,
     learned,
     lead: (lead.customFields as Record<string, unknown> | null) ?? null,
+    stageName: currentStage?.name ?? null,
   })
 
   // 📚 Pedido de ebook/guia → envia o PDF Anti-Cilada automaticamente
@@ -1061,6 +1069,13 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       await prisma.note.create({
         data: { leadId: lead.id, type: 'stage_change', content: `IA moveu para "${target.name}".` },
       })
+      // Notifica o dono quando cliente entra em etapa de fechamento/financiamento
+      const ehFechamento = /financiamento|pedido.*doc|vistoria.*agend/i.test(target.name)
+      if (ehFechamento) {
+        const { notificarDono } = await import('./flow')
+        const nomeAlerta = contact.name || contact.phone || conversation.externalId || 'cliente'
+        await notificarDono(`🔥 *FECHAMENTO — PRIORIDADE MÁXIMA*\n\nO cliente *${nomeAlerta}* quer prosseguir e foi movido para *"${target.name}"*!\n\n➡️ Acesse o CRM agora para dar continuidade.`).catch(() => {})
+      }
     }
   }
   if (result.lost) { leadUpdate.status = 'lost'; leadUpdate.closedAt = now; if (result.lostReason) leadUpdate.lossReason = result.lostReason }

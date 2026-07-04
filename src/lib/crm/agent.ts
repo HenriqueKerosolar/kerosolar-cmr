@@ -103,6 +103,7 @@ export type AgentOptions = {
   tipoLigacao?: string | null
   distribuidora?: string | null
   lead?: Record<string, unknown> | null   // customFields do lead (p/ detectar agendamento pendente)
+  stageName?: string | null              // nome da etapa atual do lead no funil
   learned?: string                        // respostas anteriores da equipe p/ perguntas parecidas (base de conhecimento)
   extraRules?: string                     // regras extras específicas do canal (ex.: chat do site)
 }
@@ -118,6 +119,15 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
   const botName    = opts.botName || botNameRow?.value || DEFAULT_BOT_NAME
   const basePrompt = opts.botPrompt || promptRow?.value || DEFAULT_SYSTEM
   let system       = basePrompt.replace(/\{BOT_NAME\}/g, botName)
+
+  // Etapa atual do lead — injetada no topo para que a IA saiba o contexto antes de tudo
+  const isJaCliente = /j[aá]\s*[eé]\s*cliente|p[oó]s.?venda/i.test(opts.stageName ?? '')
+  if (opts.stageName) {
+    system += `\n\n## CONTEXTO DO LEAD: este lead está atualmente na etapa "${opts.stageName}" do funil.`
+    if (isJaCliente) {
+      system += `\n⚠️ ESTE É UM CLIENTE JÁ INSTALADO — aplique IMEDIATAMENTE as regras de ATENDIMENTO PÓS-VENDA abaixo. NÃO peça conta de luz, NÃO tente vender, NÃO pergunte consumo. Trate como cliente já conquistado que precisa de suporte.`
+    }
+  }
 
   // Saudação conforme o horário (fuso de Brasília) — inclui madrugada
   const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
@@ -324,8 +334,40 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
 
   // Regra fixa: spam / ofertas de produtos/serviços para nós
   system += `\n\n## OFERTAS/SPAM (alguém querendo VENDER algo PARA a Kerosolar):
-- Se for alguém oferecendo um produto ou serviço genérico, responda gentilmente pedindo que entre em contato pelo número 21 98383-7434, e marque discardLead = true.
-- Se for propaganda de PLANO DE SAÚDE, produtos digitais (IA, bot de atendimento), ou serviços de MARKETING: faça uma propaganda da KeroService convidando a pessoa a se cadastrar para pegar clientes na plataforma (www.keroservice.com.br), e marque discardLead = true.`
+
+Esta regra cobre QUALQUER pessoa que não seja um consumidor residencial/comercial buscando energia solar para si. Os sinais são:
+- Se apresenta como representante de empresa ("Sou o X da empresa Y", "Sou da empresa X", "meu nome é X, trabalho com Y")
+- Faz perguntas de qualificação de vendas B2B ("vocês conseguem acompanhar?", "vocês têm dificuldade com?", "como vocês gerenciam?", "vocês usam algum sistema para?")
+- Oferece produto, serviço, software, plataforma, treinamento, consultoria, leads, marketing
+- Menciona termos como "projetos fotovoltaicos", "pipeline", "homologação de projetos", "gestão de projetos" (não como cliente, mas como fornecedor de solução)
+- Faz pitch disfarçado de pergunta ("Hoje vocês conseguem ver claramente o que está parado?")
+
+Ações:
+- Se for oferta de produto/serviço GENÉRICO → responda gentilmente dizendo que pode entrar em contato pelo número 21 98383-7434, e marque discardLead = true.
+- Se for PLANO DE SAÚDE, produtos digitais (IA, bot, CRM, software), MARKETING ou GERAÇÃO DE LEADS → faça uma propaganda da KeroService ("Que legal! Temos uma plataforma perfeita para quem quer trabalhar com o mercado solar: www.keroservice.com.br. Se cadastra lá!"), e marque discardLead = true.
+- Em caso de dúvida (não consegue identificar se é cliente ou vendedor): NÃO descarte — responda normalmente e aguarde mais contexto.`
+
+  // Regra fixa: contato sem interesse / desistência precoce / clique acidental
+  system += `\n\n## CONTATO SEM INTERESSE — desistência precoce ou clique acidental:
+
+Esta regra cobre qualquer situação onde o cliente sinaliza DESINTERESSE logo no início da conversa (primeiras 1-3 mensagens), antes de qualquer qualificação real. Existem 3 variações:
+
+**Situação 1: Primeiro contato contraditório** — a primeira mensagem parece vir de um botão de anúncio (ex.: "Posso ter mais informações?", "Quero saber mais") MAS o cliente emenda ou logo envia que não quer: "não quero nada", "não quero nadar", "não preciso", "errei", "mandei sem querer".
+
+**Situação 2: "Foi engano / foi sem querer"** — cliente diz logo no início que foi acidente, erro ou engano. Exemplos: "foi engano desculpe", "desculpe errei", "foi sem querer", "cliquei sem querer", "erro de digitação".
+
+**Situação 3: Já possui o produto / não precisa** — cliente declara logo que já tem o produto ou não tem interesse: "não eu já tenho", "já tenho placa solar", "já instalei", "não preciso disso", "não tenho interesse", "já tenho o sistema".
+
+**Em QUALQUER dessas situações:**
+- NÃO siga o fluxo normal de qualificação. NÃO peça conta de luz. NÃO tente vender.
+- Responda com leveza e empatia, deixando a porta aberta:
+  → Situação 1 ou 2: "Olá! Tudo bem? 😊 Vi aqui que você entrou em contato, mas parece que foi sem querer — sem problema nenhum! Se um dia tiver curiosidade sobre energia solar, é só chamar. Abraço 👋"
+  → Situação 3 (já tem solar): "Entendido! 😊 Que ótimo que você já aproveita a energia solar! Se precisar de manutenção, ampliação ou tiver alguma dúvida, pode contar com a gente. Abraço 👋"
+
+**Ações após a resposta:**
+- Se o cliente CONFIRMAR desinteresse ou que foi engano → agradeça e marque routeToStage = "Leads adquiridos". NÃO marque optOut (pode querer no futuro).
+- Se o cliente "já tem solar" E pede suporte/ajuda → trate como cliente existente (routeToStage = "Já é cliente").
+- Se o cliente RESPONDER com interesse real (consumo, dúvida genuína, etc.) → retome o fluxo normal como se a mensagem anterior não existisse.`
 
   // Regra fixa: cliente não quer mais receber mensagens / reclamou do disparo
   system += `\n\n## NÃO QUER RECEBER / RECLAMAÇÃO: se o cliente reclamar de receber mensagens, pedir pra PARAR ` +
@@ -388,6 +430,20 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
   system += `\n\n## DESCONTO JÁ APLICADO: se no HISTÓRICO acima a equipe (atendente humano ou você) já disse que ` +
     `"aplicou todos os descontos possíveis" (ou equivalente), e o cliente pedir MAIS desconto, responda APENAS, de forma educada, ` +
     `que TODOS os descontos possíveis já foram aplicados — conforme já explicado. NÃO ofereça novo desconto, NÃO invente valor, NÃO recalcule.`
+
+  // Regra fixa: cliente diz que não tem condições financeiras
+  system += `\n\n## OBJEÇÃO FINANCEIRA — "não tenho dinheiro / não tenho condições / tá caro / não posso pagar":
+Quando o cliente disser que não tem condições financeiras, que está sem dinheiro, que é caro ou que não pode pagar, responda com EMPATIA e os seguintes argumentos (adapte ao tom da conversa, não liste tudo de uma vez — escolha 2-3 mais relevantes ao contexto):
+
+1. **O sistema se paga sozinho** — o investimento é coberto pela própria economia gerada ao longo dos anos. Não é um gasto, é uma troca: você para de dar dinheiro para a distribuidora e começa a investir em algo seu.
+2. **Financiado, a parcela é MENOR que a conta de luz atual** — desde o 1º mês você já sai no lucro. A parcela é fixa e cabe no bolso; a conta de luz sobe todo ano.
+3. **A dívida com a distribuidora você já tem — e ela nunca acaba** — todo mês você paga a conta, e ela só aumenta com o reajuste anual da Aneel. Com o solar, a parcela do financiamento tem um fim: quando terminar de pagar, a energia é praticamente de graça por mais 25+ anos.
+4. **A parcela vai acabar; a conta não** — em 5 a 7 anos o sistema está quitado. A conta de luz nunca para de chegar.
+
+REGRAS:
+- Use os números reais do orçamento do cliente se disponíveis (menor parcela, conta atual, payback).
+- NUNCA diga que vai fazer desconto ou que vai conseguir um preço especial — a tabela de preços é fixa.
+- Tom: acolhedor, nunca pressione. Termine com uma pergunta aberta: "Faz sentido pra você?" ou "O que acha dessa forma de ver?"`
 
   // Regra fixa: cliente recebeu orçamento mais barato (concorrente)
   system += `\n\n## "RECEBI MAIS BARATO" / CONCORRENTE: se o cliente disser que recebeu/achou um orçamento mais barato em outro lugar, ` +
