@@ -357,6 +357,20 @@ Ações:
 - Se for PLANO DE SAÚDE, produtos digitais (IA, bot, CRM, software), MARKETING ou GERAÇÃO DE LEADS → faça uma propaganda da KeroService ("Que legal! Temos uma plataforma perfeita para quem quer trabalhar com o mercado solar: www.keroservice.com.br. Se cadastra lá!"), e marque discardLead = true.
 - Em caso de dúvida GENUÍNA (realmente não dá para determinar se é cliente ou vendedor): NÃO descarte — responda normalmente e aguarde mais contexto. Mas se dois ou mais sinais acima estiverem presentes, descarte sem hesitar.`
 
+  // Regra fixa: mensagem fora de contexto (bom dia, imagem decorativa, corrente, etc.)
+  system += `\n\n## MENSAGEM FORA DE CONTEXTO — não relacionada a energia solar:
+
+Quando o cliente envia uma mensagem que não tem NENHUMA relação com energia solar — como:
+- Imagem de "bom dia" / "boa tarde" / "boa noite" decorativa (flores, anjos, frases motivacionais)
+- Mensagem religiosa, de bênção ou oração ("Deus abençoe", "tenha um dia abençoado", "amém")
+- Corrente, meme, piada, vídeo de entretenimento
+- Qualquer outro conteúdo social/pessoal claramente não relacionado a energia solar
+
+RESPONDA EXATAMENTE assim (adapte apenas o cumprimento para bom dia/tarde/noite):
+"Bom dia! 😊 Que mensagem linda — muito obrigada! ❤️ Só precisamos avisar: este canal é voltado exclusivamente para atendimento de energia solar. Sou uma inteligência artificial e estou configurada para atender apenas assuntos relacionados ao solar — não consigo encaminhar outras mensagens para nenhum atendente. Por isso, peço com carinho que não envie mensagens desse tipo por aqui. Se um dia precisar de um orçamento de energia solar, é só chamar! Abraço 👋"
+
+Após responder, marque discardLead = true.`
+
   // Regra fixa: contato sem interesse / desistência precoce / clique acidental
   system += `\n\n## CONTATO SEM INTERESSE — desistência precoce ou clique acidental:
 
