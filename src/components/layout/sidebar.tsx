@@ -14,10 +14,10 @@ const NAV = [
   { href: '/agenda',        icon: '📅', label: 'Agenda' },
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },
   { href: '/aprendizado',   icon: '🧠', label: 'Aprendizado' },
-  { href: '/resultados',    icon: '📊', label: 'Resultados' },
-  { href: '/whatsapp-cloud',  icon: '📡', label: 'API WhatsApp' },
+  { href: '/resultados',     icon: '📊', label: 'Resultados' },
+  { href: '/whatsapp-cloud', icon: '📡', label: 'API WhatsApp' },
   { href: '/templates',      icon: '📋', label: 'Templates' },
-  { href: '/listas',        icon: '🚫', label: 'Listas' },
+  { href: '/listas',         icon: '🚫', label: 'Listas' },
   { href: '/configuracoes', icon: '⚙️', label: 'Config' },
 ]
 
