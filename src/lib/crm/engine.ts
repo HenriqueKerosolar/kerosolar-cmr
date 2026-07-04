@@ -912,11 +912,17 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     return { ...base, reply: null, aiHandled: true }
   }
 
-  // Spam/oferta de produto a nós → responde e descarta (não mantém ativo no CRM)
+  // Spam/oferta de produto a nós → responde, move para "Leads adquiridos" e fecha conversa
   if (result.discardLead) {
-    await prisma.lead.update({ where: { id: lead.id }, data: { status: 'lost', aiEnabled: false, closedAt: now } })
-    await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
-    await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Descartado: oferta/spam (não mantido no funil ativo).' } })
+    const leadsAdqStage = await prisma.stage.findFirst({
+      where: { name: { contains: 'adquiridos', mode: 'insensitive' }, pipelineId: lead.pipelineId },
+    })
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { status: 'open', aiEnabled: false, closedAt: now, stageId: leadsAdqStage?.id ?? lead.stageId },
+    })
+    await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false, resolvedAt: now } })
+    await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Descartado: oferta/spam — movido para "${leadsAdqStage?.name ?? 'Leads adquiridos'}" e conversa encerrada.` } })
     await simularDigitacao(result.reply)
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: result.reply } })
     return { ...base, reply: result.reply, aiHandled: true }
