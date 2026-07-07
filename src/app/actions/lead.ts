@@ -119,7 +119,7 @@ export async function createManualLead(data: {
 }
 
 /** Atendente envia uma mensagem manual (texto e/ou mídia por URL). */
-export async function sendManualMessage(leadId: string, text: string, media?: { url: string; type: 'image' | 'video' | 'document' }) {
+export async function sendManualMessage(leadId: string, text: string, media?: { url: string; type: 'image' | 'video' | 'document' }, accountId?: string) {
   const session = await verifySession()
   const conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
   if (!conv) throw new Error('Esse lead ainda não tem conversa.')
@@ -134,7 +134,7 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
     }
   }
 
-  await dispatchOutbound(conv.id, text, media, 'human', session.userId)
+  await dispatchOutbound(conv.id, text, media, 'human', session.userId, false, undefined, accountId)
   await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } })
   // 📚 Aprende com a resposta do atendente (pergunta do cliente → resposta dada)
   if (text?.trim().length >= 8) {

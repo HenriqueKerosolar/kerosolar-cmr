@@ -81,6 +81,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [tplOpen, setTplOpen] = useState(false)
   const [tplList, setTplList] = useState<{ id: string; displayName: string; bodyText: string; actionType: string | null }[]>([])
   const [tplSending, setTplSending] = useState<string | null>(null)
+  const [waAccounts, setWaAccounts] = useState<{ id: string; label: string; provider: string; phone: string | null }[]>([])
+  const [sendAccountId, setSendAccountId] = useState<string>('') // '' = automático (prioridade padrão)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -94,6 +96,13 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   }, [lead.id])
 
   useEffect(() => { const t = setInterval(poll, 4000); return () => clearInterval(t) }, [poll])
+  // Contas de WhatsApp conectadas — para o seletor "enviar por qual número"
+  useEffect(() => {
+    fetch('/api/whatsapp').then(r => r.ok ? r.json() : null).then(data => {
+      const list = (data?.accounts ?? []).filter((a: { status: string }) => a.status === 'connected')
+      setWaAccounts(list.map((a: { id: string; label: string; provider: string; phone: string | null }) => ({ id: a.id, label: a.label, provider: a.provider, phone: a.phone })))
+    }).catch(() => {})
+  }, [])
   // Auto-scroll só quando o usuário JÁ está perto do fim — se ele subiu para ler
   // mensagens antigas, o polling não arrasta a tela para baixo.
   const nearBottomRef = useRef(true)
@@ -171,7 +180,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
       try { await simulateClientMessage(lead.id, t); await poll() } finally { setSending(false) }
     } else {
       setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
-      try { await sendManualMessage(lead.id, t); await poll() } finally { setSending(false) }
+      try { await sendManualMessage(lead.id, t, undefined, sendAccountId || undefined); await poll() } finally { setSending(false) }
     }
   }
 
@@ -375,6 +384,21 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             </div>
           )}
 
+          {/* Seletor de número: escolhe por qual WhatsApp a mensagem sai (só com 2+ contas conectadas) */}
+          {!testMode && waAccounts.length > 1 && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[--muted-foreground]">📤 Enviar por:</span>
+              <select value={sendAccountId} onChange={(e) => setSendAccountId(e.target.value)}
+                className="px-2 py-1 rounded-lg border border-[--input] bg-[--background] text-xs outline-none focus:border-[--primary]">
+                <option value="">Automático (padrão)</option>
+                {waAccounts.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.provider === 'cloud' ? '📡' : '🟢'} {a.label}{a.phone ? ` · ${a.phone}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="flex gap-2 items-center">
             {/* Anexar documento/imagem — só no envio real (não no modo teste) */}
             <input ref={fileRef} type="file" className="hidden"
