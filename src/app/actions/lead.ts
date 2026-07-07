@@ -121,8 +121,21 @@ export async function createManualLead(data: {
 /** Atendente envia uma mensagem manual (texto e/ou mídia por URL). */
 export async function sendManualMessage(leadId: string, text: string, media?: { url: string; type: 'image' | 'video' | 'document' }, accountId?: string) {
   const session = await verifySession()
-  const conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
-  if (!conv) throw new Error('Esse lead ainda não tem conversa.')
+  let conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
+  if (!conv) {
+    // Lead criado manualmente ainda sem conversa → cria uma na hora (se tiver telefone)
+    const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
+    const phone = (lead?.contact?.phone ?? '').replace(/\D/g, '')
+    if (!lead?.contactId || !phone) throw new Error('Esse lead não tem telefone cadastrado — adicione um telefone ao contato primeiro.')
+    const account = accountId
+      ? await prisma.whatsappAccount.findUnique({ where: { id: accountId } })
+      : await prisma.whatsappAccount.findFirst({ where: { status: 'connected' }, orderBy: { provider: 'asc' } })
+    conv = await prisma.conversation.upsert({
+      where: { channel_contactId: { channel: 'whatsapp', contactId: lead.contactId } },
+      update: { leadId },
+      create: { channel: 'whatsapp', contactId: lead.contactId, leadId, accountId: account?.id ?? null, externalId: phone },
+    })
+  }
 
   // 🧮 COMANDO DO OPERADOR: "minha indicação é XXXX kWh" → calcula e envia o orçamento (em vez
   // do texto literal). Vale em qualquer etapa. (Mesma função usada no app do WhatsApp.)
