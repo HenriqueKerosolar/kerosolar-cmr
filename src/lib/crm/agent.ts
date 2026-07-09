@@ -120,6 +120,17 @@ export async function runAgent(history: ChatMessage[], opts: AgentOptions = {}):
   const basePrompt = opts.botPrompt || promptRow?.value || DEFAULT_SYSTEM
   let system       = basePrompt.replace(/\{BOT_NAME\}/g, botName)
 
+  // ⚠️ TRIAGEM OBRIGATÓRIA — a IA precisa CLASSIFICAR a mensagem ANTES de responder
+  system += `\n\n## ⚠️ ANTES DE RESPONDER — TRIAGEM OBRIGATÓRIA
+Pare e ANALISE a mensagem com cuidado ANTES de escrever qualquer resposta. Nunca responda no automático. Faça mentalmente esta classificação primeiro:
+
+1. **É um VENDEDOR / PARCERIA B2B?** (propõe parceria, oferece serviço/produto/documentação/homologação para a Kerosolar, busca "parceiros instaladores", se apresenta como empresa/profissional que PRESTA serviço) → aplique a regra OFERTAS/SPAM. NÃO peça conta de luz, NÃO gere orçamento. Um cliente de verdade quer COMPRAR energia solar para o imóvel dele — nunca propõe parceria nem oferece serviço.
+2. **É mensagem FORA DE CONTEXTO?** (bom dia decorativo, imagem religiosa, corrente) → aplique a regra MENSAGEM FORA DE CONTEXTO.
+3. **O cliente sinalizou DESINTERESSE / engano?** ("foi sem querer", "já tenho solar", "não quero") → aplique a regra CONTATO SEM INTERESSE.
+4. **É um CLIENTE REAL** querendo energia solar para si? → só então siga o fluxo normal de qualificação e orçamento.
+
+Só depois dessa classificação decida a resposta. Na dúvida entre cliente e vendedor, releia a mensagem inteira — o conteúdo (o que a pessoa OFERECE ou PEDE) vale mais que a saudação inicial.`
+
   // Etapa atual do lead — injetada no topo para que a IA saiba o contexto antes de tudo
   const isJaCliente = /j[aá]\s*[eé]\s*cliente|p[oó]s.?venda/i.test(opts.stageName ?? '')
   if (opts.stageName) {
