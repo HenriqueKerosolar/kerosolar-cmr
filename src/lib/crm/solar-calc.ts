@@ -333,7 +333,7 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   if (/mais barato|mais em conta|bem barato|concorrent|outra empresa|outro or[çc]amento|outro lugar/i.test(t)) return {}
   // ⚠️ Prospecção / oferta de serviço PARA a empresa (vendedor, não cliente)
   // → números citados são exemplos de negócio, não consumo. Não extrai nada.
-  if (/projeto\s+\d+\s+dias|vender.*projetos|n[aã]o\s+vender\s+nada|garantia\s+em\s+contrato|treinamento\s+comercial|plano\s+de\s+sa[úu]de|bot\s+de\s+atendimento|agência\s+de\s+marketing|bate\s+papo\s+sem\s+compromisso.*para\s+te\s+mostrar|ajudamos\s+mais\s+de\s+\d+|trabalho\s+com\s+projetos\s+e\s+homologa|engenheiro\s+eletricista|usinas\s+fotovoltaicas|terceirizam\s+(esse|o)\s+processo|equipe\s+pr[oó]pria\s+de\s+engenharia|instala[cç][aã]o\s+fotovoltaica|integrador\s+solar/i.test(t)) return {}
+  if (/projeto\s+\d+\s+dias|vender.*projetos|n[aã]o\s+vender\s+nada|garantia\s+em\s+contrato|treinamento\s+comercial|plano\s+de\s+sa[úu]de|bot\s+de\s+atendimento|agência\s+de\s+marketing|bate\s+papo\s+sem\s+compromisso.*para\s+te\s+mostrar|ajudamos\s+mais\s+de\s+\d+|trabalho\s+com\s+projetos\s+e\s+homologa|engenheiro\s+eletricista|usinas\s+fotovoltaicas|terceirizam\s+(esse|o)\s+processo|equipe\s+pr[oó]pria\s+de\s+engenharia|instala[cç][aã]o\s+fotovoltaica|integrador\s+solar|condi[cç][oõ]es\s+de\s+parceria|buscando\s+parceiros|parceiros\s+instaladores|documenta[cç][aã]o\s+t[eé]cnica|tr[aâ]mites\s+junto\s+[aà]s\s+concession|foque\s+em\s+vendas/i.test(t)) return {}
   let kwh: number | undefined
   let reais: number | undefined
 
