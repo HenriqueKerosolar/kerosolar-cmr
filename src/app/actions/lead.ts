@@ -191,6 +191,7 @@ export async function encerrarConversa(conversationId: string) {
   if (conv.leadId) {
     await prisma.scheduledAction.updateMany({ where: { leadId: conv.leadId, done: false }, data: { done: true } })
     await prisma.note.create({ data: { leadId: conv.leadId, type: 'system', content: 'Conversa encerrada pelo atendente (automação pausada até o cliente voltar).' } })
+    revalidatePath(`/leads/${conv.leadId}`)
   }
   revalidatePath('/inbox')
 }

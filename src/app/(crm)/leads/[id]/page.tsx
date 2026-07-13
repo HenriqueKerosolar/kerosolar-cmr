@@ -30,5 +30,7 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
   })
 
   const messages = lead.conversations[0]?.messages ?? []
-  return <LeadCardClient lead={JSON.parse(JSON.stringify({ ...lead, messages, scheduledActions }))} />
+  const conversationId = lead.conversations[0]?.id ?? null
+  const conversationResolved = !!lead.conversations[0]?.resolvedAt
+  return <LeadCardClient lead={JSON.parse(JSON.stringify({ ...lead, messages, scheduledActions, conversationId, conversationResolved }))} />
 }

@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { WhatsAppText } from '@/components/whatsapp-text'
 import { useRouter } from 'next/navigation'
 import {
-  sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage,
+  sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage, encerrarConversa,
 } from '@/app/actions/lead'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
@@ -31,6 +31,7 @@ type Lead = {
   stage: Stage
   pipeline: { name: string; icon: string | null; stages: Stage[] }
   tasks: Task[]; notes: Note[]; messages: Msg[]; scheduledActions: ScheduledAction[]
+  conversationId: string | null; conversationResolved: boolean
 }
 
 // Rótulos amigáveis para os tipos de ação automática agendada
@@ -264,10 +265,19 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             <p className="font-semibold text-sm truncate">{lead.contact?.name ?? lead.title}</p>
             <p className="text-xs text-[--muted-foreground]">{lead.contact?.phone ?? '—'}</p>
           </div>
+          {/* Botão Fechar conversa — encerra (pausa automações até o cliente voltar) */}
+          {lead.conversationId && !lead.conversationResolved && (
+            <button onClick={() => { if (confirm('Encerrar esta conversa? As automações ficam pausadas até o cliente enviar uma nova mensagem.')) run(() => encerrarConversa(lead.conversationId!)) }}
+              title="Encerrar conversa — pausa follow-ups até o cliente voltar"
+              className="ml-auto shrink-0 px-3 py-2 rounded-lg text-xs font-semibold transition border border-[--border] hover:bg-[--accent]">
+              <span className="hidden sm:inline">✓ Fechar conversa</span>
+              <span className="sm:hidden text-base leading-none">✓</span>
+            </button>
+          )}
           {/* Botão IA — liga/desliga a IA neste lead, vale em qualquer etapa */}
           <button onClick={() => { setAiEnabled(!aiEnabled); run(() => toggleLeadAi(lead.id, !aiEnabled)) }}
             title={aiEnabled ? 'Clique para DESLIGAR a IA (você assume o atendimento)' : 'Clique para LIGAR a IA'}
-            className={`ml-auto shrink-0 px-3 py-2 rounded-lg text-xs font-semibold transition ${
+            className={`${lead.conversationId && !lead.conversationResolved ? '' : 'ml-auto'} shrink-0 px-3 py-2 rounded-lg text-xs font-semibold transition ${
               aiEnabled
                 ? 'bg-[--primary] text-[--primary-foreground] hover:opacity-90'
                 : 'bg-amber-500 text-white hover:opacity-90'
