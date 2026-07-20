@@ -18,10 +18,14 @@ import crypto from 'crypto'
  * por causa de rastreamento.
  */
 
-const GRAPH = 'https://graph.facebook.com/v23.0'
+function graphBase(): string {
+  const v = process.env.META_GRAPH_VERSION || 'v21.0'
+  return `https://graph.facebook.com/${v}`
+}
 
 function datasetId(): string {
-  return process.env.META_CAPI_DATASET_ID || ''
+  // META_DATASET_ID é o nome novo; mantém META_CAPI_DATASET_ID como fallback compatível.
+  return process.env.META_DATASET_ID || process.env.META_CAPI_DATASET_ID || ''
 }
 function token(): string {
   return process.env.META_CAPI_TOKEN || process.env.WHATSAPP_CLOUD_TOKEN || ''
@@ -71,7 +75,7 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<boolean> {
   if (ev.wabaId) user_data.whatsapp_business_account_id = ev.wabaId
   if (ev.phone) {
     const digits = ev.phone.replace(/\D/g, '')
-    if (digits) user_data.ph = sha256(digits)
+    if (digits) user_data.ph = [sha256(digits)] // Meta espera ph como array de hashes
   }
 
   const evento: Record<string, unknown> = {
@@ -87,7 +91,7 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<boolean> {
   }
 
   try {
-    const res = await fetch(`${GRAPH}/${ds}/events?access_token=${encodeURIComponent(tk)}`, {
+    const res = await fetch(`${graphBase()}/${ds}/events?access_token=${encodeURIComponent(tk)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: [evento], partner_agent: 'kerosolar-crm' }),

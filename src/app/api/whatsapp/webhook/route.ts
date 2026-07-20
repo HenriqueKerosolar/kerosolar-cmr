@@ -55,6 +55,17 @@ type WaMessage = {
     headline?: string
     body?: string
   }
+  // Fallback: em respostas a mensagens de anúncio, o referral pode vir dentro de context
+  context?: {
+    referral?: {
+      ctwa_clid?: string
+      source_id?: string
+      source_url?: string
+      source_type?: string
+      headline?: string
+      body?: string
+    }
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -220,7 +231,9 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
 
   // 🆕 CTWA: se a mensagem veio de um clique em anúncio, guarda o carimbo no contato
   // e avisa a Meta que o anúncio gerou uma conversa (sinal de topo de funil).
-  const clid = m.referral?.ctwa_clid
+  // Fallback: alguns eventos trazem o referral dentro de context.referral.
+  const ref = m.referral ?? m.context?.referral
+  const clid = ref?.ctwa_clid
   if (clid) {
     await prisma.contact.updateMany({
       where: { OR: [{ phone: from }, { whatsappId: from }] },
@@ -228,11 +241,11 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
         ctwaClid: clid,
         ctwaClidAt: new Date(),
         adReferral: {
-          source_id: m.referral?.source_id ?? null,
-          source_url: m.referral?.source_url ?? null,
-          source_type: m.referral?.source_type ?? null,
-          headline: m.referral?.headline ?? null,
-          body: m.referral?.body ?? null,
+          source_id: ref?.source_id ?? null,
+          source_url: ref?.source_url ?? null,
+          source_type: ref?.source_type ?? null,
+          headline: ref?.headline ?? null,
+          body: ref?.body ?? null,
         } as unknown as object,
       },
     }).catch(() => {})
