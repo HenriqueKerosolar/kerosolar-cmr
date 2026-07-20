@@ -211,6 +211,33 @@ export async function moveLeadStage(leadId: string, stageId: string) {
     },
   })
   await prisma.note.create({ data: { leadId, type: 'stage_change', content: `Movido para "${stage?.name}".` } })
+
+  // 🆕 CTWA: venda ganha → manda Purchase pra Meta com o valor, ligado ao clique do anúncio.
+  if (stage?.isWon) {
+    try {
+      const full = await prisma.lead.findUnique({
+        where: { id: leadId },
+        include: { contact: true, conversations: { include: { account: true }, take: 1 } },
+      })
+      const clid = (full?.contact as { ctwaClid?: string | null } | null)?.ctwaClid ?? null
+      if (clid) {
+        const wabaId = full?.conversations?.[0]?.account?.cloudWabaId ?? null
+        const { sendCapiEvent } = await import('@/lib/crm/capi')
+        void sendCapiEvent({
+          eventName: 'Purchase',
+          ctwaClid: clid,
+          wabaId,
+          value: full?.value || 0,
+          currency: 'BRL',
+          phone: full?.contact?.phone ?? null,
+          eventId: `${leadId}:purchase`,
+        }).catch(() => {})
+      }
+    } catch (e) {
+      console.error('[capi] purchase no won falhou (ignorado):', e)
+    }
+  }
+
   await enterStage(leadId, stageId).catch(() => {})
   revalidatePath(`/leads/${leadId}`)
   revalidatePath('/leads')

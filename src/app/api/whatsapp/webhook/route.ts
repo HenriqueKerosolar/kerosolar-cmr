@@ -46,6 +46,15 @@ type WaMessage = {
   document?: { id: string; mime_type?: string; filename?: string; caption?: string }
   button?: { text?: string }
   interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } }
+  // 🆕 CTWA: presente só na 1ª msg de quem clicou num anúncio clique-para-WhatsApp
+  referral?: {
+    ctwa_clid?: string
+    source_id?: string      // ID do anúncio
+    source_url?: string
+    source_type?: string    // normalmente "ad"
+    headline?: string
+    body?: string
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -130,7 +139,7 @@ async function acharOuCriarConta(phoneNumberId: string, wabaId?: string, display
   return acc
 }
 
-async function processarMensagem(m: WaMessage, account: { id: string; cloudPhoneNumberId: string | null }, nome?: string) {
+async function processarMensagem(m: WaMessage, account: { id: string; cloudPhoneNumberId: string | null; cloudWabaId: string | null }, nome?: string) {
   const from = (m.from || '').replace(/\D/g, '')
   if (!from) return
 
@@ -208,6 +217,35 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     mediaUrl: mediaUrl ?? null,
     mediaType: mediaType ?? null,
   })
+
+  // 🆕 CTWA: se a mensagem veio de um clique em anúncio, guarda o carimbo no contato
+  // e avisa a Meta que o anúncio gerou uma conversa (sinal de topo de funil).
+  const clid = m.referral?.ctwa_clid
+  if (clid) {
+    await prisma.contact.updateMany({
+      where: { OR: [{ phone: from }, { whatsappId: from }] },
+      data: {
+        ctwaClid: clid,
+        ctwaClidAt: new Date(),
+        adReferral: {
+          source_id: m.referral?.source_id ?? null,
+          source_url: m.referral?.source_url ?? null,
+          source_type: m.referral?.source_type ?? null,
+          headline: m.referral?.headline ?? null,
+          body: m.referral?.body ?? null,
+        } as unknown as object,
+      },
+    }).catch(() => {})
+
+    const { sendCapiEvent } = await import('@/lib/crm/capi')
+    void sendCapiEvent({
+      eventName: 'Lead',                       // conversa iniciada por anúncio
+      ctwaClid: clid,
+      wabaId: account.cloudWabaId,
+      phone: from,
+      eventId: `${from}:lead:${m.id ?? ''}`,   // dedup
+    }).catch(() => {})
+  }
 
   // 📤 ENVIA a resposta da IA pela API oficial. O motor cria a mensagem no banco, mas QUEM ENVIA
   //    pro canal é o chamador (igual o Baileys faz com sendText). Sem isso, a IA "responde" só no
