@@ -21,7 +21,7 @@ function configurar(): boolean {
   return true
 }
 
-type PushPayload = { title: string; body: string; url?: string; tag?: string }
+type PushPayload = { title: string; body: string; url?: string; tag?: string; attention?: boolean }
 
 /** Envia uma notificação push pra TODOS os aparelhos inscritos. Remove inscrições inválidas. */
 export async function enviarPush(payload: PushPayload): Promise<void> {

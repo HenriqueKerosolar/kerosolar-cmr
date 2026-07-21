@@ -11,9 +11,11 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'unauth' }, { status: 401 })
 
   const convs = await prisma.conversation.findMany({
-    where: { resolvedAt: null }, // conversas encerradas somem; voltam quando o cliente escrever
-    orderBy: { lastMessageAt: 'desc' },
-    take: 100,
+    // Encerradas somem (voltam quando o cliente escrever). Só aparecem conversas com
+    // INTERAÇÃO REAL: o lead precisa ter enviado ao menos 1 mensagem (não só recebido do sistema).
+    where: { resolvedAt: null, messages: { some: { direction: 'inbound' } } },
+    orderBy: { lastMessageAt: 'asc' }, // mais antigos primeiro (mesma regra do Inbox do computador)
+    take: 200,
     include: {
       contact: true,
       lead: { include: { stage: true } },

@@ -1126,6 +1126,17 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     await prisma.note.create({
       data: { leadId: lead.id, type: 'system', content: 'IA encaminhou para atendimento humano — IA desativada.' },
     })
+    // 🔔 Precisa de você: push com vibração/som mais insistente.
+    if (!isSimulator) {
+      const { enviarPush } = await import('./push')
+      enviarPush({
+        title: `🙋 ${contact.name || contact.phone || 'Cliente'} precisa de atendimento`,
+        body: taskTitle,
+        url: `/leads/${lead.id}`,
+        tag: conversation.id,
+        attention: true,
+      }).catch(() => {})
+    }
   }
 
   // ❄️ AR-CONDICIONADO: cliente quer instalar/usar mais ar. NÃO mandamos o orçamento simples
@@ -1181,6 +1192,16 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
       await prisma.task.create({ data: { leadId: lead.id, title: '⚠️ IA travou em loop — assumir conversa', type: 'message', dueAt: now } })
       await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: isSemanticLoop ? 'IA travou em loop semântico (variações da mesma resposta) — encaminhado ao humano.' : 'IA ia repetir a mesma mensagem — encaminhado ao humano e IA desativada.' } })
+      if (!isSimulator) {
+        const { enviarPush } = await import('./push')
+        enviarPush({
+          title: `⚠️ ${contact.name || contact.phone || 'Cliente'} — assuma a conversa`,
+          body: 'A IA travou e precisa de você.',
+          url: `/leads/${lead.id}`,
+          tag: conversation.id,
+          attention: true,
+        }).catch(() => {})
+      }
     }
   }
 

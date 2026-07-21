@@ -12,10 +12,15 @@ export async function POST(req: Request) {
   }
 
   try {
-    await prisma.conversation.updateMany({
-      where: { id: { in: convIds } },
-      data: { resolvedAt: new Date() },
-    })
+    // Mesmas regras do "Fechar" do Inbox do computador (encerrarConversa):
+    // 1) marca resolvida  2) marca mensagens do cliente como lidas  3) pausa automações pendentes.
+    const convs = await prisma.conversation.findMany({ where: { id: { in: convIds } }, select: { id: true, leadId: true } })
+    await prisma.conversation.updateMany({ where: { id: { in: convIds } }, data: { resolvedAt: new Date() } })
+    await prisma.message.updateMany({ where: { conversationId: { in: convIds }, direction: 'inbound', isRead: false }, data: { isRead: true } })
+    const leadIds = convs.map((c) => c.leadId).filter((v): v is string => !!v)
+    if (leadIds.length) {
+      await prisma.scheduledAction.updateMany({ where: { leadId: { in: leadIds }, done: false }, data: { done: true } })
+    }
     return NextResponse.json({ ok: true, count: convIds.length })
   } catch {
     return NextResponse.json({ error: 'Erro ao encerrar conversas.' }, { status: 500 })

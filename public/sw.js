@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kerosolar-crm-v4'
+const CACHE_NAME = 'kerosolar-crm-v5'
 const urlsToCache = [
   '/',
   '/icon-192.png',
@@ -47,5 +47,42 @@ self.addEventListener('fetch', (event) => {
       .catch(() => {
         return caches.match(request)
       })
+  )
+})
+
+// 🔔 Recebe a notificação push e EXIBE com som + vibração.
+// Sem este handler, o push chega ao aparelho mas nada aparece.
+self.addEventListener('push', (event) => {
+  let data = {}
+  try { data = event.data ? event.data.json() : {} } catch { data = {} }
+  const attention = !!data.attention
+  const title = data.title || 'KeroSolar'
+  const options = {
+    body: data.body || 'Nova mensagem',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    // Vibração: padrão mais longo/insistente quando precisa de atenção.
+    vibrate: attention ? [300, 120, 300, 120, 300] : [200, 100, 200],
+    // Mantém a notificação na tela até o operador tocar (só para as urgentes).
+    requireInteraction: attention,
+    renotify: true,
+    // tag por conversa: novas mensagens da MESMA conversa se agrupam em vez de empilhar.
+    tag: data.tag || 'kerosolar',
+    data: { url: data.url || '/inbox' },
+  }
+  event.waitUntil(self.registration.showNotification(title, options))
+})
+
+// Ao tocar na notificação: foca uma aba já aberta ou abre a URL da conversa.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = (event.notification.data && event.notification.data.url) || '/inbox'
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
+      for (const client of clientsArr) {
+        if ('focus' in client) { client.focus(); if ('navigate' in client) client.navigate(url); return }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url)
+    })
   )
 })

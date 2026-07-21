@@ -61,7 +61,7 @@ export default async function PainelPage() {
       {/* Números principais */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Stat icon="🟢" label="Leads abertos" valor={abertos} href="/leads" />
-        <Stat icon="✨" label="Novos hoje" valor={novosHoje} cor="text-amber-500" />
+        <Stat icon="✨" label="Novos hoje" valor={novosHoje} cor="text-amber-500" href="/inbox?novos=1" />
         <Stat icon="👤" label="Em atendimento humano" valor={emAtendimento} href="/inbox" />
         <Stat icon="🏆" label="Ganhos" valor={ganhos} cor="text-green-600" />
         <Stat icon="📤" label="Disparos na fila" valor={filaDisparo} />
