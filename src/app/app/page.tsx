@@ -5,7 +5,17 @@ import Link from 'next/link'
 import { PushSetup } from '@/components/push-setup'
 import { InstallButton } from '@/components/install-button'
 
-type Conv = { id: string; leadId: string | null; channel: string; name: string; lastText: string; lastAt: string | null; unread: boolean; stage: { name: string; color: string | null } | null }
+type Conv = { id: string; leadId: string | null; channel: string; name: string; phone: string | null; lastText: string; lastAt: string | null; unread: boolean; stage: { name: string; color: string | null } | null }
+
+// Formata o telefone BR para exibição: 5521999998888 → (21) 99999-8888
+function formatarTelefone(tel: string | null): string {
+  if (!tel) return ''
+  let d = tel.replace(/\D/g, '')
+  if (d.startsWith('55') && d.length > 11) d = d.slice(2) // tira o código do país
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+  return tel
+}
 
 const canalIcone: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
 
@@ -104,6 +114,9 @@ export default function ConversasPage() {
                   </span>
                   <span className="text-[11px] text-zinc-400 shrink-0">{quando(c.lastAt)}</span>
                 </div>
+                {c.phone && (
+                  <p className="text-[11px] text-zinc-500 mt-0.5">{formatarTelefone(c.phone)}</p>
+                )}
                 <div className="flex items-center gap-2 mt-0.5">
                   <p className={`text-sm truncate flex-1 ${c.unread ? 'text-zinc-900 font-medium' : 'text-zinc-500'}`}>{c.lastText || '—'}</p>
                   {c.unread && <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0" />}
@@ -116,6 +129,12 @@ export default function ConversasPage() {
                 )}
               </div>
             </Link>
+            {c.phone && (
+              <a href={`tel:${c.phone.replace(/\D/g, '')}`} title={`Ligar para ${formatarTelefone(c.phone)}`}
+                className="shrink-0 w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-lg active:bg-green-200">
+                📞
+              </a>
+            )}
           </div>
         ))}
         {!loading && lista.length === 0 && (

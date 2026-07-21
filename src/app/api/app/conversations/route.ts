@@ -30,6 +30,7 @@ export async function GET() {
       leadId: c.leadId,
       channel: c.channel,
       name: c.contact?.name || c.contact?.phone || 'Cliente',
+      phone: c.contact?.phone || null,
       lastText: last ? (last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '✓ ') : '') + (last.content || '') : '',
       lastAt: c.lastMessageAt,
       unread: !!last && last.direction === 'inbound' && !last.isRead,
