@@ -84,7 +84,16 @@ export default function ConversasPage() {
           </>
         ) : (
           <>
-            <span className="font-bold text-base flex-1">KeroSolarZap</span>
+            <span className="font-bold text-base flex-1 flex items-center gap-2">
+              KeroSolarZap
+              {/* Sinalização de novas entradas: total na fila + bolinha se houver não lidas */}
+              {lista.length > 0 && (
+                <span className="inline-flex items-center gap-1 bg-white/25 rounded-full px-2 py-0.5 text-xs font-semibold">
+                  {lista.length}
+                  {lista.some((c) => c.unread) && <span className="w-2 h-2 rounded-full bg-yellow-300" />}
+                </span>
+              )}
+            </span>
             <InstallButton />
             <PushSetup />
           </>

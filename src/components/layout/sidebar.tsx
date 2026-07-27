@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 
 const NAV = [
   { href: '/painel',        icon: '🏠', label: 'Painel' },
@@ -24,6 +25,16 @@ const NAV = [
 export function Sidebar({ name, role }: { name: string; role: string }) {
   const path = usePathname()
   const router = useRouter()
+  const [inboxCount, setInboxCount] = useState(0)
+
+  // Sinalização de novas entradas: badge no menu Inbox, atualizado a cada 10s.
+  useEffect(() => {
+    let ativo = true
+    const carregar = () => fetch('/api/inbox/count').then((r) => r.ok ? r.json() : null).then((d) => { if (ativo && d) setInboxCount(d.count ?? 0) }).catch(() => {})
+    carregar()
+    const t = setInterval(carregar, 10000)
+    return () => { ativo = false; clearInterval(t) }
+  }, [])
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' })
@@ -43,14 +54,24 @@ export function Sidebar({ name, role }: { name: string; role: string }) {
       <nav className="flex-1 py-4 space-y-1 px-2">
         {NAV.map((item) => {
           const active = path.startsWith(item.href)
+          const badge = item.href === '/inbox' && inboxCount > 0 ? inboxCount : 0
           return (
             <Link key={item.href} href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition ${
+              className={`relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition ${
                 active ? 'bg-[--primary] text-[--primary-foreground]' : 'hover:bg-[--accent] text-[--foreground]'
               }`}
             >
-              <span className="text-base">{item.icon}</span>
+              <span className="text-base relative">
+                {item.icon}
+                {/* bolinha vermelha no ícone quando a sidebar está recolhida (mobile/estreita) */}
+                {badge > 0 && <span className="md:hidden absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />}
+              </span>
               <span className="hidden md:block">{item.label}</span>
+              {badge > 0 && (
+                <span className="hidden md:flex ml-auto min-w-[20px] h-5 items-center justify-center rounded-full bg-red-500 text-white text-[11px] font-bold px-1.5">
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
             </Link>
           )
         })}
