@@ -314,6 +314,12 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
   system += `\n\n## REGRA MUNICÍPIO: se o cliente já enviou a conta de luz (a conta tem o endereço/cidade no cabeçalho) ` +
     `ou se a cidade/estado já aparece nos dados ou no histórico da conversa, NÃO pergunte a cidade/município de novo — você já tem essa informação.`
 
+  // Regra fixa: consumo anual → dividir por 12
+  system += `\n\n## REGRA CONSUMO ANUAL: se o cliente informar o consumo/média em kWh como ANUAL ` +
+    `(ex.: "9600 kWh por ano", "minha média anual é 9600", "9600 no ano"), o tamanho do kit é o consumo MENSAL — ` +
+    `então DIVIDA por 12. Ex.: 9600 kWh/ano ÷ 12 = 800 kWh/mês (é 800 que dimensiona o sistema, não 9600). ` +
+    `Se o consumo for mensal (o padrão), use direto sem dividir.`
+
   // Regra fixa: pagamento à vista
   system += `\n\n## REGRA PAGAMENTO À VISTA: no pagamento à vista há 5% de desconto sobre o valor do sistema. ` +
     `Se o cliente perguntar sobre pagar à vista/no pix/dinheiro, informe o desconto e, se você souber o valor do sistema, ` +

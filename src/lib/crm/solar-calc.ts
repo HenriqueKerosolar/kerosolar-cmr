@@ -356,6 +356,14 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     }
   }
 
+  // 📅 CONSUMO ANUAL → dividir por 12 para achar o MENSAL (que é o tamanho do kit).
+  // Ex.: cliente diz "9600 kWh no ano" → 9600 ÷ 12 = 800 kWh/mês. Só quando o texto
+  // indica que a média/consumo é ANUAL ("por ano", "ao ano", "anual", "/ano", "no ano").
+  if (kwh && /\b(?:por\s+ano|ao\s+ano|anual|anuais|no\s+ano|\/\s*ano|\bano\b)\b/i.test(t)) {
+    const mensal = Math.round(kwh / 12)
+    if (consumoKwhValido(mensal)) kwh = mensal
+  }
+
   // 2º) Só se NÃO informou consumo em kWh: pedido por nº de placas/painéis/módulos vira kWh
   // (1 painel = 60 kWh). Ex.: "quero 5 painéis" = 300 kWh. É um chute de tamanho — nunca pode
   // sobrescrever o consumo real ("750/800 kWh, quero 8 placas" usa 800, não as 8 placas).
