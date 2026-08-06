@@ -100,7 +100,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   // Contas de WhatsApp conectadas — para o seletor "enviar por qual número"
   useEffect(() => {
     fetch('/api/whatsapp').then(r => r.ok ? r.json() : null).then(data => {
-      const list = (data?.accounts ?? []).filter((a: { status: string }) => a.status === 'connected')
+      // Só contas Cloud API (oficial) — contas Baileys antigas podem ter status 'connected' congelado no banco
+      const list = (data?.accounts ?? []).filter((a: { status: string; provider: string }) => a.provider === 'cloud' && a.status === 'connected')
       setWaAccounts(list.map((a: { id: string; label: string; provider: string; phone: string | null }) => ({ id: a.id, label: a.label, provider: a.provider, phone: a.phone })))
     }).catch(() => {})
   }, [])

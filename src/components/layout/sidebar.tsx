@@ -10,7 +10,6 @@ const NAV = [
   { href: '/inbox',         icon: '💬', label: 'Inbox' },
   { href: '/contatos',      icon: '👥', label: 'Contatos' },
   { href: '/funis',         icon: '📊', label: 'Funis' },
-  { href: '/whatsapp',      icon: '📱', label: 'WhatsApp' },
   { href: '/meta',          icon: '📷', label: 'Insta/Face' },
   { href: '/agenda',        icon: '📅', label: 'Agenda' },
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },

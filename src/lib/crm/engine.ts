@@ -890,21 +890,20 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const ebookMsg = result.reply || `Aqui está${nomeCliente}! 😊 Preparei esse guia exclusivo pra você entender tudo sobre energia solar e não cair em armadilhas do mercado. Qualquer dúvida, é só me chamar! ☀️`
     await simularDigitacao(ebookMsg)
     await dispatchOutbound(conversation.id, ebookMsg, undefined, 'ai')
-    // Envia o PDF apenas em canais que suportam (WhatsApp — Baileys ou Cloud API)
+    // Envia o PDF apenas em canais que suportam (WhatsApp — Cloud API)
     if (conversation.channel === 'whatsapp' && conversation.accountId) {
       try {
         const account = await prisma.whatsappAccount.findUnique({ where: { id: conversation.accountId } })
         let waId: string | null = null
-        if (account?.provider === 'cloud' && account.cloudPhoneNumberId) {
+        const cloudAccount = (account?.provider === 'cloud' && account.cloudPhoneNumberId)
+          ? account
+          : await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+        if (cloudAccount?.cloudPhoneNumberId) {
           const toPhone = contact.whatsappId || contact.phone || conversation.externalId || ''
           if (toPhone) {
             const cloud = await import('./cloud-api')
-            waId = await cloud.sendCloudMedia(account.cloudPhoneNumberId, toPhone, ebookUrl, 'document', 'Guia-Anti-Cilada-KeroSolar-2026.pdf')
+            waId = await cloud.sendCloudMedia(cloudAccount.cloudPhoneNumberId, toPhone, ebookUrl, 'document', 'Guia-Anti-Cilada-KeroSolar-2026.pdf')
           }
-        } else if (contact.whatsappId) {
-          const wa = await import('./whatsapp')
-          const jid = (conversation.chatJid && conversation.chatJid.includes('@')) ? conversation.chatJid : contact.whatsappId
-          waId = await wa.sendMedia(conversation.accountId, jid, { url: ebookUrl, type: 'document', fileName: 'Guia-Anti-Cilada-KeroSolar-2026.pdf' })
         }
         await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: '[📄 Guia Anti-Cilada KeroSolar 2026.pdf]', mediaUrl: ebookUrl, mediaType: 'document', ...(waId ? { externalId: waId } : {}) } })
       } catch (e) { console.error('[engine] ebook sendMedia', e) }

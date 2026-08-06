@@ -178,7 +178,7 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
       if (dl) {
         imageBase64 = dl.buffer.toString('base64')
         imageMediaType = dl.mimeType
-        const { salvarMidiaRecebida } = await import('@/lib/crm/whatsapp')
+        const { salvarMidiaRecebida } = await import('@/lib/crm/media')
         mediaUrl = salvarMidiaRecebida(dl.buffer, '.' + (dl.mimeType.split('/')[1] || 'jpg')) ?? undefined
       }
       text = caption
@@ -187,7 +187,7 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
       mediaType = 'audio'
       if (dl) {
         // Salva o áudio pra poder OUVIR no app
-        const { salvarMidiaRecebida } = await import('@/lib/crm/whatsapp')
+        const { salvarMidiaRecebida } = await import('@/lib/crm/media')
         const ext = '.' + ((dl.mimeType.split('/')[1] || 'ogg').split(';')[0])
         mediaUrl = salvarMidiaRecebida(dl.buffer, ext) ?? undefined
         // E transcreve (Whisper) pra ficar pesquisável/legível
@@ -204,7 +204,7 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
       mediaType = m.type
       if (dl) {
         const ext = m.type === 'video' ? '.mp4' : ('.' + ((mediaObj?.filename?.split('.').pop()) || (dl.mimeType.split('/')[1]) || 'bin'))
-        const { salvarMidiaRecebida } = await import('@/lib/crm/whatsapp')
+        const { salvarMidiaRecebida } = await import('@/lib/crm/media')
         mediaUrl = salvarMidiaRecebida(dl.buffer, ext) ?? undefined
       }
       text = caption
