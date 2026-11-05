@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "pecas": {
+    "nervo": {
+      "versao": "0.4.2",
+      "caminho": "packages/integracao/nervo/0.4.2",
+      "desde": "2026-11-05",
+      "pacote": "vendor/lib-nervo-0.4.2.tgz",
+      "sha256": "7b283eb0079eefc61fcd4119d36fbddac8193816dfa89e5139cb08403a79b214",
+      "manifestoSha256": "14668334f63ca847044b86811ef4f3514ffdc42e1bc602c3845e4aa3d053a540"
+    }
+  }
+}

@@ -238,6 +238,23 @@ export async function moveLeadStage(leadId: string, stageId: string) {
     }
   }
 
+  // 🆕 Nervo: lead ganho/perdido → publica o desfecho pro Mind Marketing (receita real, sem
+  // depender de atribuição por campanha). Melhor esforço: nunca desfaz a troca de estágio.
+  if (stage?.isWon || stage?.isLost) {
+    try {
+      const { getCrmNervo } = await import('@/lib/nervo/fromEnv')
+      const nervo = getCrmNervo()
+      if (nervo) {
+        const full = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
+        const outcome = { leadId, contactPhone: full?.contact?.phone ?? null }
+        if (stage?.isWon) await nervo.publishLeadWon({ ...outcome, valueReais: full?.value ?? 0 })
+        else await nervo.publishLeadLost(outcome)
+      }
+    } catch (e) {
+      console.error('[nervo] publicar desfecho do lead falhou (ignorado):', e)
+    }
+  }
+
   await enterStage(leadId, stageId).catch(() => {})
   revalidatePath(`/leads/${leadId}`)
   revalidatePath('/leads')

@@ -450,3 +450,20 @@ model WhatsappAccountPipeline {
   @@id([accountId, pipelineId])
   @@map("whatsapp_account_pipelines")
 }
+
+// ─── Nervo (pareamento com o Mind) ────────────────────────────────────────────
+
+/// Conexão pareada deste CRM com o Mind (peça @lib/nervo 0.4.2): o dono aceita UMA vez no painel
+/// do Mind e a credencial chega direto aqui, SELADA (AES-256-GCM, chave derivada do SESSION_SECRET),
+/// sem copiar Key nem segredo em lugar nenhum. `sealed` é texto opaco (o banco nunca vê a Key em claro).
+/// `slot` guarda a credencial (`connection`), o pedido pendente (`pairing`) e as exclusões mútuas curtas
+/// (`lock:*`, com `lease_until`). Tabela/colunas idênticas ao DDL de `nervoPostgresSchemaSql()` — o
+/// código da peça acessa por SQL; este model só existe para o `prisma db push` criar a tabela.
+model NervoConnection {
+  slot       String @id
+  sealed     String @default("")
+  updatedAt  BigInt @map("updated_at")
+  leaseUntil BigInt @default(0) @map("lease_until")
+
+  @@map("nervo_connection")
+}
