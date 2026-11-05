@@ -16,9 +16,20 @@ POST https://seu-dominio-crm.com/api/public/chat-site
 {
   "action": "start",
   "visitorName": "João Silva",
-  "visitorEmail": "joao@example.com"
+  "visitorEmail": "joao@example.com",
+  "landingUrl": "https://keroservice.com.br/?utm_source=google&utm_medium=cpc&utm_campaign=solar-sp&gclid=abc123"
 }
 ```
+
+`landingUrl` é **opcional** (mudança aditiva — o site ainda não manda isso; esse campo é o CRM ficando
+pronto pra quando o site mandar). Quando vier, o CRM extrai da querystring e guarda associado ao contato:
+`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `gclid`/`gbraid`/`wbraid` (Google
+Ads) e `fbclid` (Meta Ads) — o que não estiver na URL simplesmente não é guardado (nunca inventado).
+
+**⚠️ Pendente de aplicar no site:** o snippet do widget (`iniciarChat()` abaixo) já manda
+`landingUrl: window.location.href`, mas falta localizar ONDE esse script roda de fato no
+keroservice.com.br (WordPress? Google Tag Manager? outro?) pra aplicar a mudança lá. Até isso ser feito,
+o CRM recebe o campo normalmente quando existir e segue funcionando igual quando não vier.
 
 **Resposta:**
 ```json
@@ -87,6 +98,7 @@ async function iniciarChat() {
       action: 'start',
       visitorName: prompt('Seu nome?'),
       visitorEmail: prompt('Seu email?'),
+      landingUrl: window.location.href, // pra atribuição de campanha (utm/gclid/fbclid), quando existirem
     }),
   })
   const data = await res.json()

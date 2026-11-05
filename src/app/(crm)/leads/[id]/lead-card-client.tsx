@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import {
   sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage, encerrarConversa,
 } from '@/app/actions/lead'
+import { summarizeLeadOrigin } from '@/lib/crm/lead-origin'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
 
@@ -27,7 +28,7 @@ type ScheduledAction = { id: string; type: string; runAt: string }
 type Lead = {
   id: string; title: string; value: number; status: string; aiEnabled: boolean; source: string | null
   customFields: Record<string, unknown> | null
-  contact: { name: string | null; phone: string | null; email: string | null } | null
+  contact: { name: string | null; phone: string | null; email: string | null; adReferral: unknown; utmReferral: unknown } | null
   stage: Stage
   pipeline: { name: string; icon: string | null; stages: Stage[] }
   tasks: Task[]; notes: Note[]; messages: Msg[]; scheduledActions: ScheduledAction[]
@@ -499,6 +500,19 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             <div key={k} className="flex justify-between gap-2"><span className="text-[--muted-foreground]">{k}</span><span className="font-medium">{v}</span></div>
           ))}
         </div>
+
+        {/* Origem real do lead (anúncio/campanha) — só mostra quando existe dado de verdade */}
+        {(() => {
+          const origin = summarizeLeadOrigin(lead.contact)
+          if (!origin) return null
+          return (
+            <div>
+              <p className="text-xs font-medium text-[--muted-foreground] mb-1">Origem</p>
+              <p className="text-xs font-medium">{origin.label}</p>
+              {origin.detail && <p className="text-[--muted-foreground] text-xs truncate" title={origin.detail}>{origin.detail}</p>}
+            </div>
+          )
+        })()}
 
         {/* ☀️ Simulação Solar */}
         {(() => {

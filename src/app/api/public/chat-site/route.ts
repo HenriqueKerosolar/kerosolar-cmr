@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { runAgent } from '@/lib/crm/agent'
 import type { ChatMessage } from '@/lib/crm/ai'
+import { extractUtmReferral } from '@/lib/crm/utm-referral'
 
 type ReqBody = {
   action: 'start' | 'message' | 'set-whatsapp'
@@ -10,6 +11,8 @@ type ReqBody = {
   visitorEmail?: string
   message?: string
   whatsapp?: string
+  /** URL completa (com querystring) da página onde o visitante abriu o chat — pra atribuição de campanha. */
+  landingUrl?: string
 }
 
 export async function POST(req: Request) {
@@ -21,11 +24,13 @@ export async function POST(req: Request) {
       if (!body.visitorName) return NextResponse.json({ error: 'Nome obrigatório.' }, { status: 400 })
 
       // Criar contato temporário para o visitante
+      const utmReferral = extractUtmReferral(body.landingUrl)
       const contact = await prisma.contact.create({
         data: {
           name: body.visitorName,
           email: body.visitorEmail || null,
           phone: null,
+          ...(utmReferral ? { utmReferral: utmReferral as object } : {}),
         },
       })
 

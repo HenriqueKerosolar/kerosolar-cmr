@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
+import { summarizeQualification } from '@/lib/crm/lead-qualification'
 
 type Lead = {
   id: string
@@ -12,6 +13,7 @@ type Lead = {
   highPriority: boolean
   aiEnabled: boolean
   createdAt: string
+  customFields: Record<string, unknown> | null
 }
 type Stage = { id: string; name: string; color: string | null; leads: Lead[] }
 
@@ -67,6 +69,7 @@ export function LeadsBoard({ stages }: { stages: Stage[] }) {
                 const nome = (lead.name || '?').trim()
                 const ini = nome.replace(/[^A-Za-zÀ-ÿ0-9]/g, '')[0]?.toUpperCase() ?? '?'
                 const isNew = (Date.now() - new Date(lead.createdAt).getTime()) < 3 * 24 * 60 * 60 * 1000
+                const qualificacao = summarizeQualification(lead.customFields)
                 return (
                   <Link key={lead.id} href={`/leads/${lead.id}`}
                     className={`p-3 rounded-xl border bg-white dark:bg-zinc-900 hover:shadow-md transition block ${isNew ? 'border-blue-400 dark:border-blue-500' : 'border-[--border] hover:border-[--ring]/50'}`}>
@@ -78,6 +81,7 @@ export function LeadsBoard({ stages }: { stages: Stage[] }) {
                           {isNew && <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 uppercase tracking-wide">Novo</span>}
                         </div>
                         {lead.phone && <p className="text-[11px] text-[--muted-foreground] truncate">{lead.phone}</p>}
+                        {qualificacao && <p className="text-[11px] text-[--muted-foreground] truncate">{qualificacao}</p>}
                       </div>
                     </div>
                     {(lead.source || !lead.aiEnabled || lead.value > 0) && (

@@ -159,6 +159,8 @@ model Contact {
   ctwaClid    String?   // referral.ctwa_clid — carimbo do clique no anúncio
   ctwaClidAt  DateTime? // quando capturamos (a janela de atribuição da Meta é ~7 dias)
   adReferral  Json?     // dados do anúncio de origem (source_id, source_url, headline...)
+  // ── Atribuição de origem do site (utm/gclid/fbclid da landing page do chat) ──
+  utmReferral Json?     // { utm_source?, utm_medium?, utm_campaign?, utm_term?, utm_content?, gclid?, gbraid?, wbraid?, fbclid?, landingUrl?, capturedAt? }
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
