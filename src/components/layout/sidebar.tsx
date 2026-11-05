@@ -11,6 +11,7 @@ const NAV = [
   { href: '/contatos',      icon: '👥', label: 'Contatos' },
   { href: '/funis',         icon: '📊', label: 'Funis' },
   { href: '/meta',          icon: '📷', label: 'Insta/Face' },
+  { href: '/social',        icon: '📣', label: 'Comentários & DMs' },
   { href: '/agenda',        icon: '📅', label: 'Agenda' },
   { href: '/simulador',     icon: '🧪', label: 'Simulador' },
   { href: '/aprendizado',   icon: '🧠', label: 'Aprendizado' },

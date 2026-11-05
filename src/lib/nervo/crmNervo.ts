@@ -12,7 +12,7 @@
 // caixa de SAÍDA dos eventos fica em memória (padrão da peça): aceitável aqui porque `publish()` já
 // tenta o envio na hora (`sendNow` padrão) e, falhando, é melhor esforço — a troca de estágio já
 // aconteceu no banco antes disso e nunca é desfeita por uma falha do Nervo.
-import { createNervoConnection, createPostgresConnectionStore, isNervoError, redact, type Connection, type FetchLike, type PgQuery } from '@lib/nervo'
+import { createNervoConnection, createPostgresConnectionStore, isNervoError, redact, type Connection, type EventHandler, type FetchLike, type InboundRequest, type InboundResponse, type PgQuery } from '@lib/nervo'
 import type { NervoConfig } from './config'
 
 export const NERVO_PRODUCT_ID = 'kerosolar-crm'
@@ -27,8 +27,8 @@ export interface CrmNervoDeps {
   fetch?: FetchLike
   now?: () => number
   log?: Log
-  /** Injetável nos testes (só usamos `publish`/`advance`). Padrão: `createNervoConnection` de verdade. */
-  connection?: Pick<Connection, 'publish' | 'advance'>
+  /** Injetável nos testes. Padrão: `createNervoConnection` de verdade. */
+  connection?: Pick<Connection, 'publish' | 'advance' | 'on' | 'receive'>
 }
 
 export interface LeadOutcomeInput {
@@ -46,6 +46,10 @@ export interface CrmNervo {
   publishLeadWon(input: LeadWonInput): Promise<void>
   /** Melhor esforço: NUNCA lança. */
   publishLeadLost(input: LeadOutcomeInput): Promise<void>
+  /** Registra um handler pra um evento que o Mind entrega (ex.: `social.engagement.captured`). */
+  on(type: string, handler: EventHandler): void
+  /** Ponto de entrada do que o Mind entrega — ligue à rota HTTP de inbound deste CRM. */
+  receive(req: InboundRequest): Promise<InboundResponse>
 }
 
 function errorText(error: unknown): string {
@@ -102,5 +106,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
   return {
     publishLeadWon: (input) => publish('lead.won', input, Math.round(input.valueReais * 100)),
     publishLeadLost: (input) => publish('lead.lost', input, undefined),
+    on: (type, handler) => connection.on(type, handler),
+    receive: (req) => connection.receive(req),
   }
 }

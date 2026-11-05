@@ -6,6 +6,8 @@ import { prisma } from '@/lib/prisma'
 import { createCrmNervo, type CrmNervo } from './crmNervo'
 import { loadNervoConfig } from './config'
 import { createPrismaQuery } from './prismaQuery'
+import { createSocialEngagementHandler } from './socialEngagementHandler'
+import type { SocialEngagementRow } from './socialEngagement'
 
 type Log = (level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) => void
 
@@ -27,7 +29,23 @@ export function getCrmNervo(): CrmNervo | undefined {
     return undefined
   }
   try {
-    globalForNervo.crmNervo = createCrmNervo({ config: result.config, query: createPrismaQuery(prisma), log })
+    const nervo = createCrmNervo({ config: result.config, query: createPrismaQuery(prisma), log })
+    // Comentário/DM do Facebook/Instagram, publicado pelo Mind Marketing — só leitura (quem responde é
+    // o Marketing). `externalId` único: reentrega do Nervo nunca duplica a linha.
+    nervo.on(
+      'social.engagement.captured',
+      createSocialEngagementHandler({
+        upsert: (row: SocialEngagementRow) =>
+          prisma.socialEngagement
+            .upsert({
+              where: { externalId: row.externalId },
+              create: row,
+              update: { authorName: row.authorName, text: row.text, postPermalink: row.postPermalink },
+            })
+            .then(() => undefined),
+      }),
+    )
+    globalForNervo.crmNervo = nervo
   } catch (error) {
     log('warn', `Nervo desligado: a configuração foi recusada (${error instanceof Error ? error.message : String(error)})`)
     globalForNervo.crmNervo = null

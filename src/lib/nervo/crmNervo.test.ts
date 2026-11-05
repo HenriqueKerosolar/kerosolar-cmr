@@ -12,9 +12,12 @@ const config: NervoConfig = {
   mindMarketingClientAccountId: '9b1f177e-9bcf-44da-93e9-53aa994ab9ae',
 }
 
+const noopOn = vi.fn()
+const noopReceive = vi.fn().mockResolvedValue({ status: 503, body: {} })
+
 function nervoWith(publish: ReturnType<typeof vi.fn>) {
   const advance = vi.fn().mockResolvedValue({ state: 'paired' })
-  return createCrmNervo({ config, query: vi.fn(), connection: { publish, advance } })
+  return createCrmNervo({ config, query: vi.fn(), connection: { publish, advance, on: noopOn, receive: noopReceive } })
 }
 
 describe('createCrmNervo', () => {
@@ -70,7 +73,7 @@ describe('createCrmNervo', () => {
   it('avança o pareamento (advance) antes de publicar — é o que pede o pareamento ao Mind na 1ª vez', async () => {
     const publish = vi.fn().mockResolvedValue({ id: 'evt5', duplicate: false, queued: true })
     const advance = vi.fn().mockResolvedValue({ state: 'pending', userCode: 'ABCD-1234' })
-    const nervo = createCrmNervo({ config, query: vi.fn(), connection: { publish, advance } })
+    const nervo = createCrmNervo({ config, query: vi.fn(), connection: { publish, advance, on: noopOn, receive: noopReceive } })
 
     await nervo.publishLeadWon({ leadId: 'lead5', valueReais: 10 })
 
@@ -81,9 +84,23 @@ describe('createCrmNervo', () => {
   it('falha do advance() (ex.: banco fora do ar) não impede a tentativa de publicar', async () => {
     const publish = vi.fn().mockRejectedValue(new NervoError('NERVO_UNPAIRED', 'sem conexão'))
     const advance = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
-    const nervo = createCrmNervo({ config, query: vi.fn(), connection: { publish, advance } })
+    const nervo = createCrmNervo({ config, query: vi.fn(), connection: { publish, advance, on: noopOn, receive: noopReceive } })
 
     await expect(nervo.publishLeadLost({ leadId: 'lead6' })).resolves.toBeUndefined()
     expect(publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('on()/receive() repassam direto pra conexão (é a entrada do que o Mind entrega)', async () => {
+    const on = vi.fn()
+    const receive = vi.fn().mockResolvedValue({ status: 200, body: { status: 'processed' } })
+    const nervo = createCrmNervo({ config, query: vi.fn(), connection: { publish: vi.fn(), advance: vi.fn(), on, receive } })
+
+    const handler = vi.fn()
+    nervo.on('social.engagement.captured', handler)
+    expect(on).toHaveBeenCalledWith('social.engagement.captured', handler)
+
+    const req = { headers: {}, body: '{}' }
+    await expect(nervo.receive(req)).resolves.toEqual({ status: 200, body: { status: 'processed' } })
+    expect(receive).toHaveBeenCalledWith(req)
   })
 })

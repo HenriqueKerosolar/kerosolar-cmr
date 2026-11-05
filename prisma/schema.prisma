@@ -455,6 +455,26 @@ model WhatsappAccountPipeline {
 
 // ─── Nervo (pareamento com o Mind) ────────────────────────────────────────────
 
+/// Comentários e DMs do Facebook/Instagram capturados pelo Mind Marketing e publicados pro CRM via
+/// Nervo (evento `social.engagement.captured`) — só leitura aqui: quem responde de verdade é o
+/// Marketing (auto-reply), o CRM só mostra pra quem atende ver sem abrir o Marketing. `externalId`
+/// (comment_id / mid da Meta) é a chave de dedup — reentrega do Nervo nunca duplica a linha.
+model SocialEngagement {
+  id            String   @id @default(cuid())
+  kind          String // 'comment' | 'dm'
+  channel       String // 'facebook' | 'instagram'
+  externalId    String   @unique
+  authorName    String?
+  text          String
+  postId        String?
+  postPermalink String?
+  occurredAt    DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("social_engagements")
+}
+
 /// Conexão pareada deste CRM com o Mind (peça @lib/nervo 0.4.2): o dono aceita UMA vez no painel
 /// do Mind e a credencial chega direto aqui, SELADA (AES-256-GCM, chave derivada do SESSION_SECRET),
 /// sem copiar Key nem segredo em lugar nenhum. `sealed` é texto opaco (o banco nunca vê a Key em claro).
