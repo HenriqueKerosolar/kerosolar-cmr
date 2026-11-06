@@ -30,8 +30,9 @@ export function getCrmNervo(): CrmNervo | undefined {
   }
   try {
     const nervo = createCrmNervo({ config: result.config, query: createPrismaQuery(prisma), log })
-    // Comentário/DM do Facebook/Instagram, publicado pelo Mind Marketing — só leitura (quem responde é
-    // o Marketing). `externalId` único: reentrega do Nervo nunca duplica a linha.
+    // Comentário do Facebook/Instagram, publicado pelo Mind Marketing — só leitura (quem responde é o
+    // Marketing). DM não entra aqui (já chega direto pelo webhook da Meta, ver socialEngagementHandler.ts).
+    // `externalId` único: reentrega do Nervo nunca duplica a linha.
     nervo.on(
       'social.engagement.captured',
       createSocialEngagementHandler({

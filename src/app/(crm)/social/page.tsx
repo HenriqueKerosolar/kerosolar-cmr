@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma'
 export const dynamic = 'force-dynamic'
 
 const CHANNEL_ICON: Record<string, string> = { facebook: '💬', instagram: '📷' }
-const KIND_LABEL: Record<string, string> = { comment: 'Comentário', dm: 'Mensagem direta' }
+const KIND_LABEL: Record<string, string> = { comment: 'Comentário' }
 
 // Hora no horário de Brasília (DD/MM HH:mm)
 function horaBrasilia(d: Date): string {
@@ -16,14 +16,16 @@ function horaBrasilia(d: Date): string {
 export default async function SocialPage() {
   await verifySession()
 
-  const items = await prisma.socialEngagement.findMany({ orderBy: { occurredAt: 'desc' }, take: 100 })
+  const items = await prisma.socialEngagement.findMany({ where: { kind: 'comment' }, orderBy: { occurredAt: 'desc' }, take: 100 })
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-3xl">
       <div>
-        <h1 className="text-xl font-bold">Comentários & DMs</h1>
+        <h1 className="text-xl font-bold">Comentários</h1>
         <p className="text-sm text-[--muted-foreground]">
-          O que chega no Facebook/Instagram — quem responde é o Mind Marketing; aqui é só pra acompanhar sem precisar abrir lá.
+          Comentários em posts do Facebook/Instagram — quem responde é o Mind Marketing; aqui é só pra acompanhar sem
+          precisar abrir lá. DM não aparece aqui: já chega direto no{' '}
+          <a href="/inbox" className="underline">Inbox</a>.
         </p>
       </div>
 

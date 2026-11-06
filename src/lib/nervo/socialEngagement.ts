@@ -1,8 +1,9 @@
 // Contrato de `social.engagement.captured`, publicado pelo Mind Marketing quando chega um comentário
-// novo no Facebook ou uma DM (Facebook/Instagram) — só leitura aqui: o Marketing é quem responde
-// (auto-reply), o CRM só mostra pra quem atende ver. Hoje: comentário só existe pro Facebook (o
-// Instagram não manda webhook de comentário do lado de lá); DM não traz nome de quem mandou sem uma
-// chamada extra à Graph API, por isso `authorName` é opcional.
+// novo no Facebook ou Instagram — só leitura aqui: o Marketing é quem responde (auto-reply), o CRM só
+// mostra pra quem atende ver. O payload ainda aceita `kind: 'dm'` porque o Marketing pode publicar DM
+// também, mas o handler (socialEngagementHandler.ts) ignora: DM já chega direto no CRM pelo webhook
+// próprio (src/app/api/webhooks/meta/route.ts) e apareceria duplicada em /inbox e /social. Hoje:
+// comentário só existe pro Facebook (o Instagram não manda webhook de comentário do lado de lá).
 import { z } from 'zod'
 
 export const socialEngagementSchema = z.object({

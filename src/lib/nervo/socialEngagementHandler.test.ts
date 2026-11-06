@@ -29,6 +29,15 @@ describe('createSocialEngagementHandler', () => {
     const upsert = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
     const handler = createSocialEngagementHandler({ upsert })
 
-    await expect(handler(envelope({ kind: 'dm', channel: 'instagram', externalId: 'm1', text: 'Oi' }))).rejects.toThrow('ECONNREFUSED')
+    await expect(handler(envelope({ kind: 'comment', channel: 'facebook', externalId: 'c2', text: 'Oi' }))).rejects.toThrow('ECONNREFUSED')
+  })
+
+  it('ignora kind "dm" (já chega direto no CRM pelo webhook da Meta) — sem gravar, sem rejeitar', async () => {
+    const upsert = vi.fn()
+    const handler = createSocialEngagementHandler({ upsert })
+
+    await handler(envelope({ kind: 'dm', channel: 'instagram', externalId: 'm1', text: 'Oi' }))
+
+    expect(upsert).not.toHaveBeenCalled()
   })
 })
