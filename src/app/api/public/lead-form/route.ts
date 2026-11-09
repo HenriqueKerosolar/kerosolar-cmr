@@ -81,6 +81,36 @@ export async function POST(req: NextRequest) {
       },
     })
 
+    // Cria conversa + mensagem inbound para aparecer no chat do lead
+    const linhas: string[] = [`📋 Lead recebido pelo formulário do site`]
+    if (telefone)    linhas.push(`📱 Telefone: ${telefone}`)
+    if (email)       linhas.push(`✉️ E-mail: ${email}`)
+    if (cidade)      linhas.push(`📍 Cidade: ${cidade}`)
+    if (preferencia) linhas.push(`💬 Preferência de contato: ${preferencia}`)
+    if (mensagem)    linhas.push(`\n${mensagem}`)
+    const conteudo = linhas.join('\n')
+    const now = new Date()
+    const conv = await prisma.conversation.upsert({
+      where: { channel_contactId: { channel: 'webchat', contactId: contact.id } },
+      create: { leadId: lead.id, contactId: contact.id, channel: 'webchat', lastMessageAt: now, resolvedAt: now },
+      update: { leadId: lead.id, lastMessageAt: now, resolvedAt: now },
+    })
+    await prisma.message.create({
+      data: {
+        conversationId: conv.id,
+        direction: 'inbound',
+        senderType: 'contact',
+        content: conteudo,
+        isRead: false,
+        createdAt: now,
+      },
+    })
+
+    // Nota na timeline para aparecer em qualquer canal futuro (WhatsApp, etc.)
+    await prisma.note.create({
+      data: { leadId: lead.id, type: 'system', content: conteudo },
+    })
+
     return cors(NextResponse.json({ ok: true, leadId: lead.id }))
   } catch (err) {
     console.error('[lead-form POST]', err)
