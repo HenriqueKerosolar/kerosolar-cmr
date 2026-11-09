@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
         pipelineId: pipeline.id,
         stageId: stage.id,
         status: 'open',
-        source: 'site',
+        source: 'webchat',
         customFields: Object.keys(campos).length ? campos as object : undefined,
       },
     })
