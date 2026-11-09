@@ -81,6 +81,22 @@ function stageHasAutomation(flow: unknown): boolean {
     || (f.noReplyMinutes ?? 0) > 0
 }
 
+/** Lê a tabela de histórico ("CONSUMO FATURADO": ex. "OUT/26 ------ 493 33") do TEXTO do PDF e devolve
+ *  a MÉDIA dos meses. Determinístico — não depende da IA acertar a conta (ela tendia a pegar só o mês
+ *  atual). null se achar menos de 3 meses (aí vale a leitura da IA). */
+function mediaHistoricoConsumo(texto: string): { media: number; meses: number } | null {
+  const re = /\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s*\/\s*(\d{2,4})\b[^\d\n]*(\d{2,5})(?=\D|$)/gi
+  const vistos = new Map<string, number>()
+  for (const m of texto.matchAll(re)) {
+    const chave = `${m[1].toUpperCase()}/${m[2].slice(-2)}`
+    const kwh = Number(m[3])
+    if (!vistos.has(chave) && kwh >= 30 && kwh <= 50000) vistos.set(chave, kwh)
+  }
+  if (vistos.size < 3) return null
+  const vals = [...vistos.values()]
+  return { media: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length), meses: vals.length }
+}
+
 function channelIdField(ch: Channel): 'whatsappId' | 'instagramId' | 'facebookId' | null {
   if (ch === 'whatsapp')  return 'whatsappId'
   if (ch === 'instagram') return 'instagramId'
@@ -101,6 +117,10 @@ export type IngestInput = {
   accountId?: string | null
   imageBase64?: string           // imagem enviada pelo cliente (conta de luz, foto etc.)
   imageMediaType?: string
+  pdfBase64?: string             // conta de luz em PDF (scanned/sem texto) → bloco 'document' da Anthropic
+  pdfText?: string               // texto extraído do PDF (unpdf) → caminho PRINCIPAL de leitura
+  sentAt?: Date | null           // data REAL em que o cliente mandou (timestamp do webhook da Meta)
+  foraJanela?: boolean           // mensagem com mais de 24h (reentrega atrasada) → só template, sem IA
   mediaUrl?: string | null       // anexo do cliente salvo (para visualizar no chat)
   mediaType?: 'image' | 'video' | 'document' | 'audio' | null
 }
@@ -115,7 +135,27 @@ export type IngestResult = {
   stage: string
 }
 
+// 🔒 Lock por conversa (serviço com 1 réplica): serializa o processamento de mensagens do MESMO
+//    cliente. Evita que dois webhooks simultâneos (foto + "mandei a conta") façam read-modify-write
+//    do customFields em paralelo e um APAGUE o orçamento do outro (lost update → IA reperguntava).
+const __ingestLocks = new Map<string, Promise<void>>()
 export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
+  const key = `${input.channel}:${input.externalId}`
+  const prev = __ingestLocks.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const mine = new Promise<void>((r) => { release = r })
+  const chained = prev.then(() => mine)
+  __ingestLocks.set(key, chained)
+  try {
+    await prev.catch(() => {})
+    return await ingestMessageInner(input)
+  } finally {
+    release()
+    if (__ingestLocks.get(key) === chained) __ingestLocks.delete(key)
+  }
+}
+
+async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   const { channel, externalId } = input
   const isSimulator = channel === 'simulator'   // no simulador: timers desativados para testes
   let text = input.text
@@ -241,6 +281,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       conversationId: conversation.id, direction: 'inbound', senderType: 'contact',
       content: input.displayText ?? text, externalId: input.externalMessageId ?? null,
       mediaUrl: input.mediaUrl ?? null, mediaType: input.mediaType ?? null,
+      // Data REAL em que o cliente mandou (timestamp da Meta) — mensagens reentregues atrasadas
+      // ficam com a data certa, e a janela de 24h é calculada igual a Meta calcula.
+      ...(input.sentAt ? { createdAt: input.sentAt } : {}),
     },
   })
   // Cliente escreveu → reabre a conversa no Inbox (zera o "fechado pelo operador")
@@ -269,6 +312,22 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     stage: pipeline.stages.find((s) => s.id === lead!.stageId)?.name ?? firstStage.name,
   }
 
+  // ⏰ Mensagem ANTIGA (a Meta reentregou com atraso, >24h): a janela está fechada e texto livre
+  //    seria recusado (131047). Em vez de rodar a IA, manda UMA vez o template aprovado de reabertura
+  //    ("Recebemos o seu contato..."). Quando o cliente responder, a janela reabre e a IA segue normal.
+  if (input.foraJanela && !isSimulator) {
+    const jaEnviouHoje = await prisma.message.count({
+      where: { conversationId: conversation.id, direction: 'outbound', createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
+    })
+    const { dispatchOutbound, janelaAberta } = await import('./flow')
+    // Se existe msg MAIS NOVA do cliente (janela aberta), ela já foi/será respondida normalmente:
+    // a antiga só fica registrada no histórico, sem disparar nada.
+    if (!jaEnviouHoje && !(await janelaAberta(conversation.id))) {
+      await dispatchOutbound(conversation.id, '', undefined, 'system').catch((e) => console.error('[engine reabertura]', e))
+    }
+    return base
+  }
+
   // Carrega config de IA do funil e da etapa atual
   const fullPipeline = await prisma.pipeline.findUnique({ where: { id: lead.pipelineId } })
   const currentStage = await prisma.stage.findUnique({ where: { id: lead.stageId } })
@@ -282,8 +341,15 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // Detectado via keyword ANTES da IA (resposta mais rápida, sem custo de LLM).
   // Cancela todas as automações, adiciona à blacklist e confirma ao cliente.
   const normText = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
-  const isOptOut = /^(parar?|stop|cancelar?|sair|nao\s+quero|nao\s+manda|para\s+de\s+mandar|nao\s+quero\s+mais|remov[ea]r?\s+d[ao]\s+list|nao\s+me\s+mande)/.test(normText)
-    || normText === 'parar' || normText === 'stop' || normText === 'cancelar' || normText === 'sair'
+  // ⚠️ Só é opt-out quando a mensagem É o comando ("PARAR", "sair", "stop"…) ou um pedido INEQUÍVOCO.
+  //    NUNCA por prefixo: "Para fazer no cartão…", "Não quero financiar…", "Cancela a entrada" são
+  //    perguntas normais (já descadastrou cliente por engano). Casos ambíguos ficam com a IA.
+  const tOpt = normText.replace(/[!.?,;:]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const isOptOut = /^(parar|stop|sair|cancelar|descadastrar)( (por favor|pf|pfv|obrigad[oa]))?$/.test(tOpt)
+    || /\b(para|pare|parem) de (me )?(mandar|enviar)( mensage(m|ns))?\b/.test(tOpt)
+    || /\bnao (quero|desejo) (mais )?receber\b/.test(tOpt)
+    || /\bnao (me )?(mand[ae]|envi[ae]) mais\b/.test(tOpt)
+    || /\b(tir[ae]|remov[ae]|exclu[ai])( meu numero| me)? d[ao] (sua )?lista\b|\bsai(r)? da (sua |minha )?lista\b/.test(tOpt)
   if (isOptOut && !isSimulator) {
     const { dispatchOutbound } = await import('./flow')
     const { addNaLista } = await import('./lists')
@@ -338,7 +404,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
       //   foto da conta), a IA libera o orçamento mesmo na pausa. Conversa comum continua aguardando.
       const { extrairConsumo } = await import('./solar-calc')
       const c = extrairConsumo(text)
-      const gatilhoOrcamento = !!input.imageBase64 || c.kwh != null || c.reais != null
+      const gatilhoOrcamento = !!input.imageBase64 || !!input.pdfBase64 || !!input.pdfText || c.kwh != null || c.reais != null
       if (!gatilhoOrcamento) {
         console.log('[engine] operador ativo (<30min) → IA aguarda')
         return base
@@ -510,7 +576,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     const jaTemConsumo = /\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC)
     // isMetaAdEntry: anúncio Meta sempre dispara a saudação mesmo que jaRespondemos > 0
     // (lead pode ter clicado o anúncio de novo depois de uma conversa anterior).
-    if (horarioComercial && (jaRespondemos === 0 || isMetaAdEntry) && !jaTemConsumo && !lead.humanOnly) {
+    // 🖼️ Se o cliente JÁ mandou uma imagem (foto da conta), NÃO dispara a saudação pedindo a conta
+    //    de novo — deixa a mensagem seguir para a leitura por visão (extractBillFromImage) logo abaixo.
+    if (horarioComercial && (jaRespondemos === 0 || isMetaAdEntry) && !jaTemConsumo && !input.imageBase64 && !input.pdfBase64 && !input.pdfText && !lead.humanOnly) {
       const saud = spHourC < 12 ? 'Bom dia' : spHourC < 18 ? 'Boa tarde' : 'Boa noite'
       const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
       const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`).replace(/\{SAUDACAO\}/g, saud)
@@ -573,8 +641,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   //    vale no contexto certo (cartão OU financiamento), e nunca trava por mensagem repetida.
   {
     const cfNow = (lead.customFields as Record<string, unknown> | null) ?? {}
-    const { extrairEntrada, financiamentoEntradaTexto, orcamentoTexto, carregarTabelaFinanciamento } = await import('./solar-calc')
-    const { extrairCartao, simularCartao, formatarCartao } = await import('./card-calc')
+    const { extrairEntrada, financiamentoEntradaTexto, entradaCompletaTexto, orcamentoTexto, carregarTabelaFinanciamento } = await import('./solar-calc')
+    const { extrairCartao, simularCartao, formatarCartao, formatarCartaoMulti } = await import('./card-calc')
 
     const ent = extrairEntrada(text)
     const cartao = extrairCartao(text)
@@ -587,10 +655,24 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     let parcelas = cartao.parcelas
     if (parcelas == null && cartaoAsked) { const mN = text.match(/\b(\d{1,2})\b/); if (mN) parcelas = parseInt(mN[1], 10) }
 
-    const pedeCartao = cartao.intent || semJuros || (cartaoAsked && parcelas != null)
-    const pedeEntrada = ent.intent || ent.remover || (entradaAsked && ent.valor != null && !ehConsumo)
+    // ❓ Pergunta sobre o PROCESSO ("como é feito?", "vem aqui passar o cartão?", "maquininha?", "link?")
+    //    NÃO é pedido de simulação → quem responde é a IA. Só simula se tiver número/prazo/valor.
+    const temNumeroSim = cartao.parcelas != null || cartao.lista.length > 0 || ent.valor != null || ent.remover
+    const perguntaProcesso = !temNumeroSim && (
+      /\bcomo (e|é|eh|seria|funciona|faz|fa[cç]o|pago|que|vai ser|vou)(?![a-zà-ú])/i.test(text)
+      || /\b(vem|vir|vai vir|venha)\b.*\b(aqui|passar|cobrar)\b|\bpassa(r)? o cart[aã]o|\bmaquininha|\blink\b|\bpresencial|\bonde\b|\bquando\b/i.test(text))
 
-    if (pedeCartao || pedeEntrada) {
+    const pedeCartao = !perguntaProcesso && (cartao.intent || semJuros || (cartaoAsked && parcelas != null))
+    const pedeEntrada = !perguntaProcesso && (ent.intent || ent.remover || (entradaAsked && ent.valor != null && !ehConsumo))
+
+    // 🔁 NUNCA REPETIR: se a simulação gerada for idêntica a uma das últimas mensagens enviadas,
+    //    não reenvia — a mensagem segue para a IA, que responde a pergunta de fato (ou pede pra refazer).
+    const REPETIDA = Symbol('repetida')
+    const recentesOut = (pedeCartao || pedeEntrada)
+      ? (await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 4, select: { content: true } })).map((m) => m.content.trim())
+      : []
+
+    if (pedeCartao || pedeEntrada) try {
       const cfSolar = cfNow.solar as { valorSistema?: number } | undefined
       // 🔢 VALOR DO SISTEMA = sempre o do ÚLTIMO orçamento ENVIADO nesta conversa. Vale mesmo quando
       //    o orçamento mais recente foi mandado MANUALMENTE pelo operador (fora do fluxo automático,
@@ -608,7 +690,10 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         }
       }
       const { dispatchOutbound } = await import('./flow')
-      const responder = async (msg: string) => { await simularDigitacao(msg); await dispatchOutbound(conversation.id, msg, undefined, 'ai', undefined, true) }
+      const responder = async (msg: string) => {
+        if (recentesOut.includes(msg.trim())) { console.log('[engine] simulação repetida bloqueada — segue para a IA'); throw REPETIDA }
+        await simularDigitacao(msg); await dispatchOutbound(conversation.id, msg, undefined, 'ai', undefined, true)
+      }
 
       if (!valorSist) {
         await responder('Pra simular o pagamento, preciso primeiro do seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.')
@@ -635,7 +720,31 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         : (cfNow.simMode === 'cartao' && (parcelas != null || typeof cfNow.cartaoParcelas === 'number')) ? 'cartao'
         : 'financiamento'
 
+      // 💵 ENTRADA informada → FINANCIAMENTO + CARTÃO, ambos sobre o SALDO, numa mensagem só
+      //    (decisão do dono). Prazos do cartão: os que o cliente pediu, senão 3x/12x/24x.
+      if (entrada > 0) {
+        await carregarTabelaFinanciamento()
+        const padrao = [3, 12, 24]
+        const prazosCartao = cartao.lista.length >= 2 ? cartao.lista
+          : (parcelas != null && parcelas >= 1 && parcelas <= 24) ? [...new Set([...padrao, parcelas])]
+          : padrao
+        await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: modo, cartaoAsked: false, entradaAsked: false, entrada } as object } })
+        await responder(entradaCompletaTexto(valorSist, entrada, prazosCartao))
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Simulação com entrada de R$ ${entrada.toLocaleString('pt-BR')} (financiamento + cartão do saldo).` } }).catch(() => {})
+        return { ...base, reply: null, aiHandled: true }
+      }
+
       if (modo === 'cartao') {
+        // Vários prazos pedidos de uma vez ("6x, 12x e 24x") → simula TODOS numa mensagem só.
+        if (cartao.lista.length >= 2) {
+          const sims = cartao.lista.map((n) => simularCartao(valorSist - entrada, n)).filter((s): s is NonNullable<typeof s> => !!s)
+          if (sims.length >= 2) {
+            await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: false, entradaAsked: false, cartaoParcelas: sims[sims.length - 1].parcelas, entrada: entrada || null } as object } })
+            await responder(formatarCartaoMulti(sims, valorSist, entrada))
+            await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Simulação no cartão ${sims.map((s) => s.parcelas + 'x').join(', ')}.` } }).catch(() => {})
+            return { ...base, reply: null, aiHandled: true }
+          }
+        }
         const nParc = parcelas ?? (typeof cfNow.cartaoParcelas === 'number' ? (cfNow.cartaoParcelas as number) : null)
         if (!nParc) {
           await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfNow, simMode: 'cartao', cartaoAsked: true, entradaAsked: false, entrada: entrada || null } as object } })
@@ -668,7 +777,7 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
         await responder(`${ent.remover ? 'Sem problema, removi a entrada! 😊 ' : ''}${cfSolarFull ? orcamentoTexto(cfSolarFull) : 'Segue o financiamento pelo valor do sistema.'}`)
       }
       return { ...base, reply: null, aiHandled: true }
-    }
+    } catch (e) { if (e !== REPETIDA) throw e }
   }
 
   // 5) Agente IA
@@ -685,12 +794,17 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
     role: m.direction === 'inbound' ? 'user' : 'assistant',
     content: m.content,
   }))
-  // Se o cliente enviou uma imagem nesta mensagem, injeta no último item do histórico
-  if (input.imageBase64 && history.length > 0) {
+  // Se o cliente enviou uma imagem OU um PDF nesta mensagem, injeta no último item do histórico
+  // para a IA ENXERGAR o conteúdo (e não "chutar" que precisa de senha de acesso, etc.).
+  if ((input.imageBase64 || input.pdfBase64 || input.pdfText) && history.length > 0) {
     const last = history[history.length - 1]
     if (last.role === 'user') {
-      last.imageBase64    = input.imageBase64
-      last.imageMediaType = input.imageMediaType ?? 'image/jpeg'
+      if (input.imageBase64) {
+        last.imageBase64    = input.imageBase64
+        last.imageMediaType = input.imageMediaType ?? 'image/jpeg'
+      }
+      if (input.pdfText) last.content = `${last.content}\n\n[Conteúdo da conta de luz (PDF):\n${input.pdfText.slice(0, 6000)}\n]`
+      else if (input.pdfBase64) last.pdfBase64 = input.pdfBase64
     }
   }
 
@@ -706,23 +820,37 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   let billData: Awaited<ReturnType<typeof extractBillFromImage>> | null = null
   const cfImg = (lead.customFields as Record<string, unknown> | null) ?? {}
   const jaTemOrcamento = !!(cfImg.solar || cfImg.consumoKwh || cfImg.billValue)
-  if (input.imageBase64 && !consumo.kwh && !consumo.reais && !jaTemOrcamento) {
+  // Conta nova (foto ou PDF) é SEMPRE lida, mesmo se o lead já tem orçamento: o cliente pode ter
+  // MAIS DE UMA CONTA (outro imóvel/comércio) e cada uma merece o seu orçamento.
+  const ehPdf = !!(input.pdfText || input.pdfBase64)
+  let contaNovaLida = false
+  if ((input.imageBase64 || ehPdf) && !consumo.kwh && !consumo.reais) {
     const aiCfg = await loadAiConfig()
-    billData = await extractBillFromImage(aiCfg, input.imageBase64, input.imageMediaType ?? 'image/jpeg')
+    billData = input.pdfText
+      ? await extractBillFromImage(aiCfg, '', 'text/plain', input.pdfText)
+      : input.pdfBase64
+      ? await extractBillFromImage(aiCfg, input.pdfBase64, 'application/pdf')
+      : await extractBillFromImage(aiCfg, input.imageBase64!, input.imageMediaType ?? 'image/jpeg')
     // 🚫 SÓ gera orçamento de CONTA DE LUZ real (docType 'bill') ou de ANÚNCIO/KIT solar (tem painéis).
     //    IPTU, conta de água, boleto, RG, foto aleatória (docType 'other'/'identity' sem painéis) → NÃO
     //    usar nenhum número lido — assim a IA não "inventa" consumo e pede a conta de luz certa.
-    const ehContaOuKit = billData.docType === 'bill' || billData.paineis != null
+    // Média do histórico calculada pelo CÓDIGO (regra: média de todos os meses da conta, não só o atual).
+    const mediaHist = input.pdfText ? mediaHistoricoConsumo(input.pdfText) : null
+    if (mediaHist) console.log('[engine] média do histórico do PDF: %d kWh (%d meses)', mediaHist.media, mediaHist.meses)
+    const ehContaOuKit = billData.docType === 'bill' || billData.paineis != null || mediaHist != null
     if (ehContaOuKit) {
-      if (billData.kwh)             consumo = { kwh: billData.kwh }
+      if (mediaHist)                consumo = { kwh: mediaHist.media }
+      else if (billData.kwh)        consumo = { kwh: billData.kwh }
       else if (billData.paineis)    consumo = { kwh: billData.paineis * 60 }  // 1 painel = 60 kWh
       else if (billData.valor)      consumo = { reais: billData.valor }
+      contaNovaLida = !!(consumo.kwh || consumo.reais)
       if (billData.medidor || billData.distribuidora) {
         const billInfo = [billData.medidor, billData.distribuidora].filter(Boolean).join(' | ')
         text = `${text}\n[Dados lidos da foto: ${billInfo}]`.trim()
       }
-    } else {
+    } else if (!jaTemOrcamento) {
       // Documento que NÃO é conta de luz → avisa a IA pra pedir a conta certa, sem calcular nada.
+      // (Se já tem orçamento, pode ser foto do telhado/medidor etc. — não fica pedindo conta à toa.)
       const oQ = billData.isIdentityDoc ? 'um documento de identidade' : 'um documento que não é conta de luz (ex.: IPTU, água, boleto)'
       text = `${text}\n[A imagem enviada é ${oQ} — NÃO gere orçamento; peça gentilmente a CONTA DE LUZ/ENERGIA (ou o consumo em kWh).]`.trim()
     }
@@ -865,9 +993,9 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   }
 
   // prompt da etapa sobrescreve o do funil quando preenchido
-  // Base de conhecimento: só busca quando NÃO vamos entregar orçamento (aí a resposta é
-  // conversacional e pode se beneficiar das respostas anteriores da equipe).
-  const learned = solar ? undefined : await (await import('./learning')).buscarConhecimento(text)
+  // Base de conhecimento: vale SEMPRE — inclusive depois do orçamento, quando surgem as dúvidas de
+  // cartão, visita, pagamento (regra do dono, 2026-11-05). Se o orçamento for enviado, ele substitui a resposta.
+  const learned = (await (await import('./learning')).buscarConhecimento(text)) || undefined
 
   const result = await runAgent(history, {
     botName:   fullPipeline?.botName,
@@ -1096,7 +1224,8 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   // acIntent suprime o orçamento automático: com pedido de ar-condicionado o cálculo precisa
   // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
   // de mandar um orçamento subdimensionado no consumo atual.
-  const presentBudget = !!solar && mudancaRelevante && !acIntent
+  // Conta NOVA lida agora (foto/PDF) → sempre apresenta o orçamento dela (pode ser outra conta do cliente).
+  const presentBudget = !!solar && (mudancaRelevante || contaNovaLida) && !acIntent
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
@@ -1252,16 +1381,19 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
 
   await prisma.lead.update({ where: { id: lead.id }, data: leadUpdate })
 
-  // Ao apresentar orçamento: avisa que está calculando e espera alguns segundos (toque humano)
-  if (presentBudget && !result.handoff) {
-    const { dispatchOutbound } = await import('./flow')
-    await simularDigitacao('Ótimo! Deixa eu calcular aqui rapidinho pra você ⏳')
-    await dispatchOutbound(conversation.id, 'Ótimo! Deixa eu calcular aqui rapidinho pra você ⏳', undefined, 'ai')
-    await new Promise((r) => setTimeout(r, 6000))
-  } else {
-    // Resposta normal → simula digitação proporcional ao tamanho
-    await simularDigitacao(outboundText)
+  // Regra do negócio: NUNCA "travar"/prometer ação futura ("um momento", "vou calcular").
+  // O orçamento sai DIRETO, sem frase de espera — só simula a digitação proporcional ao texto.
+  // 🔁 NUNCA REPETIR A MESMA RESPOSTA: se a IA gerou exatamente o que já foi enviado há pouco,
+  //    em vez de repetir pede para o cliente refazer a pergunta (regra do dono).
+  if (!presentBudget && outboundText) {
+    const ult = await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 4, select: { content: true } })
+    if (ult.some((m) => m.content.trim() === outboundText.trim())) {
+      console.log('[engine] resposta repetida bloqueada — pedindo para refazer a pergunta')
+      outboundText = 'Não entendi bem sua pergunta 🤔 Pode refazer de outro jeito pra eu te responder certinho?'
+    }
   }
+
+  await simularDigitacao(outboundText)
 
   await prisma.message.create({
     data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: outboundText },

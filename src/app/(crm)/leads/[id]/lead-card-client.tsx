@@ -357,14 +357,21 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                   </div>
                 </div>
                 )}
-                {m.failedReason && m.direction === 'outbound' && (
-                  <div className="flex justify-end">
-                    <button onClick={abrirTemplates}
-                      className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1 mt-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition text-left">
-                      ⚠️ Mensagem não enviada — janela de 24h expirada. Clique para enviar um template →
-                    </button>
-                  </div>
-                )}
+                {m.failedReason && m.direction === 'outbound' && (() => {
+                  const r = m.failedReason.toLowerCase()
+                  // Só é "janela de 24h" quando o motivo realmente indica isso.
+                  const ehJanela = r.includes('janela_24h') || r.includes('131047') || r.includes('131051') || r.includes('reengaj') || r.includes('re-engagement')
+                  return (
+                    <div className="flex justify-end">
+                      <button onClick={abrirTemplates}
+                        className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1 mt-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition text-left">
+                        {ehJanela
+                          ? '⚠️ Mensagem não enviada — janela de 24h expirada. Clique para enviar um template →'
+                          : `⚠️ Não entregue pela Meta — ${m.failedReason}. Clique para tentar um template →`}
+                      </button>
+                    </div>
+                  )
+                })()}
               </div>
             )
           })}

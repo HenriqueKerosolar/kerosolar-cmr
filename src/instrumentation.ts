@@ -4,4 +4,8 @@ export async function register() {
 
   const { startScheduler } = await import('@/lib/crm/flow')
   startScheduler()
+
+  // 🩺 Monitor de mensagens de entrada: avisa o dono se o CRM parar de receber.
+  const { startInboundMonitor } = await import('@/lib/crm/monitor-inbox')
+  startInboundMonitor()
 }

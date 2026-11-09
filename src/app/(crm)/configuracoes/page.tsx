@@ -1,4 +1,4 @@
-import { verifySession } from '@/lib/dal'
+import { verifyAdmin } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
 import { ConfigClient } from './config-client'
 import { DEFAULT_VARIANTS, getVariantsRaw, placarSaudacoes } from '@/lib/crm/greeting'
@@ -6,7 +6,9 @@ import { DEFAULT_VARIANTS, getVariantsRaw, placarSaudacoes } from '@/lib/crm/gre
 export const dynamic = 'force-dynamic'
 
 export default async function ConfigPage() {
-  await verifySession()
+  // systemConfig inclui as chaves de API da Anthropic/OpenAI (ver ALLOWED_KEYS
+  // em /api/config) — leitura precisa do mesmo nível de acesso que a escrita.
+  await verifyAdmin()
   const rows = await prisma.systemConfig.findMany()
   const cfg = Object.fromEntries(rows.map((r) => [r.key, r.value]))
   const variants = await getVariantsRaw()

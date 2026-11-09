@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
+import { getSessionSafe } from '@/lib/dal'
 
 // Mesmo critério do whatsapp.ts: volume persistente em produção (Railway), pasta local em dev
 const UPLOADS_DIR = fs.existsSync('/data')
@@ -22,6 +23,13 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ name: string }> }) {
+  // Mídia recebida de leads via WhatsApp (fotos, áudio, documentos) só é
+  // usada dentro do inbox do CRM — nunca buscada externamente pela Meta.
+  // Os nomes de arquivo (timestamp + tamanho) não são difíceis de adivinhar,
+  // então a proteção real precisa ser sessão, não só o nome.
+  const session = await getSessionSafe()
+  if (!session) return new NextResponse('Não autenticado', { status: 401 })
+
   const { name } = await params
   const safe = path.basename(name) // previne path traversal
   const file = path.join(UPLOADS_DIR, safe)

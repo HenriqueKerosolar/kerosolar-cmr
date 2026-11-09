@@ -84,12 +84,40 @@ _Simulação — as taxas e valores podem ser atualizados a qualquer momento._`
 
 const norm = (s: string) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
-/** Detecta pedido de simulação no CARTÃO e o nº de parcelas, se informado. */
-export function extrairCartao(text: string): { intent: boolean; parcelas: number | null } {
+/** Detecta pedido de simulação no CARTÃO e o nº de parcelas, se informado.
+ *  `lista` = TODOS os prazos pedidos na mesma mensagem ("6x, 12x e 24x" / "6, 12 e 24 vezes"). */
+export function extrairCartao(text: string): { intent: boolean; parcelas: number | null; lista: number[] } {
   const t = norm(text)
   const intent = /\bcart[ao]+\b|cartao|no credito|pagar no credito/.test(t)
   let parcelas: number | null = null
   const m = t.match(/(\d{1,2})\s*(x|vezes|vez|parcelas?|meses|mes)\b/) || t.match(/\bem\s+(\d{1,2})\b/)
   if (m) { const n = parseInt(m[1], 10); if (n >= 1 && n <= 99) parcelas = n }
-  return { intent, parcelas }
+  // Vários prazos: números de 1–2 dígitos que NÃO sejam valor ("5 mil", "R$ 30", "10%").
+  const lista: number[] = []
+  let temSufixo = false
+  for (const x of t.matchAll(/(?<![\d$.,])(\d{1,2})(?![\d.]|,\d)\s*(x|vezes|vez|parcelas?)?(?!\s*(?:mil|k\b|reais|%|kwh))/g)) {
+    const n = parseInt(x[1], 10)
+    if (x[2]) temSufixo = true
+    if (n >= 1 && n <= 24 && !lista.includes(n)) lista.push(n)
+  }
+  return { intent, parcelas, lista: lista.length >= 2 && temSufixo ? lista.sort((a, b) => a - b) : [] }
+}
+
+/** Mensagem com VÁRIOS prazos no cartão numa só resposta (ex.: 6x, 12x e 24x). */
+export function formatarCartaoMulti(sims: CartaoResult[], valorSistema: number, entrada = 0): string {
+  const head = entrada > 0
+    ? `🔆 Sistema: ${brl(valorSistema)}\n💵 Entrada: *${brl(entrada)}*\n💳 No cartão: *${brl(valorSistema - entrada)}*`
+    : `🔆 Sistema: *${brl(valorSistema)}*`
+  const linhas = sims.map((s) => s.semJuros
+    ? `• *${s.parcelas}x de ${brl(s.parcela)}* _(sem juros)_ ✅ — total ${brl(s.total)}`
+    : `• *${s.parcelas}x de ${brl(s.parcela)}* — total ${brl(s.total)}`)
+  return (
+`💳 *PAGAMENTO NO CARTÃO DE CRÉDITO*
+
+${head}
+
+${linhas.join('\n')}
+
+_Simulação — as taxas e valores podem ser atualizados a qualquer momento._`
+  )
 }

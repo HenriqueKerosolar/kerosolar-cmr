@@ -24,10 +24,13 @@ export async function GET(req: NextRequest) {
   return new NextResponse('forbidden', { status: 403 })
 }
 
-// Valida a assinatura X-Hub-Signature-256 (HMAC com o App Secret). Se não houver secret, libera (modo teste).
+// Valida a assinatura X-Hub-Signature-256 (HMAC com o App Secret). Sem secret
+// configurado, libera só fora de produção (modo teste) — em produção, a
+// ausência do segredo é um erro de configuração, não motivo para aceitar
+// webhooks não verificados.
 function assinaturaValida(raw: string, header: string | null): boolean {
   const secret = process.env.WHATSAPP_APP_SECRET
-  if (!secret) return true
+  if (!secret) return process.env.NODE_ENV !== 'production'
   if (!header) return false
   const esperado = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex')
   try {
@@ -38,6 +41,7 @@ function assinaturaValida(raw: string, header: string | null): boolean {
 type WaMessage = {
   from: string
   id: string
+  timestamp?: string   // segundos Unix de QUANDO o cliente mandou (a Meta pode reentregar com atraso)
   type: string
   text?: { body: string }
   image?: { id: string; mime_type?: string; caption?: string }
@@ -90,7 +94,7 @@ export async function POST(req: NextRequest) {
 
         // Recibos de entrega/leitura (statuses) → atualiza deliveredAt / readAt na mensagem
         if (change?.field === 'messages' && value?.statuses?.length) {
-          for (const st of value.statuses as { id: string; status: string }[]) {
+          for (const st of value.statuses as { id: string; status: string; errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[] }[]) {
             if (!st.id) continue
             if (st.status === 'delivered') {
               await prisma.message.updateMany({
@@ -103,9 +107,18 @@ export async function POST(req: NextRequest) {
                 data: { readAt: new Date(), deliveredAt: new Date() },
               }).catch(() => {})
             } else if (st.status === 'failed') {
+              // Guarda o MOTIVO REAL da Meta (código + título/detalhe) em vez de um genérico.
+              const err = st.errors?.[0]
+              const partes = [
+                err?.code != null ? String(err.code) : null,
+                err?.title || err?.message || null,
+                err?.error_data?.details || null,
+              ].filter(Boolean)
+              const motivo = partes.length ? partes.join(' — ').slice(0, 160) : 'meta_rejeitou'
+              console.error('[wa cloud status failed]', st.id, JSON.stringify(st.errors ?? null)?.slice(0, 300))
               await prisma.message.updateMany({
                 where: { externalId: st.id },
-                data: { failedReason: 'meta_rejeitou' },
+                data: { failedReason: motivo },
               }).catch(() => {})
             }
           }
@@ -158,6 +171,8 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
   let displayText: string | undefined
   let imageBase64: string | undefined
   let imageMediaType: string | undefined
+  let pdfBase64: string | undefined
+  let pdfText: string | undefined
   let mediaUrl: string | undefined
   let mediaType: 'image' | 'video' | 'document' | 'audio' | undefined
 
@@ -206,6 +221,21 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
         const ext = m.type === 'video' ? '.mp4' : ('.' + ((mediaObj?.filename?.split('.').pop()) || (dl.mimeType.split('/')[1]) || 'bin'))
         const { salvarMidiaRecebida } = await import('@/lib/crm/media')
         mediaUrl = salvarMidiaRecebida(dl.buffer, ext) ?? undefined
+        // 📄 Conta de luz em PDF → manda pra IA LER (bloco 'document'). Muitas distribuidoras
+        //    só entregam a fatura em PDF — sem isso a IA nunca lê e fica pedindo a conta de novo.
+        if (m.type === 'document' && (dl.mimeType?.includes('pdf') || (mediaObj?.filename ?? '').toLowerCase().endsWith('.pdf'))) {
+          pdfBase64 = dl.buffer.toString('base64')
+          displayText = '📄 Conta de luz (PDF) enviada'
+          // Extrai o TEXTO do PDF no servidor (unpdf). Comprovado que lê faturas reais (ex.: Light/DANF3E).
+          try {
+            const { extractText, getDocumentProxy } = await import('unpdf')
+            const doc = await getDocumentProxy(new Uint8Array(dl.buffer))
+            const r = await extractText(doc, { mergePages: true })
+            const t = (r.text || '').trim()
+            console.log('[unpdf] extraiu %d caracteres do PDF', t.length)
+            if (t.length > 20) pdfText = t
+          } catch (e) { console.error('[unpdf] falhou:', e instanceof Error ? e.message : e) }
+        }
       }
       text = caption
     }
@@ -213,8 +243,17 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     return // tipos não tratados (location, contacts, reaction, etc.)
   }
 
+  // ⏰ Data REAL da mensagem. Se tem mais de 24h (reentrega atrasada da Meta), a janela já fechou:
+  //    o motor não roda a IA e manda o template aprovado de reabertura.
+  const sentAt = m.timestamp && Number(m.timestamp) > 0 ? new Date(Number(m.timestamp) * 1000) : null
+  const idadeH = sentAt ? (Date.now() - sentAt.getTime()) / 3_600_000 : 0
+  const foraJanela = idadeH > 23.8
+  if (idadeH > 1) console.log('[wa cloud webhook] mensagem atrasada: %sh (enviada %s)%s', idadeH.toFixed(1), sentAt?.toISOString(), foraJanela ? ' → fora da janela, vai template' : '')
+
   const { ingestMessage } = await import('@/lib/crm/engine')
   const result = await ingestMessage({
+    sentAt,
+    foraJanela,
     channel: 'whatsapp',
     externalId: from,
     text,
@@ -225,6 +264,8 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     externalMessageId: m.id ?? null,
     imageBase64,
     imageMediaType,
+    pdfBase64,
+    pdfText,
     mediaUrl: mediaUrl ?? null,
     mediaType: mediaType ?? null,
   })

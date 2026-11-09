@@ -1,4 +1,5 @@
 import 'server-only'
+import { simularCartao } from './card-calc'
 
 /**
  * Motor de cálculo solar — réplica exata do simulador da Kerosolar
@@ -252,6 +253,42 @@ export function financiamentoEntradaTexto(valorSistema: number, entrada: number)
 ${linhas}
 
 _Valores podem variar conforme o projeto e a aprovação de crédito._`
+  )
+}
+
+/** ENTRADA informada → FINANCIAMENTO e CARTÃO, AMBOS sobre o SALDO (sistema − entrada), numa
+ *  mensagem só (decisão do dono, 2026-11-05). `cartaoPrazos` padrão: 3x (sem juros), 12x, 24x. */
+export function entradaCompletaTexto(valorSistema: number, entrada: number, cartaoPrazos: number[] = [3, 12, 24]): string {
+  const saldo = Math.max(0, Math.round((valorSistema - entrada) * 100) / 100)
+  if (saldo <= 0) {
+    return `💵 Com entrada de *${brl(entrada)}* o sistema (${brl(valorSistema)}) fica *quitado* — não sobra saldo pra financiar 😊 À vista tem *5% de desconto*!`
+  }
+  const tabela = getTabelaFinanciamento()
+  const prazos = Object.keys(tabela).map(Number).sort((a, b) => a - b)
+  const longo = prazos[prazos.length - 1]
+  const medio = prazos.includes(60) ? 60 : prazos[Math.floor(prazos.length / 2)]
+  const curto = prazos.includes(36) ? 36 : prazos[0]
+  const fin = [longo, medio, curto].filter((p, i, a) => p && a.indexOf(p) === i)
+    .map((p) => `• ${p}x de *${brl(parcelaFinanciamento(saldo, p))}*`).join('\n')
+  const cart = [...new Set(cartaoPrazos)].filter((n) => n >= 1 && n <= 24).sort((a, b) => a - b)
+    .map((n) => simularCartao(saldo, n)).filter((s): s is NonNullable<typeof s> => !!s)
+    .map((s) => s.semJuros
+      ? `• *${s.parcelas}x de ${brl(s.parcela)}* _(sem juros)_ ✅`
+      : `• *${s.parcelas}x de ${brl(s.parcela)}* — total ${brl(s.total)}`).join('\n')
+  return (
+`💵 *PAGAMENTO COM ENTRADA*
+
+🔆 Sistema: ${brl(valorSistema)}
+💵 Entrada: *${brl(entrada)}*
+📉 Saldo: *${brl(saldo)}*
+
+🏦 *FINANCIAMENTO do saldo* (1ª parcela só daqui a 120 dias):
+${fin}
+
+💳 *CARTÃO do saldo*:
+${cart}
+
+_Simulação — valores podem variar conforme o projeto, as taxas e a aprovação de crédito._`
   )
 }
 

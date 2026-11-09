@@ -21,18 +21,33 @@ function normalizar(phone: string): string {
   return d.length <= 11 ? `55${d}` : d
 }
 
-/** Código de erro Meta indicando janela de 24h fechada. */
+/** Alterna o 9º dígito de um celular BR (adiciona se faltar, remove se tiver). Usado como retry
+ *  quando a Meta recusa o número como "não entregável" (131026) — cobre o descasamento clássico
+ *  do 9º dígito entre o número SALVO do contato e o wa_id que a Meta aceita. null se não reconhecer. */
+function alternar9Digito(num: string): string | null {
+  const d = (num || '').replace(/\D/g, '')
+  if (!d.startsWith('55') || d.length < 12) return null
+  const ddd = d.slice(2, 4)
+  const resto = d.slice(4)
+  if (resto.length === 9 && resto.startsWith('9')) return `55${ddd}${resto.slice(1)}` // tem 9 → remove
+  if (resto.length === 8) return `55${ddd}9${resto}`                                    // sem 9 → adiciona
+  return null
+}
+
+/** Códigos de erro da Meta que indicam janela de 24h fechada (exige template de reengajamento).
+ *  131026 = Message undeliverable; 131047 = Re-engagement (>24h); 131051 = tipo não suportado fora da janela. */
 export const META_ERROR_24H = 131026
+export const META_ERRORS_24H = [131026, 131047, 131051]
 
 export class CloudApiError extends Error {
   constructor(public readonly status: number, public readonly metaCode: number | null, msg: string) {
     super(msg)
     this.name = 'CloudApiError'
   }
-  get is24hWindow() { return this.metaCode === META_ERROR_24H }
+  get is24hWindow() { return this.metaCode != null && META_ERRORS_24H.includes(this.metaCode) }
 }
 
-async function post(phoneNumberId: string, body: object): Promise<string | null> {
+async function post(phoneNumberId: string, body: object, _retried = false): Promise<string | null> {
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
@@ -41,6 +56,16 @@ async function post(phoneNumberId: string, body: object): Promise<string | null>
   const data = await res.json().catch(() => null)
   if (!res.ok) {
     const metaCode: number | null = data?.error?.code ?? null
+    // 🔁 9º dígito BR: "não entregável" (131026) → tenta UMA vez com/sem o 9 (o wa_id da Meta pode
+    //    diferir do número salvo). Resolve "a IA responde mas o envio manual falha".
+    const to = (body as { to?: unknown }).to
+    if (!_retried && metaCode === 131026 && typeof to === 'string') {
+      const alt = alternar9Digito(to)
+      if (alt && alt !== to) {
+        console.warn('[cloud-api] 131026 — retry com 9º dígito alternado:', to, '->', alt)
+        return post(phoneNumberId, { ...body, to: alt }, true)
+      }
+    }
     console.error('[cloud-api] erro envio:', res.status, metaCode, JSON.stringify(data)?.slice(0, 300))
     throw new CloudApiError(res.status, metaCode, `cloud-api ${res.status} code:${metaCode}`)
   }

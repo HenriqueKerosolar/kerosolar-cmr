@@ -11,6 +11,12 @@ export default async function AprendizadoPage() {
     take: 500,
     select: { id: true, question: true, answer: true, useCount: true, createdAt: true },
   })
-  const items = rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))
+  // Sugestão da revisão automática (id → motivo para apagar), guardada em system_configs
+  let sugestoes: Record<string, string> = {}
+  try {
+    const cfg = await prisma.systemConfig.findUnique({ where: { key: 'learning_review' } })
+    if (cfg?.value) sugestoes = JSON.parse(cfg.value) as Record<string, string>
+  } catch { /* sem sugestões */ }
+  const items = rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString(), sugestaoApagar: sugestoes[r.id] ?? null }))
   return <AprendizadoClient items={items} />
 }

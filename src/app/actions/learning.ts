@@ -26,6 +26,16 @@ export async function deleteLearnedAnswer(id: string) {
   revalidatePath('/aprendizado')
 }
 
+/** Apaga vários aprendizados de uma vez (os marcados na tela). */
+export async function deleteLearnedAnswers(ids: string[]) {
+  await verifySession()
+  const lista = (ids ?? []).filter((x) => typeof x === 'string' && x).slice(0, 1000)
+  if (!lista.length) return 0
+  const r = await prisma.learnedAnswer.deleteMany({ where: { id: { in: lista } } })
+  revalidatePath('/aprendizado')
+  return r.count
+}
+
 /** Adiciona manualmente uma resposta à base de conhecimento. */
 export async function addLearnedAnswer(question: string, answer: string) {
   await verifySession()

@@ -63,6 +63,56 @@ export async function moveLeadToStage(leadId: string, targetStageId: string, rea
   await enterStage(leadId, target.id).catch(() => {})
 }
 
+/** A janela de 24h da Meta está ABERTA? = a última mensagem RECEBIDA do cliente é de menos de 24h
+ *  (folga de 10 min). Usa a data REAL da mensagem (timestamp que a Meta manda no webhook), então
+ *  mensagens antigas reentregues pela Meta NÃO abrem a janela — igual a Meta considera. */
+/**
+ * 💰 Ajusta um horário desejado para cair DENTRO da janela de 24h da Meta (mensagem comum,
+ * sem custo de template) e em horário comercial do funil. Se o desejado já está dentro, mantém.
+ * Senão, puxa para o último horário comercial antes de a janela fechar. Se não houver janela
+ * aberta (ou nenhum horário cabe), devolve o desejado (aí o envio usa template, como antes).
+ */
+export async function horarioDentroDaJanela(conversationId: string, leadId: string, desejado: Date): Promise<Date> {
+  try {
+    const last = await prisma.message.findFirst({ where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+    if (!last) return desejado
+    const fim = last.createdAt.getTime() + (24 * 60 - 30) * 60 * 1000   // fecha 30 min antes, por segurança
+    const agora = Date.now()
+    if (fim <= agora + 5 * 60 * 1000) return desejado
+    const { nextAllowedSlot, respeitaHorarioGlobal, janelaDoFunil } = await import('./schedule-window')
+    const ld = await prisma.lead.findUnique({ where: { id: leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+    const jan = janelaDoFunil(ld?.pipeline?.sendStartHour, ld?.pipeline?.sendEndHour)
+    const permitido = (t: number) => nextAllowedSlot(respeitaHorarioGlobal(new Date(t)), jan).getTime() <= t + 1000
+    if (desejado.getTime() <= fim && permitido(desejado.getTime())) return desejado
+    // recua de 15 em 15 min a partir do fim da janela até achar um horário comercial
+    for (let t = Math.min(desejado.getTime(), fim); t > agora + 60 * 1000; t -= 15 * 60 * 1000) {
+      if (permitido(t)) return new Date(t)
+    }
+    return desejado
+  } catch { return desejado }
+}
+
+export async function janelaAberta(conversationId: string): Promise<boolean> {
+  const last = await prisma.message.findFirst({
+    where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+  })
+  if (!last) return false
+  return Date.now() - last.createdAt.getTime() < (24 * 60 - 10) * 60 * 1000
+}
+
+/** Template APROVADO pra reabrir a conversa fora da janela: o pedido (se houver) → com orçamento
+ *  "budget_followup" → sem orçamento "chegada_followup" → "reengage". */
+async function escolherTemplateReabertura(leadId: string | null, preferido?: string) {
+  const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } }) : null
+  const temOrc = !!(lead?.customFields as Record<string, unknown> | null)?.solar
+  const ordem = [preferido, temOrc ? 'budget_followup' : 'chegada_followup', 'reengage'].filter(Boolean) as string[]
+  for (const a of ordem) {
+    const t = await prisma.whatsappTemplate.findFirst({ where: { actionType: a, metaStatus: 'APPROVED' } })
+    if (t) return t
+  }
+  return null
+}
+
 /**
  * Envia uma mensagem de saída: grava no histórico e despacha pro canal
  * (WhatsApp via Cloud API, ou nada no simulador — só fica registrado).
@@ -128,6 +178,40 @@ export async function dispatchOutbound(
         if (toPhone) {
           const cloud = await import('./cloud-api')
           let waId: string | null = null
+          // ⏰ Janela de 24h FECHADA (pela data REAL da última msg do cliente): texto livre seria recusado
+          //    pela Meta (131047). Automático → manda o TEMPLATE de reabertura; humano → marca na hora
+          //    (a tela oferece "enviar template"), sem gastar envio que vai falhar.
+          if (!(await janelaAberta(conversationId))) {
+            if (senderType === 'human') {
+              await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
+              return
+            }
+            const tmpl = await escolherTemplateReabertura(conv.leadId, templateActionType)
+            if (!tmpl) {
+              console.warn('[flow dispatch] janela 24h fechada e nenhum template APPROVED — não enviado')
+              await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
+              return
+            }
+            const firstName = (conv.contact?.name || '').split(' ')[0] || 'Cliente'
+            const corpo = tmpl.bodyText.replace(/\{\{1\}\}/g, firstName)
+            // Não repete o MESMO template de reabertura em menos de 24h (fluxos com várias msgs agendadas).
+            const repetido = await prisma.message.findFirst({
+              where: { conversationId, direction: 'outbound', id: { not: createdMsg.id }, content: corpo, createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
+              select: { id: true },
+            })
+            if (repetido) {
+              await prisma.message.delete({ where: { id: createdMsg.id } }).catch(() => {})
+              return
+            }
+            const components = tmpl.bodyText.includes('{{1}}') ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }] : []
+            const tid = await cloud.sendCloudTemplate(cloudAccount.cloudPhoneNumberId, toPhone, tmpl.name, tmpl.language, components)
+            await prisma.message.update({
+              where: { id: createdMsg.id },
+              data: { content: corpo, externalId: tid ?? undefined },
+            }).catch(() => {})
+            console.log(`[flow dispatch] janela 24h fechada (msg do cliente antiga) — enviou template "${tmpl.name}" para ${toPhone}`)
+            return
+          }
           try {
             waId = media
               ? await cloud.sendCloudMedia(cloudAccount.cloudPhoneNumberId, toPhone, media.url, media.type, text)
@@ -272,8 +356,10 @@ export async function enterStage(leadId: string, stageId: string) {
   //    por 3 dias". Vale pras duas etapas ("Recebeu orçamento automático" e "...manual").
   if (!isSimulator && /or[çc]amento/i.test(stage.name)) {
     await prisma.scheduledAction.updateMany({ where: { leadId, type: 'budget_validity', done: false }, data: { done: true } })
+    // 💰 Economia: sai DENTRO da janela de 24h (mensagem comum, grátis), não como template pago.
+    const runAt = await horarioDentroDaJanela(conv.id, leadId, new Date(Date.now() + 24 * 60 * 60 * 1000))
     await prisma.scheduledAction.create({
-      data: { leadId, conversationId: conv.id, stageId, type: 'budget_validity', payload: {} as object, runAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+      data: { leadId, conversationId: conv.id, stageId, type: 'budget_validity', payload: {} as object, runAt },
     }).catch(() => {})
   }
 
@@ -507,6 +593,19 @@ export async function processDueActions() {
       }
       if (a.type === 'flow_continue') {
         const pl = (a.payload as { stageId?: string; index?: number }) ?? {}
+        // "Conseguiu ver o orçamento?" (etapas Recebeu orçamento): se o cliente JÁ conversou depois
+        // do orçamento, a pergunta não faz sentido → não envia (regra do dono, 2026-11-05).
+        if (pl.stageId) {
+          const stg = await prisma.stage.findUnique({ where: { id: pl.stageId }, select: { name: true } })
+          if (/recebeu or[cç]amento/i.test(stg?.name ?? '')) {
+            const respondeu = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+            if (respondeu > 0) {
+              console.log('[flow_continue] cliente já respondeu após o orçamento — follow-up "conseguiu ver?" pulado')
+              await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+              continue
+            }
+          }
+        }
         if (pl.stageId && typeof pl.index === 'number') {
           const { resumeAfterWait } = await import('./flow-blocks')
           await resumeAfterWait(a.conversationId, a.leadId, pl.stageId, pl.index)
