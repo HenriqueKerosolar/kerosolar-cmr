@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { runAgent } from '@/lib/crm/agent'
+import type { ChatMessage } from '@/lib/crm/ai'
 
 /**
  * Recebe leads do formulário do site kerosolar.com.br.
@@ -51,9 +53,9 @@ export async function POST(req: NextRequest) {
       data: { name: nome, phone: telefone, email },
     })
 
-    let pipeline = await prisma.pipeline.findFirst({ where: { isDefault: true } })
+    let pipeline = await prisma.pipeline.findFirst({ where: { isDefault: true }, select: { id: true, botName: true, botPrompt: true, aiModel: true } })
     if (!pipeline) {
-      pipeline = await prisma.pipeline.create({ data: { name: 'Padrão', isDefault: true } })
+      pipeline = await prisma.pipeline.create({ data: { name: 'Padrão', isDefault: true }, select: { id: true, botName: true, botPrompt: true, aiModel: true } })
     }
 
     let stage = await prisma.stage.findFirst({ where: { pipelineId: pipeline.id, name: 'Entrou pelo Site' } })
@@ -110,6 +112,50 @@ export async function POST(req: NextRequest) {
     await prisma.note.create({
       data: { leadId: lead.id, type: 'system', content: conteudo },
     })
+
+    // Resposta automática da IA apenas se a mensagem já traz um pedido claro
+    // (kWh de consumo ou valor da conta de luz mencionados)
+    const temPedidoClaro = !!mensagem && (
+      /\d{2,6}\s*k\s*wh/i.test(mensagem) ||
+      /r\$\s*[\d.,]{2,8}/.test(mensagem) ||
+      /\d{2,6}\s*reais/i.test(mensagem)
+    )
+    if (temPedidoClaro) {
+      try {
+        const history: ChatMessage[] = [{ role: 'user', content: mensagem }]
+        const leadCf = Object.keys(campos).length ? campos : null
+        const sc = await import('@/lib/crm/solar-calc')
+        await sc.carregarTabelaFinanciamento().catch(() => {})
+        const reKwh = mensagem.match(/(\d{2,6})\s*k\s*wh/i)
+        const reReais = mensagem.match(/r\$\s*([\d.]{2,8})/i) || mensagem.match(/(\d{2,6})\s*reais/i)
+        const consumoKwh = reKwh ? Number(reKwh[1]) : null
+        const billValue = reReais ? Number(reReais[1].replace(/\./g, '')) : null
+        const solar = consumoKwh ? sc.calcularSolarPorKwh(consumoKwh) : billValue ? sc.calcularSolar(billValue) : null
+        const estimate = solar
+          ? (solar.baixoConsumo
+            ? `O consumo é baixo (~${solar.consumoKwh} kWh/mês). Ofereça o KIT DE ENTRADA de 300 kWh por R$ 7.670 (instalado e homologado), conforme a regra de consumo baixo. NÃO invente outros números.`
+            : sc.resumoParaIA(solar))
+          : undefined
+        const result = await runAgent(history, {
+          botName: pipeline.botName,
+          botPrompt: pipeline.botPrompt,
+          model: pipeline.aiModel,
+          lead: leadCf,
+          estimate,
+        })
+        await prisma.message.create({
+          data: { conversationId: conv.id, direction: 'outbound', senderType: 'ai', content: result.reply },
+        })
+        if (solar) {
+          await prisma.lead.update({
+            where: { id: lead.id },
+            data: { customFields: { ...campos, solar: solar as object }, value: solar.valorSistema },
+          })
+        }
+      } catch (e) {
+        console.error('[lead-form IA]', e instanceof Error ? e.message : e)
+      }
+    }
 
     return cors(NextResponse.json({ ok: true, leadId: lead.id }))
   } catch (err) {
