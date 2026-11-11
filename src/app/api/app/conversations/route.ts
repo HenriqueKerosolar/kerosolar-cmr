@@ -22,7 +22,7 @@ export async function GET() {
       phone: c.contact?.phone || null,
       lastText: last ? (last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '✓ ') : '') + (last.content || '') : '',
       lastAt: c.lastMessageAt,
-      unread: !!last && last.direction === 'inbound' && !last.isRead,
+      unread: (c._count?.messages ?? 0) > 0,   // qualquer mensagem do cliente ainda não vista
       stage: c.lead?.stage ? { name: c.lead.stage.name, color: c.lead.stage.color } : null,
     }
   })

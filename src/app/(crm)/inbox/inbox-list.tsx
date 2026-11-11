@@ -15,6 +15,7 @@ type Conv = {
   contact: { name: string | null; phone: string | null } | null
   lead: { highPriority: boolean; aiEnabled: boolean; humanOnly: boolean; createdAt: string; stage: { name: string; color: string | null } } | null
   messages: { direction: string; isRead: boolean; content: string; senderType: string }[]
+  naoLidas?: number
   resolvedAt: string | null
 }
 
@@ -56,7 +57,7 @@ export function InboxList({ conversations, verTodas }: { conversations: Conv[]; 
       <div className="space-y-2">
         {filtered.map((conv) => {
           const last = conv.messages[0]
-          const unread = last && !last.isRead && last.direction === 'inbound'
+          const unread = (conv.naoLidas ?? 0) > 0 || (last && !last.isRead && last.direction === 'inbound')
           const isNew = conv.lead && (Date.now() - new Date(conv.lead.createdAt).getTime()) < 3 * 24 * 60 * 60 * 1000
           return (
             <div key={conv.id}

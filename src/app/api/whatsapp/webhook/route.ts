@@ -308,4 +308,10 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     const { sendCloudText } = await import('@/lib/crm/cloud-api')
     await sendCloudText(account.cloudPhoneNumberId, from, result.reply).catch((e) => console.error('[wa cloud send reply]', e))
   }
+  // 2ª mensagem combinada pelo motor (ex.: fora do horário: responde a pergunta e DEPOIS pergunta
+  // se o cliente quer continuar agora ou no próximo dia útil) — sai só depois da resposta.
+  if (result?.followUp) {
+    const { dispatchOutbound } = await import('@/lib/crm/flow')
+    await dispatchOutbound(result.conversationId, result.followUp, undefined, 'ai').catch((e) => console.error('[wa followUp]', e))
+  }
 }

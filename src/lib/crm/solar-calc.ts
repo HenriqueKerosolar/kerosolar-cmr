@@ -120,6 +120,7 @@ export type SolarResult = {
   menorParcela: number
   economiaImediata: number   // conta atual − menor parcela (economia já no 1º mês)
   baixoConsumo: boolean      // consumo < 250 kWh → solar sozinho economiza pouco
+  hibrido?: boolean          // sistema HÍBRIDO (com bateria) — valor = fórmula × 240%
 }
 
 // Observações exatamente como na página do simulador
@@ -210,6 +211,20 @@ export function calcularSolar(contaReais: number, opts?: { economiaPercent?: num
 /** Cliente informou o CONSUMO em kWh → sistema = kWh × 20,87; conta = kWh × tarifa (para a economia). */
 export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
   return calcularCore(kwhParaReais(kwh), Math.round(kwh * FATOR_CONVERSAO), kwh, opts)
+}
+
+/** 🔋 Regra do dono (2026-11-11): equipamento HÍBRIDO (com bateria) = fórmula padrão × 240%.
+ *  Recalcula payback, economia e parcelas pelo novo valor do sistema. */
+export const FATOR_HIBRIDO = 2.4
+export function aplicarHibrido(r: SolarResult, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
+  if (r.hibrido) return r
+  return { ...calcularCore(r.contaReais, Math.round(r.valorSistema * FATOR_HIBRIDO), r.consumoKwh, opts), hibrido: true }
+}
+
+/** Cliente pediu equipamento híbrido / com bateria? */
+export function pedeHibrido(texto: string): boolean {
+  const t = (texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  return /\bhibrid\w*|\bbateria\w*|\bbackup\b|armazenamento de energia/.test(t)
 }
 
 const brl = (n: number) => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -303,7 +318,10 @@ export function resumoParaIA(r: SolarResult): string {
     `Economia em 5 anos: ${brl(r.economia5Anos)} | em 30 anos: ${brl(r.economia30Anos)}`,
     `ROI em 30 anos: ${r.roiPercent}% (${r.vsPoupanca}x mais que a poupança)`,
     `Financiamento (carência até 120 dias): ${fin}`,
-    `Menor parcela: ${brl(r.menorParcela)} — economia imediata vs conta atual: ${brl(r.economiaImediata)}/mês`,
+    r.economiaImediata > 0
+      ? `Menor parcela: ${brl(r.menorParcela)} — economia imediata vs conta atual: ${brl(r.economiaImediata)}/mês`
+      : `Menor parcela: ${brl(r.menorParcela)} — ATENÇÃO: a parcela fica ACIMA da conta de luz atual; É PROIBIDO dizer que a parcela é menor que a conta ou que o cliente economiza desde o 1º mês`,
+    ...(r.hibrido ? ['Sistema HÍBRIDO (com bateria): o valor já inclui o banco de baterias (fórmula padrão × 240%)'] : []),
     `OBSERVAÇÕES: ${OBSERVACOES.financiamento} ${OBSERVACOES.carencia} ${OBSERVACOES.disclaimer}`,
   ].join('. ')
 }
@@ -328,11 +346,17 @@ export function orcamentoTexto(r: SolarResult): string {
 • E se você tiver outro imóvel com medidor na *mesma concessionária*, dá pra transferir o excedente pra lá e abater a conta dessa outra unidade também 😊`
     : ''
 
-  return (
-`☀️ *ORÇAMENTO SOLAR · KEROSOLAR*
+  // Regra do dono (2026-11-11): só afirma que a parcela fica menor que a conta quando isso é VERDADE
+  // (no híbrido, por exemplo, a parcela costuma ficar acima da conta).
+  const linhaParcelaVsConta = r.economiaImediata > 0
+    ? `\n\n✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.`
+    : ''
 
-🔆 *Sistema completo: ${brl(r.valorSistema)}*
-_Instalado e homologado, pronto pra gerar energia._
+  return (
+`☀️ *ORÇAMENTO SOLAR${r.hibrido ? ' HÍBRIDO 🔋' : ''} · KEROSOLAR*
+
+🔆 *Sistema ${r.hibrido ? 'híbrido (com bateria)' : 'completo'}: ${brl(r.valorSistema)}*
+_Instalado e homologado, pronto pra gerar energia${r.hibrido ? ' — e com bateria pra manter a casa funcionando quando faltar luz' : ''}._
 
 📊 *Seus números*
 • Conta de luz hoje: ${brl(r.contaReais)}/mês
@@ -341,9 +365,7 @@ _Instalado e homologado, pronto pra gerar energia._
 • Em 30 anos você economiza *${brl(r.economia30Anos)}*
 
 💳 *Financiamento* — 1ª parcela só daqui a 120 dias:
-${planos}
-
-✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.${obsExcedente}
+${planos}${linhaParcelaVsConta}${obsExcedente}
 
 📄 *Pra um orçamento 100% certo, o ideal é a sua conta de luz* — o cálculo é feito pela *média anual de kWh* (e não por um mês só). Se ainda não enviou, me manda a conta (foto ou PDF) que sai perfeito! E se quiser uma marca específica de painel/inversor, é só falar 😊
 

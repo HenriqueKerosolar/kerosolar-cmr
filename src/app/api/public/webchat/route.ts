@@ -86,6 +86,12 @@ export async function POST(req: NextRequest) {
       notificarLeadPorEmail({ nome, telefone, email, cidade, mensagem: text, origem: origem || 'Site (chat)', leadId: conv?.leadId ?? null }).catch(() => {})
     }
 
+    // 2ª mensagem combinada pelo motor (ex.: fora do horário: "quer continuar agora ou amanhã?")
+    if (result.followUp) {
+      const { dispatchOutbound } = await import('@/lib/crm/flow')
+      await dispatchOutbound(result.conversationId, result.followUp, undefined, 'ai').catch(() => {})
+    }
+
     // 💬 O widget do site só mostra o "reply" desta resposta. Boa parte das respostas da IA sai por
     //    dispatchOutbound (pergunta de fora do horário, simulações, orçamento...) e volta reply=null —
     //    então devolvemos TODAS as mensagens enviadas a este visitante durante este processamento.

@@ -17,7 +17,7 @@ Responda SOMENTE com JSON: {"util": true|false, "caso": "NAO_SOUBE"|"CORRECAO"|"
 /** Usa a IA para decidir se a mensagem do atendente vale como aprendizado (não soube / correção). */
 export async function avaliarPar(cfg: AiConfig, trecho: string, resposta: string): Promise<{ util: boolean; caso: string; pergunta: string; resposta: string; motivo: string }> {
   const out = await chat(cfg, SYSTEM_AVALIA, [{ role: 'user', content:
-    `Trecho recente da conversa (do mais antigo para o mais recente):\n${trecho}\n\nNova mensagem do ATENDENTE:\n${resposta}` }], 400)
+    `Trecho recente da conversa (do mais antigo para o mais recente):\n${trecho}\n\nNova mensagem do ATENDENTE:\n${resposta}` }], 400, true)
   const j = extractJson<{ util?: boolean; caso?: string; pergunta?: string; resposta?: string; motivo?: string }>(out)
   return { util: j?.util === true, caso: (j?.caso ?? '').trim(), pergunta: (j?.pergunta ?? '').trim(), resposta: (j?.resposta ?? '').trim(), motivo: (j?.motivo ?? '').trim() }
 }

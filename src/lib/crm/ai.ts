@@ -39,6 +39,7 @@ export async function chat(
   system: string,
   messages: ChatMessage[],
   maxTokens = 1024,
+  json = false,   // true → força a resposta a ser um objeto JSON
 ): Promise<string> {
   if (cfg.provider === 'anthropic') {
     const apiMsgs = messages.map((m) => {
@@ -56,14 +57,17 @@ export async function chat(
       }
       return { role: m.role, content: m.content }
     })
+    // json=true → pré-preenche a resposta com "{" para o modelo continuar SÓ o objeto JSON
+    const msgsJson = json ? [...apiMsgs, { role: 'assistant', content: '{' }] : apiMsgs
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages: apiMsgs }),
+      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages: msgsJson }),
     })
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`)
     const data = await res.json()
-    return data.content?.[0]?.text?.trim() ?? ''
+    const txt = data.content?.[0]?.text?.trim() ?? ''
+    return json ? '{' + txt : txt
   }
   if (cfg.provider === 'openai') {
     const apiMsgs = [
@@ -84,7 +88,9 @@ export async function chat(
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.openaiKey}` },
-      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: apiMsgs }),
+      // json=true → a OpenAI GARANTE um objeto JSON válido (sem isso o modelo às vezes responde
+      // texto solto e o motor perde handoff/qualificação/conferência — bug de 2026-11-11).
+      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: apiMsgs, ...(json ? { response_format: { type: 'json_object' } } : {}) }),
     })
     if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)
     const data = await res.json()

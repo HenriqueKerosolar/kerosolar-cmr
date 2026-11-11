@@ -2,6 +2,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 import type { Channel } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { saudacaoAgora, comCumprimento, corrigirCumprimento, horaBrasilia } from './saudacao'
 import { runAgent } from './agent'
 import type { ChatMessage } from './ai'
 import { loadAiConfig, extractBillFromImage } from './ai'
@@ -133,6 +134,8 @@ export type IngestResult = {
   aiHandled: boolean
   handoff: boolean
   stage: string
+  /** 2ª mensagem a enviar DEPOIS da resposta (ex.: "quer continuar agora ou amanhã?" fora do horário) */
+  followUp?: string | null
 }
 
 // 🔒 Lock por conversa (serviço com 1 réplica): serializa o processamento de mensagens do MESMO
@@ -291,7 +294,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   await prisma.lead.update({ where: { id: lead.id }, data: { lastMessageAt: now } })
   // cliente respondeu → cancela checagens pendentes (sem-resposta, follow-up de orçamento
   // e a retomada das 9h — já que ele voltou a falar, não precisa do "bom dia, retomando").
-  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup', 'after_hours_resume'] }, done: false }, data: { done: true } })
+  await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['flow_noreply', 'budget_followup', 'chegada_followup', 'after_hours_resume', 'adiada_horario', 'consultor_20min'] }, done: false }, data: { done: true } })
   // 🎯 Cliente respondeu → contabiliza a resposta da variação de saudação (idempotente).
   if (!isSimulator) { const { registrarResposta } = await import('./greeting'); registrarResposta(lead.id).catch(() => {}) }
 
@@ -487,28 +490,33 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     return { ...base, aiHandled: true }
   }
 
-  // 4.32) Recepção fora do horário (a partir das 21h até 9h): pergunta se o
-  //       cliente quer só deixar registrado ou prosseguir com o atendimento agora.
+  // 4.32) Recepção fora do horário (20h–8h, regra do dono 2026-11-09): 1º contato recebe a saudação de
+  //       recepção; se o cliente interagir, pergunta se continua agora ou retornamos no próximo dia útil.
   if (aiOn || stageAuto) {
-    const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-    // Fora do horário: das 21h às 06h (antes das 6h e a partir das 21h). Entre 6h e 9h já atende normal.
-    const isAfterHours = spHour >= 21 || spHour < 6
-    // "amanhã" só é correto quando a retomada será no dia seguinte (spHour >= 21).
-    // Entre meia-noite e 05:59h, a retomada é no MESMO dia às 9h → usar "hoje".
-    const diaRetomada = spHour < 6 ? 'hoje' : 'amanhã'
+    const spHour = horaBrasilia()
+    // Fora do horário (regra do dono, 2026-11-09): a partir das 20h até as 8h.
+    const isAfterHours = spHour >= 20 || spHour < 8
     const norm = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const { dispatchOutbound } = await import('./flow')
 
-    // 🌅 Arma a RETOMADA das 9h: quem recebe o "agora ou depois?" (ou pede pra deixar
-    //    registrado) e fica sem responder será retomado pela IA no próximo horário comercial
-    //    — cumprindo a promessa "a gente continua a partir das 9h". (Ver tipo 'after_hours_resume'
-    //    em flow.ts; é cancelado automaticamente se o cliente responder.)
+    // 📅 Retomada = PRÓXIMO DIA ÚTIL em horário comercial (janela do funil, ex.: 9h seg–sex).
+    const { nextAllowedSlot, respeitaHorarioGlobal, janelaDoFunil } = await import('./schedule-window')
+    const pipeJ = await prisma.pipeline.findUnique({ where: { id: lead.pipelineId }, select: { sendStartHour: true, sendEndHour: true } })
+    const janelaJ = janelaDoFunil(pipeJ?.sendStartHour, pipeJ?.sendEndHour)
+    const retomadaEm = nextAllowedSlot(respeitaHorarioGlobal(new Date()), janelaJ)
+    const diaSP = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d)
+    const difDias = Math.round((Date.parse(diaSP(retomadaEm)) - Date.parse(diaSP(new Date()))) / 86400000)
+    const diaRetomada = difDias <= 0 ? 'hoje' : difDias === 1 ? 'amanhã'
+      : new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long' }).format(retomadaEm)
+    const horaRetomada = `${horaBrasilia(retomadaEm)}h`
+
+    // 🌅 Arma a RETOMADA no próximo dia útil: quem recebe o "agora ou depois?" (ou pede pra deixar
+    //    registrado) e fica sem responder será retomado pela IA no horário comercial.
+    //    (Tipo 'after_hours_resume' em flow.ts; cancelado automaticamente se o cliente responder.)
     const armarRetomada9h = async () => {
       try {
-        const { respeitaHorarioGlobal } = await import('./schedule-window')
-        const runAt = respeitaHorarioGlobal(new Date())
         await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: 'after_hours_resume', done: false }, data: { done: true } })
-        await prisma.scheduledAction.create({ data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'after_hours_resume', payload: {} as object, runAt } })
+        await prisma.scheduledAction.create({ data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'after_hours_resume', payload: {} as object, runAt: retomadaEm } })
       } catch (e) { console.error('[engine] armarRetomada9h', e) }
     }
 
@@ -527,11 +535,64 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       // migrados, leads criados manualmente ou reconexões do Baileys).
       // Exceção: saudação de anúncio Meta → sempre tratada como novo contato (isMetaAdEntry).
       const jaConversou = !isNewLead && !!lead.lastMessageAt && !isMetaAdEntry
-      const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+      const saud = saudacaoAgora()
 
-      if (querDepois) {
+      // Estado da recepção fora do horário: 1º contato recebe a SAUDAÇÃO de recepção; quando o cliente
+      // interage, aí sim perguntamos "continuar agora ou retornamos no próximo dia útil?".
+      const cfFH = (lead.customFields as Record<string, unknown> | null) ?? {}
+      const recebeuRecepcao = typeof cfFH.recepcaoForaHorario === 'string'
+        && Date.now() - Date.parse(cfFH.recepcaoForaHorario as string) < 16 * 3600 * 1000   // vale para esta noite
+      // Mandou a conta / consumo → quer continuar, não precisa perguntar
+      const mandouConta = !!(input.imageBase64 || input.pdfBase64 || input.pdfText)
+        || (/\d/.test(norm) && /(kwh|kw\/h|quilowatt|r\$|reais|conta|pain|placa)/.test(norm))
+
+      if (!jaConversou && !lead.afterHoursAsked && !recebeuRecepcao && !querDepois) {
+        // 1) PRIMEIRO contato fora do horário → saudação de recepção (a mesma do horário comercial)
+        if (!mandouConta) {
+          await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfFH, recepcaoForaHorario: new Date().toISOString() } as object } })
+          const cfgW = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
+          const msgW = (cfgW?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`).replace(/\{SAUDACAO\}/g, saud)
+          await simularDigitacao(msgW)
+          await dispatchOutbound(conversation.id, msgW, undefined, 'ai')
+          // sem resposta → cobrança normal da etapa (o agendador só envia em horário permitido)
+          const nrW = (currentStage?.flow as { noReply?: { minutes?: number } } | null)?.noReply
+          if (nrW?.minutes && nrW.minutes > 0 && !isSimulator) {
+            const { scheduleNoReply } = await import('./flow-blocks')
+            await scheduleNoReply(lead.id, conversation.id, lead.stageId).catch(() => {})
+          }
+          return { ...base, reply: null, aiHandled: true }
+        }
+        // já chegou com a conta/consumo → segue direto para o orçamento
+        await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
+        lead.afterHoursProceed = true
+      } else if (recebeuRecepcao && !lead.afterHoursAsked && !querAgora && !querDepois) {
+        // 2) Cliente INTERAGIU com a recepção → pergunta se continua agora ou no próximo dia útil
+        if (mandouConta) {
+          await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
+          lead.afterHoursProceed = true
+        } else {
+          await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
+          await armarRetomada9h()   // se ficar sem responder, a IA retoma no próximo dia útil
+          // Regra do dono (2026-11-11): se o cliente fez uma PERGUNTA, primeiro RESPONDE a pergunta
+          // (fluxo normal abaixo) e DEPOIS pergunta se quer continuar — a pergunta vai como 2ª mensagem.
+          const ehPergunta = /\?/.test(text) || /^\s*(como|qual|quais|quanto|quantos|quantas|quando|onde|por ?que|voces|vcs|voce|vc|tem|teria|faz|fazem|aceita|aceitam|parcela|parcelam|pode|posso|da pra|e possivel|existe|trabalham|atendem|instalam)\b/.test(norm)
+          const perguntaContinuar = `Já estamos fora do horário comercial 🌙 Você quer *continuar agora* comigo, ou prefere que a gente *retorne ${diaRetomada}*, no horário comercial (a partir das ${horaRetomada})?`
+          if (ehPergunta) {
+            base.followUp = perguntaContinuar
+            lead.afterHoursProceed = true   // só nesta mensagem (no banco continua "perguntado") → responde agora
+          } else {
+            await simularDigitacao(perguntaContinuar)
+            await dispatchOutbound(conversation.id, perguntaContinuar, undefined, 'ai')
+            return { ...base, reply: null, aiHandled: true }
+          }
+        }
+      }
+
+      if (lead.afterHoursProceed) {
+        // decidiu continuar (ou mandou a conta) → segue o fluxo normal abaixo
+      } else if (querDepois) {
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
-        const msg = `Perfeito! Deixei seu contato registrado e retomo no horário comercial (a partir das 9h). ${saud === 'Boa noite' ? 'Tenha uma ótima noite' : 'Até já'}! 😊`
+        const msg = `Perfeito! Deixei seu contato registrado e a gente retorna ${diaRetomada}, no horário comercial (a partir das ${horaRetomada}). ${saud === 'Boa noite' ? 'Tenha uma ótima noite' : 'Até logo'}! 😊`
         await simularDigitacao(msg)
         await dispatchOutbound(conversation.id, msg, undefined, 'ai')
         await armarRetomada9h()   // cliente pediu pra deixar registrado → retomamos às 9h
@@ -548,18 +609,9 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
         await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
         lead.afterHoursProceed = true
       } else {
-        // primeira mensagem fora do horário → recepção + pergunta
-        await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursAsked: true } })
-        const cfg = await prisma.systemConfig.findUnique({ where: { key: 'after_hours_message' } })
-        const msg = (cfg?.value || `${saud}! Recebi sua mensagem 😊 Você prefere que eu já comece seu atendimento agora, ou quer só deixar registrado e a gente continua ${diaRetomada} no horário comercial (a partir das 9h)?`)
-          .replace(/\{SAUDACAO\}/g, saud)
-          .replace(/\{DIA_RETOMADA\}/g, diaRetomada)
-          .replace(/\bamanhã\b/g, diaRetomada)   // corrige configs customizadas que hardcodam "amanhã"
-        await simularDigitacao(msg)
-        await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-        await armarRetomada9h()   // se ficar sem responder, a IA retoma às 9h
-        // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
-        return { ...base, reply: null, aiHandled: true }
+        // (a recepção e a pergunta já foram tratadas acima) → segue o atendimento normal
+        await prisma.lead.update({ where: { id: lead.id }, data: { afterHoursProceed: true } })
+        lead.afterHoursProceed = true
       }
     }
   }
@@ -570,7 +622,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   //       e quando o cliente AINDA não informou consumo na mensagem.
   if (aiOn || stageAuto) {
     const spHourC = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-    const horarioComercial = spHourC >= 6 && spHourC < 21
+    const horarioComercial = spHourC >= 8 && spHourC < 20   // fora disso (20h–8h) o bloco 4.32 já tratou
     const jaRespondemos = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })
     const txtC = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     const jaTemConsumo = /\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC)
@@ -579,7 +631,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     // 🖼️ Se o cliente JÁ mandou uma imagem (foto da conta), NÃO dispara a saudação pedindo a conta
     //    de novo — deixa a mensagem seguir para a leitura por visão (extractBillFromImage) logo abaixo.
     if (horarioComercial && (jaRespondemos === 0 || isMetaAdEntry) && !jaTemConsumo && !input.imageBase64 && !input.pdfBase64 && !input.pdfText && !lead.humanOnly) {
-      const saud = spHourC < 12 ? 'Bom dia' : spHourC < 18 ? 'Boa tarde' : 'Boa noite'
+      const saud = saudacaoAgora()
       const cfg = await prisma.systemConfig.findUnique({ where: { key: 'welcome_message' } })
       const msg = (cfg?.value || `${saud}! Obrigada pelo contato com a KeroSolar 😊 Para eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou, se preferir, me diz seu *consumo médio em kWh* ou o *valor médio da conta em reais*. Qualquer uma das opções já serve!`).replace(/\{SAUDACAO\}/g, saud)
       const { dispatchOutbound } = await import('./flow')
@@ -589,6 +641,21 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       if (nrC?.minutes && nrC.minutes > 0 && !isSimulator) {
         const { scheduleNoReply } = await import('./flow-blocks')
         await scheduleNoReply(lead.id, conversation.id, lead.stageId).catch(() => {})
+      }
+      // 👤 Regra do dono (2026-11-10): 20 min sem resposta à recepção, DENTRO do horário de
+      //    atendimento (janela do funil, dias úteis) → o Henrique se apresenta como consultor técnico.
+      //    Fora do horário / fim de semana: nada muda (fluxo de fora do horário).
+      if (!isSimulator) {
+        try {
+          const { nextAllowedSlot, janelaDoFunil } = await import('./schedule-window')
+          const pipeC = await prisma.pipeline.findUnique({ where: { id: lead.pipelineId }, select: { sendStartHour: true, sendEndHour: true } })
+          const janC = janelaDoFunil(pipeC?.sendStartHour, pipeC?.sendEndHour)
+          const em20 = new Date(Date.now() + 20 * 60 * 1000)
+          const dentro = (t: Date) => nextAllowedSlot(t, janC).getTime() <= t.getTime() + 1000
+          if (dentro(new Date()) && dentro(em20)) {
+            await prisma.scheduledAction.create({ data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'consultor_20min', payload: {} as object, runAt: em20 } })
+          }
+        } catch (e) { console.error('[engine] consultor_20min', e) }
       }
       // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
       return { ...base, reply: null, aiHandled: true }
@@ -696,7 +763,12 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       }
 
       if (!valorSist) {
-        await responder('Pra simular o pagamento, preciso primeiro do seu orçamento 😊 Me envia a *foto da sua conta de luz*, ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.')
+        // Regra do dono (2026-11-10): RESPONDE a pergunta primeiro ("parcelam no cartão?" → "Sim!"),
+        // depois puxa os dados para o orçamento.
+        const resposta = pedeCartao
+          ? 'Sim! 😊 Parcelamos no cartão de crédito em até *24x*, sendo até *3x sem juros*.'
+          : 'Sim, dá pra dar uma *entrada* e parcelar o restante 😊'
+        await responder(`${resposta} Pra eu já te mostrar as parcelas certinhas, me envia a *foto da sua conta de luz* — ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.`)
         return { ...base, reply: null, aiHandled: true }
       }
 
@@ -809,7 +881,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   }
 
   // 4.7) Cálculo solar — extrai dados da mensagem ou da imagem (conta de luz)
-  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida, carregarTabelaFinanciamento } = await import('./solar-calc')
+  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida, carregarTabelaFinanciamento, aplicarHibrido } = await import('./solar-calc')
   // Clientes pós-venda ("Já é cliente") não recebem cálculo solar — evita orçamentos indevidos
   const isPosSaleStage = /j[aá]\s*[eé]\s*cliente|p[oó]s.?venda/i.test(currentStage?.name ?? '')
   // Carrega a tabela de financiamento das Configurações (ou usa a padrão) ANTES dos cálculos.
@@ -929,6 +1001,11 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   if (solar && consumo.kwh && consumo.reais && consumo.reais > consumo.kwh) {
     solar = { ...solar, contaReais: Math.round(consumo.reais) }
   }
+  // 🔋 HÍBRIDO (regra do dono, 2026-11-11): cliente pediu equipamento híbrido/com bateria → fórmula × 240%.
+  //    O pedido fica guardado no lead (vale para os próximos orçamentos dele também).
+  const querHibrido = await (await import('./hibrido')).leadQuerHibrido(lead.id, conversation.id, text)
+  if (querHibrido) lead.customFields = { ...((lead.customFields as Record<string, unknown> | null) ?? {}), hibrido: true } as Prisma.JsonObject
+  if (solar && querHibrido) solar = aplicarHibrido(solar)
   const consumoClienteKwh = solar?.consumoKwh ?? null
   let kitMinimo = false
 
@@ -1007,6 +1084,18 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     stageName: currentStage?.name ?? null,
   })
 
+  // 🙋 Pedido para falar com o DONO / RESPONSÁVEL (regra do dono, 2026-11-10): SEMPRE vai para
+  //    atendimento humano com prioridade — não depende da IA lembrar de marcar o handoff.
+  //    (Aviso só pelo Inbox/push do CRM, sem WhatsApp para o dono.)
+  const normDono = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const pedeDono = /\b(falar|conversar|contato|contatar|telefone|numero|whats(app)?|ligar)\b.{0,40}\b(dono|donos|responsavel|gerente|proprietari\w*|diretor|socio)\b/.test(normDono)
+    || /\b(dono|responsavel|gerente|proprietari\w*)\b.{0,30}\b(urgen\w*|urgente)\b/.test(normDono)
+  if (pedeDono && !/\b(vend|ofere[cç]|parceri|fornec|revend|represent)\w*/.test(normDono)) {
+    result.handoff = true
+    result.highPriority = true
+    result.discardLead = false
+  }
+
   // 📚 Pedido de ebook/guia → envia o PDF Anti-Cilada automaticamente
   const normEbook = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
   const isEbookRequest = /(e-?book|guia|material|apostila|anti.?cilada|manual.*solar|pdf|catalogo)/.test(normEbook)
@@ -1060,6 +1149,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   if (!solar) {
     if (consumoKwhValido(result.qualification.consumoKwh)) solar = calcularSolarPorKwh(result.qualification.consumoKwh)
     else if (contaReaisValida(result.qualification.billValue)) solar = calcularSolar(result.qualification.billValue)
+    if (solar && querHibrido) solar = aplicarHibrido(solar)
   }
 
   // 5.5) Cliente reclamou / não quer mais receber → agradece (a própria reply) e entra na BLACK LIST.
@@ -1230,10 +1320,14 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
   //          nesse caso preservamos a reply da IA — ela já diz o certo pro cliente.
-  let outboundText = presentBudget && solar ? orcamentoTexto(solar) : result.reply
+  // 🕒 nunca "Bom dia" às 17h: corrige o cumprimento da IA pelo horário de Brasília
+  let outboundText = presentBudget && solar ? orcamentoTexto(solar) : corrigirCumprimento(result.reply)
   let outboundSender: 'ai' | 'system' = 'ai'
   if (result.handoff) {
-    const isPosSale = /recebeu|encaminhando|consultor.*retorn|vou enviar.*video|foto.*inversor|conta.*encaminh/i.test(result.reply)
+    // pedido para falar com o dono: mantém a resposta acolhedora da IA (já diz que avisou o responsável)
+    // no modo "Henrique" também: a resposta dele ("vou verificar e te respondo em breve") é a que sai
+    const modoHenrique = !!((lead.customFields as Record<string, unknown> | null)?.personaHenrique)
+    const isPosSale = pedeDono || modoHenrique || /te respondo em breve|recebeu|encaminhando|consultor.*retorn|vou enviar.*video|foto.*inversor|conta.*encaminh/i.test(result.reply)
     if (!isPosSale) {
       // Handoff genérico (cliente pediu humano, caso complexo etc.) → mensagem padrão
       const { getHandoffMessage } = await import('./handoff')

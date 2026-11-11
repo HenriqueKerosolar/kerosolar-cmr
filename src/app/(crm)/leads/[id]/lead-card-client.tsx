@@ -41,6 +41,8 @@ const ACTION_LABELS: Record<string, string> = {
   flow_noreply: '⏰ Cobrança de sem-resposta',
   flow_continue: '▶️ Continuação do fluxo',
   budget_followup: '💬 Follow-up do orçamento',
+  adiada_horario: '🌙 Mensagem guardada (sai às 8h)',
+  consultor_20min: '👤 "Henrique falando" (20 min sem resposta)',
   budget_validity: '📅 Lembrete de validade do orçamento',
   reengage: '🔁 Reengajamento',
   chegada_followup: '👋 Lembrete de chegada',
