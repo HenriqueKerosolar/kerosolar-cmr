@@ -175,6 +175,19 @@ export async function dispatchOutbound(
       console.warn('[flow dispatch] mensagem repetida bloqueada:', text.slice(0, 60))
       return
     }
+    // 2026-11-12 (regra do dono: nunca repetir resposta): bloqueia também mensagem QUASE IGUAL a
+    // qualquer outra já enviada na conversa (ex.: a mesma recepção reescrita). Orçamento fica de fora
+    // (é reenviado de propósito quando o cliente volta) — para ele vale só a trava de texto idêntico.
+    if (!/^\s*☀️\s*\*ORÇAMENTO/.test(text)) {
+      const anteriores = await prisma.message.findMany({
+        where: { conversationId, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true },
+      })
+      const { repeteAlguma } = await import('./repeticao')
+      if (repeteAlguma(text, anteriores.map((m) => m.content ?? ''))) {
+        console.warn('[flow dispatch] mensagem quase igual a uma anterior bloqueada:', text.slice(0, 60))
+        return
+      }
+    }
   }
 
   const createdMsg = await prisma.message.create({

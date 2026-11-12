@@ -315,6 +315,26 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     stage: pipeline.stages.find((s) => s.id === lead!.stageId)?.name ?? firstStage.name,
   }
 
+  // 🔁 Cliente REENVIOU a mesma mensagem (clique duplo, anúncio reenviado) em até 10 min e nós já
+  //    respondemos a primeira → não responde de novo (regra do dono: nunca repetir resposta).
+  if (!isSimulator && text.trim().length >= 15 && !input.imageBase64 && !input.pdfBase64 && !input.pdfText) {
+    const ultimas = await prisma.message.findMany({
+      where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' }, take: 6,
+      select: { direction: true, content: true, createdAt: true },
+    })
+    // ultimas[0] = a mensagem que acabou de chegar; procura a inbound anterior a ela
+    const idxAnt = ultimas.findIndex((m, i) => i > 0 && m.direction === 'inbound')
+    if (idxAnt > 0) {
+      const ant = ultimas[idxAnt]
+      const respondemos = ultimas.slice(1, idxAnt).some((m) => m.direction === 'outbound')
+      const { mesmoTexto } = await import('./repeticao')
+      if (respondemos && mesmoTexto(ant.content ?? '', text) && Date.now() - ant.createdAt.getTime() < 10 * 60 * 1000) {
+        console.log('[engine] cliente reenviou a mesma mensagem — não responde de novo')
+        return { ...base, reply: null, aiHandled: true }
+      }
+    }
+  }
+
   // ⏰ Mensagem ANTIGA (a Meta reentregou com atraso, >24h): a janela está fechada e texto livre
   //    seria recusado (131047). Em vez de rodar a IA, manda UMA vez o template aprovado de reabertura
   //    ("Recebemos o seu contato..."). Quando o cliente responder, a janela reabre e a IA segue normal.
@@ -1479,9 +1499,11 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // O orçamento sai DIRETO, sem frase de espera — só simula a digitação proporcional ao texto.
   // 🔁 NUNCA REPETIR A MESMA RESPOSTA: se a IA gerou exatamente o que já foi enviado há pouco,
   //    em vez de repetir pede para o cliente refazer a pergunta (regra do dono).
+  //    (2026-11-12: compara com TODA a conversa e pega também resposta "quase igual", não só idêntica)
   if (!presentBudget && outboundText) {
-    const ult = await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 4, select: { content: true } })
-    if (ult.some((m) => m.content.trim() === outboundText.trim())) {
+    const ult = await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true } })
+    const { repeteAlguma } = await import('./repeticao')
+    if (repeteAlguma(outboundText, ult.map((m) => m.content ?? ''))) {
       console.log('[engine] resposta repetida bloqueada — pedindo para refazer a pergunta')
       outboundText = 'Não entendi bem sua pergunta 🤔 Pode refazer de outro jeito pra eu te responder certinho?'
     }
