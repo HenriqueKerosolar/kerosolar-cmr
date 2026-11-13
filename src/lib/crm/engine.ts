@@ -1520,7 +1520,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   if (presentBudget && !isSimulator) {
     await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: 'budget_followup', done: false }, data: { done: true } })
     await prisma.scheduledAction.create({
-      data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'budget_followup', payload: { step: 1 } as object, runAt: new Date(Date.now() + 90 * 1000) },
+      data: { leadId: lead.id, conversationId: conversation.id, stageId: lead.stageId, type: 'budget_followup', payload: { step: 1 } as object, runAt: new Date(Date.now() + 5 * 60 * 1000) },
     })
   }
 
