@@ -1,6 +1,7 @@
 import 'server-only'
 import { loadAiConfig, chat, extractJson, type ChatMessage } from './ai'
 import { prisma } from '@/lib/prisma'
+import { saudacaoAgora } from './saudacao'
 
 const DEFAULT_BOT_NAME = 'Sol'
 const DEFAULT_SYSTEM = `Você é a "{BOT_NAME}", assistente da KeroSolar — energia solar fotovoltaica no Brasil. Atenda com simpatia, calor humano e naturalidade. NADA de tom robótico ou interrogatório.
@@ -35,8 +36,9 @@ EXTRAÇÃO DO CONSUMO (REGRA CRÍTICA — leia com atenção):
 ENTREGA DO ORÇAMENTO:
 - Assim que tiver consumo (foto OU kWh OU R$) e os DADOS CALCULADOS forem fornecidos abaixo, APRESENTE VOCÊ MESMA o orçamento na hora — valor do sistema, economia mensal e payback, com os números calculados.
 - NÃO peça a foto da conta "para confirmar" se já tem o kWh ou o valor — entregue o orçamento com o que tem.
-- Se os DADOS CALCULADOS ainda não vieram neste turno mas o cliente já deu o consumo, NÃO peça a conta de novo: apenas confirme que vai calcular ("perfeito, já te passo os números!") e mantenha o consumoKwh no JSON.
+- Se os DADOS CALCULADOS ainda não vieram neste turno mas o cliente já deu o consumo, NÃO peça a conta de novo e NÃO prometa ação futura (proibido "já te passo os números", "um momento", "vou calcular"): responda de forma breve e simpática mantendo o consumoKwh no JSON — o sistema apresenta os números logo em seguida, automaticamente.
 - NUNCA diga que "um especialista vai preparar o orçamento" para se esquivar: você JÁ entrega a estimativa na hora. Um especialista só refina depois, se for necessário.
+- Você LÊ a conta (foto ou PDF) diretamente. Só peça a senha do PDF se ele estiver REALMENTE protegido por senha e você não conseguir abri-lo. Se conseguir ler, NUNCA invente que precisa de senha — leia e entregue o orçamento. Se o cliente disser que não tem senha e mesmo assim você não ler o conteúdo, peça o consumo médio em kWh ou o valor médio da conta em R$.
 
 REGRAS:
 - Mensagens curtas (estilo WhatsApp), UMA pergunta por vez.
@@ -141,8 +143,7 @@ Só depois dessa classificação decida a resposta. Na dúvida entre cliente e v
   }
 
   // Saudação conforme o horário (fuso de Brasília) — inclui madrugada
-  const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-  const saudacao = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : spHour >= 18 && spHour < 24 ? 'Boa noite' : 'Boa madrugada'
+  const saudacao = saudacaoAgora()
   system += `\n\n## SAUDAÇÃO/ABERTURA: o horário atual de Brasília pede "${saudacao}". ` +
     `Na PRIMEIRA mensagem da conversa, cumprimente com "${saudacao}" e SEMPRE termine com uma PERGUNTA FÁCIL DE RESPONDER que já oferece a economia — esse é o gancho que faz o cliente responder. ` +
     `Modelo (adapte o tom, mas mantenha a pergunta no fim): ` +
@@ -150,6 +151,15 @@ Só depois dessa classificação decida a resposta. Na dúvida entre cliente e v
     `REGRAS DA ABERTURA: nunca termine a 1ª mensagem sem pedir o valor da conta / kWh / foto. Não diga apenas "como posso ajudar" — sempre dê o motivo (economia) + a pergunta de 1 toque. ` +
     `Se o cliente já trouxe uma dúvida específica, responda-a e ainda assim feche pedindo o valor da conta pra calcular a economia. ` +
     `Nas mensagens seguintes, cumprimente com ${saudacao} apenas quando fizer sentido.`
+
+  // 👤 Regra do dono (2026-11-10): depois que o Henrique se apresentou ("Henrique falando ... Serei seu
+  //    consultor técnico"), a conversa segue NA VOZ DELE.
+  if (opts.lead?.personaHenrique) {
+    system += `\n\n## 👤 VOCÊ ESTÁ RESPONDENDO COMO O HENRIQUE (vale MAIS que o nome/persona do início deste prompt):
+O Henrique, consultor técnico da KeroSolar, já se apresentou ao cliente nesta conversa. Escreva COMO ELE: em primeira pessoa, no masculino ("obrigado", "fico à disposição"), tom de consultor técnico — direto, educado e humano, mensagens curtas. NÃO se apresente de novo como assistente, IA ou "Sol", e não diga "vou chamar o Henrique" — você fala por ele.
+NUNCA INVENTE: responda só o que estiver neste prompt (regras, preços, prazos, formas de pagamento). Se não souber com certeza, NÃO chute — responda apenas algo como "Vou verificar e te respondo em breve." e marque handoff: true (o Henrique responde pessoalmente).
+Honestidade: se o cliente perguntar DIRETAMENTE se está falando com um robô/IA, não minta — diga que é o assistente da equipe do Henrique e que ele acompanha a conversa e responde pessoalmente quando preciso.`
+  }
 
   // Regra fixa: de onde somos / área de atendimento
   system += `\n\n## DE ONDE SOMOS / ÁREA DE ATENDIMENTO: se o cliente perguntar de onde somos, onde ficamos, ` +
@@ -387,10 +397,19 @@ Quando o cliente envia uma mensagem que não tem NENHUMA relação com energia s
 - Corrente, meme, piada, vídeo de entretenimento
 - Qualquer outro conteúdo social/pessoal claramente não relacionado a energia solar
 
-RESPONDA EXATAMENTE assim (adapte apenas o cumprimento para bom dia/tarde/noite):
-"Bom dia! 😊 Que mensagem linda — muito obrigada! ❤️ Só precisamos avisar: este canal é voltado exclusivamente para atendimento de energia solar. Sou uma inteligência artificial e estou configurada para atender apenas assuntos relacionados ao solar — não consigo encaminhar outras mensagens para nenhum atendente. Por isso, peço com carinho que não envie mensagens desse tipo por aqui. Se um dia precisar de um orçamento de energia solar, é só chamar! Abraço 👋"
+RESPONDA EXATAMENTE assim (o cumprimento AGORA é "${saudacaoAgora()}" — use exatamente esse):
+"${saudacaoAgora()}! 😊 Que mensagem linda — muito obrigada! ❤️ Só precisamos avisar: este canal é voltado exclusivamente para atendimento de energia solar. Sou uma inteligência artificial e estou configurada para atender apenas assuntos relacionados ao solar — não consigo encaminhar outras mensagens para nenhum atendente. Por isso, peço com carinho que não envie mensagens desse tipo por aqui. Se um dia precisar de um orçamento de energia solar, é só chamar! Abraço 👋"
 
-Após responder, marque discardLead = true.`
+Após responder, marque discardLead = true.
+
+⚠️ Esta resposta é SÓ para conteúdo decorativo/social SEM pedido nenhum. NUNCA use para texto ou ÁUDIO em que a pessoa PEDE algo (falar com alguém, um telefone, uma informação, ajuda) — nesses casos responda o pedido.`
+
+  // Regra do dono (2026-11-10): pedido para falar com o DONO / RESPONSÁVEL → atendimento humano
+  system += `\n\n## PEDIDO PARA FALAR COM O DONO / RESPONSÁVEL / GERENTE (vale MAIS que as regras de "fora de escopo" e "fora de contexto"):
+Se a pessoa pedir para falar com o dono, o responsável, o gerente, "alguém da empresa", ou pedir o telefone de alguém da KeroSolar — principalmente se disser que é URGENTE —, pode ser cliente antigo com problema. NÃO trate como propaganda, fornecedor ou mensagem fora de contexto, NÃO mande para o e-mail e NÃO passe nenhum telefone.
+Responda curto e acolhedor, por exemplo: "Claro! Já avisei o responsável e ele vai falar com você por aqui o mais rápido possível 😊 Se puder, me adianta em poucas palavras o assunto."
+Marque handoff: true e highPriority: true. NÃO marque discardLead.
+Exceção: só trate como oferta comercial se a pessoa DEIXAR CLARO que quer vender/oferecer algo à KeroSolar (produto, serviço, parceria).`
 
   // Regra fixa: contato sem interesse / desistência precoce / clique acidental
   system += `\n\n## CONTATO SEM INTERESSE — desistência precoce ou clique acidental:
@@ -458,7 +477,7 @@ Quando o cliente quiser TENTAR o financiamento / saber se tem crédito liberado:
 4. O cliente pode mandar os dados por TEXTO ou em DOCUMENTO/FOTO (RG, CNH, etc.). Se vier documento, CONFIRA se os 5 dados estão presentes; se faltar algum, peça o que falta.
 5. Quando tiver os 5 DADOS COMPLETOS → confirme de forma calorosa ("recebi tudo, certinho! 😊") e diga que vai encaminhar para o consultor verificar a liberação de crédito. Marque handoff: true.
 6. NUNCA diga que o crédito foi aprovado nem invente taxas de aprovação — quem confirma é o consultor.
-7. Cumprimente sempre (Bom dia/Boa tarde/Boa noite) e use o nome do cliente quando tiver.`
+7. Cumprimente sempre com o cumprimento do horário de Brasília (Bom dia / Boa tarde / Boa noite / Boa madrugada — AGORA é "${saudacaoAgora()}"; nunca use outro) e use o nome do cliente quando tiver.`
 
   // Regra fixa: VISITA (presencial) vs ATENDIMENTO (conversa remota)
   system += `\n\n## TIPO DE AGENDAMENTO — VISITA vs ATENDIMENTO (MUITO IMPORTANTE):
@@ -523,7 +542,10 @@ REGRAS:
     `Se perguntarem se tem cartão sem juros, confirme: "dá pra fazer em até 3x sem juros" (acima de 3x entram as taxas). ` +
     `Quando o cliente pedir simulação no cartão, o sistema JÁ calcula e envia os valores pela tabela oficial automaticamente — ` +
     `você NÃO precisa (e NÃO deve) inventar parcela/valor. Se faltar saber o número de parcelas, apenas pergunte "em quantas vezes? (até 24x)". ` +
-    `NUNCA invente o valor da parcela no cartão.`
+    `NUNCA invente o valor da parcela no cartão. ` +
+    `COMO É FEITO O PAGAMENTO NO CARTÃO (regra do dono): pode ser PRESENCIAL (na maquininha) ou por LINK de pagamento — ` +
+    `depende do equipamento escolhido e do número de parcelas; o consultor combina a forma certa com o cliente no fechamento. ` +
+    `Se perguntarem "vocês vêm passar o cartão?", "é por link?", responda isso (sem repetir a simulação).`
 
   // Regra fixa: pré-aprovação de financiamento
   system += `\n\n## PRÉ-APROVAÇÃO DE FINANCIAMENTO: se o cliente perguntar sobre pré-aprovação, aprovação de crédito ou como saber se consegue financiar, ` +
@@ -554,12 +576,21 @@ REGRAS:
 
   // (instrução de appointment está dentro do JSON_FORMAT)
 
+  // Regra FIXA do dono (2026-11-10)
+  system += `\n\n## RESPONDA SEMPRE A PERGUNTA FEITA (regra fixa): a PRIMEIRA frase da sua resposta responde exatamente o que o cliente perguntou ` +
+    `(ex.: "Vocês parcelam no cartão?" → "Sim! Parcelamos em até 24x, sendo até 3x sem juros."). Só DEPOIS de responder você pode puxar os dados para o orçamento (conta de luz, consumo). ` +
+    `NUNCA ignore a pergunta para pedir a conta. Se a resposta NÃO estiver neste prompt, NÃO invente: diga que vai verificar e responde em breve (e marque handoff: true).`
+
   system += `\n\n## NÃO REPETIR PERGUNTAS: NUNCA repita uma pergunta que já foi feita na conversa. ` +
     `Antes de perguntar qualquer coisa, verifique o histórico — se já foi perguntado, não pergunte de novo. ` +
     `Se já tem a resposta no histórico, use essa informação diretamente.`
 
   system += `\n\n## TOM E POSTURA: seja sempre gentil, humano e natural (nada robótico). ` +
-    `Se NÃO entender a mensagem do cliente, pergunte novamente com educação — NUNCA responda no chute / na dúvida.`
+    `Se NÃO entender a mensagem do cliente, peça para refazer a pergunta (ex.: "Não entendi sua pergunta, pode refazer?") — NUNCA responda no chute / na dúvida.`
+  system += `\n\n## NUNCA REPETIR RESPOSTA: é PROIBIDO reenviar uma resposta/simulação que já está no histórico. ` +
+    `Se o cliente fizer uma pergunta depois de uma simulação (ex.: "como é feito?", "vocês vêm aqui passar o cartão?"), ` +
+    `responda ESSA pergunta — não repita os números. Se a informação pedida não estiver neste prompt, ` +
+    `diga com naturalidade que o consultor confirma esse detalhe e NÃO invente.`
 
   system += `\n\n## MENSAGENS FORA DO ESCOPO (ofertas, currículos, fornecedores): Se alguém enviar mensagem oferecendo serviço, material, produto, parceria comercial, tabela de preços, ou perguntar se está contratando / querer enviar currículo — agradeça brevemente e informe que este canal é exclusivo para atendimento a clientes e que outros assuntos devem ser enviados para o e-mail kerosolar@kerosolar.com.br. Exemplo de resposta: "Obrigado pelo contato! 😊 Este canal é destinado exclusivamente ao atendimento dos nossos clientes. Para outros assuntos, por favor envie um e-mail para kerosolar@kerosolar.com.br. Tenha um ótimo dia!". Não desenvolva o assunto nem peça mais informações — apenas agradeça e redirecione.`
 
@@ -615,7 +646,7 @@ FAQ RÁPIDO:
 
   let raw = ''
   try {
-    raw = await chat(cfg, system, history, 700)
+    raw = await chat(cfg, system, history, 700, true)
   } catch (err) {
     console.error('[crm/agent]', err)
     return { ...FALLBACK, handoff: true, reply: 'Tive um probleminha. Vou te transferir para um atendente.' }
@@ -624,6 +655,90 @@ FAQ RÁPIDO:
   const parsed = extractJson<Partial<AgentResult>>(raw)
   if (!parsed || typeof parsed.reply !== 'string' || !parsed.reply.trim()) {
     return { ...FALLBACK, reply: raw.trim() || FALLBACK.reply }
+  }
+
+  // 🔎 Modo HENRIQUE (regra do dono: "quando não souber, não invente — diga que responde em breve"):
+  //    conferência da resposta contra o conhecimento oficial deste prompt. Se afirmar algo que não
+  //    está nele, troca por "Vou verificar e te respondo em breve." e passa para o Henrique.
+  //    Regra FIXA do dono (2026-11-10): vale para TODAS as respostas da IA, não só no modo Henrique.
+  if (!parsed.handoff && parsed.reply.trim()) {
+    try {
+      const ultimaDoCliente = [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
+      const verifSys = `Você é um VERIFICADOR rigoroso. Recebe a BASE DE CONHECIMENTO oficial de uma empresa de energia solar, a pergunta do cliente e uma RESPOSTA proposta.
+Liste cada AFIRMAÇÃO DE FATO da resposta (capacidade da empresa, o que ela faz ou não faz, prazo, preço, garantia, condição técnica, promessa).
+NÃO liste: cumprimentos, agradecimentos, pedidos de informação (conta de luz, consumo, kWh), "vou verificar", e o que o PRÓPRIO atendimento vai fazer a seguir (mostrar/calcular/simular parcelas, preparar o orçamento, seguir com o atendimento).
+Para cada afirmação, copie em "trecho" o pedaço da BASE (cópia LITERAL, 5 a 25 palavras) que a comprova. Se a BASE não comprova, "trecho": null. NÃO invente trecho.
+Responda SOMENTE JSON: {"afirmacoes": [{"afirmacao": "...", "trecho": "..." | null}]}`
+      const verif = await chat(cfg, verifSys, [{ role: 'user', content:
+        `BASE DE CONHECIMENTO:\n${system.slice(0, 60000)}\n\n=== PERGUNTA DO CLIENTE ===\n${ultimaDoCliente}\n\n=== RESPOSTA PROPOSTA ===\n${parsed.reply}` }], 500, true)
+      const v = extractJson<{ afirmacoes?: { afirmacao?: string; trecho?: string | null }[] }>(verif)
+      // Conferência DETERMINÍSTICA: o trecho citado tem de existir de verdade na base.
+      const nrm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+      const baseN = nrm(system)
+      // …e tem de FALAR do mesmo assunto: as palavras-chave da afirmação (≥5 letras, sem palavras
+      // genéricas) precisam aparecer no trecho. Evita "comprovar" laje com "Estrutura metálica: 25 anos".
+      const GENERICAS = new Set(['voces', 'nossa', 'nosso', 'nossos', 'nossas', 'podemos', 'conseguimos', 'fazemos', 'temos', 'sempre', 'importante', 'garantir', 'certificar', 'adequada', 'adequado', 'possivel', 'cliente', 'kerosolar', 'energia', 'solar', 'sistema', 'instalacao', 'instalar', 'instalamos', 'fazer', 'mesmo', 'estar', 'esteja', 'sobre', 'muito', 'melhor', 'ajudar'])
+      const chaves = (s: string) => nrm(s).split(' ').filter((w) => w.length >= 4 && !GENERICAS.has(w) && !/^(para|como|qual|quais|isso|esse|essa|pode|mais|onde|cada|todo|toda|voce|seus|suas|tudo|bem|ate|anos)$/.test(w))
+      const sustenta = (afirm: string, trecho: string) => {
+        const k = chaves(afirm); if (!k.length) return true
+        const t = nrm(trecho); const achadas = k.filter((w) => t.includes(w.slice(0, 5)))
+        return achadas.length / k.length >= 0.5
+      }
+      // pedidos/perguntas ao cliente ("me manda a foto da conta", "qual seu consumo?") não são fatos
+      const ehPedido = (a: string) => /\?|\b(me (manda|envia|diz|passa|conta|informa)|envie|mande|informe|foto|conta de luz|consumo|kwh|valor (medio )?da conta|posso|consigo|te mostr\w*|mostrar|vou te|te passo|simula\w*|calcul\w*|economiz\w*|orcamento|parcelas certinhas|prosseguir|seguir|em frente|ajudar|estou a disposicao|fico a disposicao)\b/.test(nrm(a) + (a.includes('?') ? ' ?' : ''))
+      // o trecho existe na base? (cópia exata OU ≥85% das palavras dele presentes — tolera pequena
+      // diferença de redação do verificador; números do trecho têm de existir na base)
+      const baseSet = new Set(baseN.split(' '))
+      const trechoExiste = (t: string) => {
+        const tn = nrm(t); if (baseN.includes(tn)) return true
+        const ws = tn.split(' ').filter((w) => w.length >= 4)
+        const nums = tn.match(/\d+/g) ?? []
+        return ws.length >= 3 && ws.filter((w) => baseSet.has(w)).length / ws.length >= 0.85 && nums.every((n) => baseSet.has(n))
+      }
+      // todo NÚMERO da afirmação (prazo, preço, garantia, parcelas) tem de aparecer no trecho citado
+      const numerosBatem = (afirm: string, t: string) => {
+        const tn = ' ' + nrm(t) + ' '
+        return (nrm(afirm).match(/\d+/g) ?? []).every((n) => tn.includes(' ' + n + ' ') || tn.includes(n))
+      }
+      const semBase = (v?.afirmacoes ?? [])
+        .filter((a) => a.afirmacao && !ehPedido(a.afirmacao))
+        .filter((a) => !a.trecho || a.trecho === 'null' || nrm(a.trecho).length < 8 || !trechoExiste(a.trecho)
+          || !sustenta(a.afirmacao ?? '', a.trecho) || !numerosBatem(a.afirmacao ?? '', a.trecho))
+      console.log('[agent] conferência: %d afirmação(ões), %d sem base', v?.afirmacoes?.length ?? -1, semBase.length)
+
+      // ✂️ Enfeite sem base junto de uma resposta CERTA → corta só as frases sem base e mantém o resto.
+      //    (Se a parte principal é que não tem base — ex.: "sim, instalamos em laje" — troca tudo abaixo.)
+      const comBase = (v?.afirmacoes ?? []).filter((a) => a.afirmacao && !ehPedido(a.afirmacao) && !semBase.includes(a))
+      if (v && semBase.length && comBase.length) {
+        const frases = parsed.reply.split(/(?<=[.!?…])\s+|\n+/).filter((f) => f.trim())
+        const ruim = (f: string) => semBase.some((a) => sustenta(a.afirmacao ?? '', f) && chaves(a.afirmacao ?? '').length > 0)
+        const boa = (f: string) => comBase.some((a) => sustenta(a.afirmacao ?? '', f))
+        const mantidas = frases.filter((f) => !ruim(f) || boa(f))
+        // só aceita o corte se sobrou alguma frase com informação comprovada e nada sem base
+        if (mantidas.some(boa) && !mantidas.some((f) => ruim(f) && !boa(f))) {
+          console.log('[agent] enfeite sem base cortado: %s', semBase.map((a) => a.afirmacao).join(' | ').slice(0, 200))
+          parsed.reply = mantidas.join(' ').trim()
+          semBase.length = 0
+        }
+      }
+
+      if (!v || semBase.length) {
+        // O cliente PERGUNTOU algo? Só aí "vou confirmar essa informação" faz sentido (e vai p/ humano).
+        // Sem pergunta ("quero continuar", "ok") → segue o atendimento pedindo os dados, sem soar fora de contexto.
+        const nU = nrm(ultimaDoCliente)
+        const clientePerguntou = ultimaDoCliente.includes('?')
+          || /^(como|qual|quais|quanto|quantos|quantas|quando|onde|por que|porque|voces|vcs|voce|vc|tem|teria|faz|fazem|aceita|aceitam|parcela|parcelam|pode|posso|da pra|e possivel|existe|trabalham|atendem|instalam|funciona)\b/.test(nU)
+        console.log('[agent] afirmação sem base (%s): %s', clientePerguntou ? 'vira "vou verificar"' : 'segue atendimento', v ? semBase.map((a) => a.afirmacao).join(' | ').slice(0, 200) : 'verificador sem resposta válida')
+        if (clientePerguntou) {
+          parsed.reply = opts.lead?.personaHenrique
+            ? 'Vou verificar e te respondo em breve.'
+            : 'Vou confirmar essa informação e te respondo em breve 😊'
+          parsed.handoff = true
+        } else {
+          parsed.reply = 'Perfeito! 😊 Pra eu seguir com o seu orçamento, me envia a *foto da sua conta de luz* — ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*.'
+        }
+      }
+    } catch (e) { console.error('[agent] verificação de resposta', e) }
   }
 
   return {

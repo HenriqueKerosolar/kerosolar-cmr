@@ -46,6 +46,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       highPriority: l.highPriority,
       aiEnabled: l.aiEnabled,
       createdAt: l.createdAt.toISOString(),
+      lastMessageAt: l.lastMessageAt ? l.lastMessageAt.toISOString() : null,
       customFields: l.customFields as Record<string, unknown> | null,
     })),
   }))

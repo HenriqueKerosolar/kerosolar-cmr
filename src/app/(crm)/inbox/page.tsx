@@ -18,7 +18,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     ? await prisma.conversation.findMany({
         where: { resolvedAt: null, messages: { some: { direction: 'inbound' } } },
         orderBy: { lastMessageAt: 'asc' }, take: 300,
-        include: { contact: true, lead: { include: { stage: true } }, messages: { orderBy: { createdAt: 'desc' }, take: 1 } },
+        include: { contact: true, lead: { include: { stage: true } }, messages: { orderBy: { createdAt: 'desc' }, take: 1 }, _count: { select: { messages: { where: { direction: 'inbound', isRead: false } } } } },
       }).then((all) => all.sort((a, b) => Number(b.lead?.highPriority ?? false) - Number(a.lead?.highPriority ?? false)))
     : await listarInbox()
 
@@ -28,6 +28,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       channel: conv.channel,
       leadId: conv.leadId,
       resolvedAt: conv.resolvedAt?.toISOString() ?? null,
+      naoLidas: conv._count?.messages ?? 0,
       contact: conv.contact ? { name: conv.contact.name, phone: conv.contact.phone } : null,
       lead: conv.lead ? {
         highPriority: conv.lead.highPriority,

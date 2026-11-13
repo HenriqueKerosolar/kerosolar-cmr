@@ -1,5 +1,6 @@
 import 'server-only'
 import { prisma } from '@/lib/prisma'
+import { saudacaoAgora, comCumprimento } from './saudacao'
 import { loadAiConfig, chat } from './ai'
 
 /**
@@ -39,7 +40,7 @@ export async function gerarMensagemReengajamento(leadId: string, conversationId:
     : null
 
   const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-  const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+  const saud = saudacaoAgora()
 
   const system = `Você é a Sol, atendente da KeroSolar (energia solar fotovoltaica). Este cliente conversou com a gente e PAROU de responder.
 ${etapaOrigem ? `Ele estava na etapa: "${etapaOrigem}".` : ''}

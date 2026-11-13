@@ -31,6 +31,7 @@ export type ChatMessage = {
   content: string
   imageBase64?: string   // base64 da imagem (jpeg/png/webp) — só na última msg do usuário
   imageMediaType?: string
+  pdfBase64?: string     // base64 de PDF (conta de luz) — vira bloco 'document' da Anthropic
 }
 
 export async function chat(
@@ -38,28 +39,35 @@ export async function chat(
   system: string,
   messages: ChatMessage[],
   maxTokens = 1024,
+  json = false,   // true → força a resposta a ser um objeto JSON
 ): Promise<string> {
   if (cfg.provider === 'anthropic') {
     const apiMsgs = messages.map((m) => {
-      if (m.role === 'user' && m.imageBase64) {
+      if (m.role === 'user' && (m.imageBase64 || m.pdfBase64)) {
+        const mediaBlock = m.pdfBase64
+          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: m.pdfBase64 } }
+          : { type: 'image', source: { type: 'base64', media_type: m.imageMediaType ?? 'image/jpeg', data: m.imageBase64 } }
         return {
           role: 'user',
           content: [
-            { type: 'image', source: { type: 'base64', media_type: m.imageMediaType ?? 'image/jpeg', data: m.imageBase64 } },
+            mediaBlock,
             { type: 'text', text: m.content || 'Analise esta conta de luz e extraia os dados para o orçamento solar.' },
           ],
         }
       }
       return { role: m.role, content: m.content }
     })
+    // json=true → pré-preenche a resposta com "{" para o modelo continuar SÓ o objeto JSON
+    const msgsJson = json ? [...apiMsgs, { role: 'assistant', content: '{' }] : apiMsgs
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages: apiMsgs }),
+      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages: msgsJson }),
     })
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`)
     const data = await res.json()
-    return data.content?.[0]?.text?.trim() ?? ''
+    const txt = data.content?.[0]?.text?.trim() ?? ''
+    return json ? '{' + txt : txt
   }
   if (cfg.provider === 'openai') {
     const apiMsgs = [
@@ -80,7 +88,9 @@ export async function chat(
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.openaiKey}` },
-      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: apiMsgs }),
+      // json=true → a OpenAI GARANTE um objeto JSON válido (sem isso o modelo às vezes responde
+      // texto solto e o motor perde handoff/qualificação/conferência — bug de 2026-11-11).
+      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: apiMsgs, ...(json ? { response_format: { type: 'json_object' } } : {}) }),
     })
     if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)
     const data = await res.json()
@@ -97,6 +107,7 @@ export async function extractBillFromImage(
   cfg: AiConfig,
   imageBase64: string,
   imageMediaType = 'image/jpeg',
+  textContent?: string,
 ): Promise<{ kwh: number | null; valor: number | null; paineis: number | null; medidor: string | null; distribuidora: string | null; isIdentityDoc: boolean; docType: 'bill' | 'identity' | 'other' }> {
   const fallback = { kwh: null, valor: null, paineis: null, medidor: null, distribuidora: null, isIdentityDoc: false, docType: 'other' as const }
   const prompt = `Você é um leitor de documentos e imagens. PRIMEIRO classifique o tipo do documento, DEPOIS extraia os dados.
@@ -125,24 +136,35 @@ Responda SOMENTE com JSON válido, sem texto fora dele:
         headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
           model: cfg.model, max_tokens: 256,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: imageBase64 } },
-            { type: 'text', text: prompt },
-          ]}],
+          messages: [{ role: 'user', content: textContent
+            ? [{ type: 'text', text: `${prompt}\n\nConteúdo do documento (texto extraído da conta de luz):\n${textContent}` }]
+            : [
+                // Conta em PDF → bloco 'document' (Anthropic lê o PDF nativamente). Foto → bloco 'image'.
+                imageMediaType === 'application/pdf'
+                  ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageBase64 } }
+                  : { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: imageBase64 } },
+                { type: 'text', text: prompt },
+              ],
+          }],
         }),
       })
       if (!res.ok) return fallback
       raw = (await res.json()).content?.[0]?.text ?? ''
     } else if (cfg.provider === 'openai') {
+      // OpenAI (via image_url) não lê PDF cru — só imagem ou TEXTO extraído do PDF.
+      if (imageMediaType === 'application/pdf' && !textContent) return fallback
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.openaiKey}` },
         body: JSON.stringify({
           model: cfg.model, max_tokens: 256,
-          messages: [{ role: 'user', content: [
-            { type: 'image_url', image_url: { url: `data:${imageMediaType};base64,${imageBase64}` } },
-            { type: 'text', text: prompt },
-          ]}],
+          messages: [{ role: 'user', content: textContent
+            ? `${prompt}\n\nConteúdo do documento (texto extraído da conta de luz):\n${textContent}`
+            : [
+                { type: 'image_url', image_url: { url: `data:${imageMediaType};base64,${imageBase64}` } },
+                { type: 'text', text: prompt },
+              ],
+          }],
         }),
       })
       if (!res.ok) return fallback

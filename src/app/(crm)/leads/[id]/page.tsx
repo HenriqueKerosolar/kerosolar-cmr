@@ -22,12 +22,32 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
   })
   if (!lead) notFound()
 
+  // 👀 Operador abriu a conversa → as mensagens do cliente contam como VISTAS (igual ao app do
+  //    celular). Ela sai do "Precisam de mim" e volta quando o cliente mandar mensagem nova.
+  const convIds = lead.conversations.map((c) => c.id)
+  if (convIds.length) {
+    await prisma.message.updateMany({ where: { conversationId: { in: convIds }, direction: 'inbound', isRead: false }, data: { isRead: true } }).catch(() => {})
+  }
+
   // Próximas ações automáticas agendadas (follow-ups, retomada 9h, validade etc.)
-  const scheduledActions = await prisma.scheduledAction.findMany({
+  const agendadas = await prisma.scheduledAction.findMany({
     where: { leadId: id, done: false },
     orderBy: { runAt: 'asc' }, take: 5,
     select: { id: true, type: true, runAt: true },
   })
+  // Mostra o horário em que a mensagem VAI SAIR de fato: o agendador adia o que cair fora da
+  // janela (regra global 8h–19h + horário comercial do funil). Antes, o cartão mostrava "22:11".
+  const { nextAllowedSlot, respeitaHorarioGlobal, janelaDoFunil } = await import('@/lib/crm/schedule-window')
+  const janela = janelaDoFunil(lead.pipeline?.sendStartHour, lead.pipeline?.sendEndHour)
+  const NUDGE = new Set(['flow_continue', 'flow_noreply', 'budget_followup', 'budget_validity', 'reengage', 'chegada_followup', 'after_hours_resume', 'no_reply', 'ac_followup'])
+  const scheduledActions = agendadas
+    .map((a) => ({
+      ...a,
+      runAt: NUDGE.has(a.type) ? nextAllowedSlot(respeitaHorarioGlobal(a.runAt), janela)
+        : a.type === 'adiada_horario' ? respeitaHorarioGlobal(a.runAt)
+        : a.runAt,
+    }))
+    .sort((x, y) => x.runAt.getTime() - y.runAt.getTime())
 
   const messages = lead.conversations[0]?.messages ?? []
   const conversationId = lead.conversations[0]?.id ?? null

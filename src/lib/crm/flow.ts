@@ -1,5 +1,6 @@
 import 'server-only'
 import { prisma } from '@/lib/prisma'
+import { saudacaoAgora, comCumprimento, corrigirCumprimento } from './saudacao'
 
 type FlowMsg = { text: string; delaySeconds: number; mediaUrl?: string; mediaType?: 'image' | 'video' | 'document' }
 type StageFlow = {
@@ -63,6 +64,56 @@ export async function moveLeadToStage(leadId: string, targetStageId: string, rea
   await enterStage(leadId, target.id).catch(() => {})
 }
 
+/** A janela de 24h da Meta está ABERTA? = a última mensagem RECEBIDA do cliente é de menos de 24h
+ *  (folga de 10 min). Usa a data REAL da mensagem (timestamp que a Meta manda no webhook), então
+ *  mensagens antigas reentregues pela Meta NÃO abrem a janela — igual a Meta considera. */
+/**
+ * 💰 Ajusta um horário desejado para cair DENTRO da janela de 24h da Meta (mensagem comum,
+ * sem custo de template) e em horário comercial do funil. Se o desejado já está dentro, mantém.
+ * Senão, puxa para o último horário comercial antes de a janela fechar. Se não houver janela
+ * aberta (ou nenhum horário cabe), devolve o desejado (aí o envio usa template, como antes).
+ */
+export async function horarioDentroDaJanela(conversationId: string, leadId: string, desejado: Date): Promise<Date> {
+  try {
+    const last = await prisma.message.findFirst({ where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+    if (!last) return desejado
+    const fim = last.createdAt.getTime() + (24 * 60 - 30) * 60 * 1000   // fecha 30 min antes, por segurança
+    const agora = Date.now()
+    if (fim <= agora + 5 * 60 * 1000) return desejado
+    const { nextAllowedSlot, respeitaHorarioGlobal, janelaDoFunil } = await import('./schedule-window')
+    const ld = await prisma.lead.findUnique({ where: { id: leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+    const jan = janelaDoFunil(ld?.pipeline?.sendStartHour, ld?.pipeline?.sendEndHour)
+    const permitido = (t: number) => nextAllowedSlot(respeitaHorarioGlobal(new Date(t)), jan).getTime() <= t + 1000
+    if (desejado.getTime() <= fim && permitido(desejado.getTime())) return desejado
+    // recua de 15 em 15 min a partir do fim da janela até achar um horário comercial
+    for (let t = Math.min(desejado.getTime(), fim); t > agora + 60 * 1000; t -= 15 * 60 * 1000) {
+      if (permitido(t)) return new Date(t)
+    }
+    return desejado
+  } catch { return desejado }
+}
+
+export async function janelaAberta(conversationId: string): Promise<boolean> {
+  const last = await prisma.message.findFirst({
+    where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+  })
+  if (!last) return false
+  return Date.now() - last.createdAt.getTime() < (24 * 60 - 10) * 60 * 1000
+}
+
+/** Template APROVADO pra reabrir a conversa fora da janela: o pedido (se houver) → com orçamento
+ *  "budget_followup" → sem orçamento "chegada_followup" → "reengage". */
+async function escolherTemplateReabertura(leadId: string | null, preferido?: string) {
+  const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } }) : null
+  const temOrc = !!(lead?.customFields as Record<string, unknown> | null)?.solar
+  const ordem = [preferido, temOrc ? 'budget_followup' : 'chegada_followup', 'reengage'].filter(Boolean) as string[]
+  for (const a of ordem) {
+    const t = await prisma.whatsappTemplate.findFirst({ where: { actionType: a, metaStatus: 'APPROVED' } })
+    if (t) return t
+  }
+  return null
+}
+
 /**
  * Envia uma mensagem de saída: grava no histórico e despacha pro canal
  * (WhatsApp via Cloud API, ou nada no simulador — só fica registrado).
@@ -80,6 +131,36 @@ export async function dispatchOutbound(
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } })
   if (!conv) return
 
+  // 🕒 CUMPRIMENTO (regra do dono, 2026-11-09): mensagem automática (ia/sistema) nunca sai com o
+  //    cumprimento ERRADO ("Bom dia" às 17h) e, quando o cliente NÃO está conversando agora
+  //    (sem mensagem dele nos últimos 30 min = follow-up, cobrança, lembrete), começa com
+  //    Bom dia / Boa tarde / Boa noite / Boa madrugada.
+  if ((text || media) && (senderType === 'ai' || senderType === 'system')) {
+    const ultInbound = await prisma.message.findFirst({ where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+    const conversando = !!ultInbound && Date.now() - ultInbound.createdAt.getTime() < 30 * 60 * 1000
+
+    // 🌙 HORÁRIO (regra do dono, 2026-11-09): mensagem AUTOMÁTICA nunca sai antes das 8h nem a partir
+    //    das 19h (Brasília). Fora disso, fica guardada e sai às 8h. Resposta a quem ACABOU de
+    //    escrever (conversando) sai na hora — é atendimento, não disparo.
+    const { dentroHorarioGlobal, respeitaHorarioGlobal } = await import('./schedule-window')
+    if (!conversando && !dentroHorarioGlobal() && conv.leadId) {
+      const runAt = respeitaHorarioGlobal(new Date())
+      await prisma.scheduledAction.create({
+        data: {
+          leadId: conv.leadId, conversationId, type: 'adiada_horario', runAt,
+          payload: { text, media: media ?? null, senderType, skipDedup, templateActionType: templateActionType ?? null, forceAccountId: forceAccountId ?? null } as object,
+        },
+      })
+      console.log('[flow dispatch] fora do horário (8h–19h) — mensagem adiada para %s: %s', runAt.toISOString(), (text || '[mídia]').slice(0, 60))
+      return
+    }
+
+    if (text) {
+      text = corrigirCumprimento(text)
+      if (!conversando) text = comCumprimento(text)
+    }
+  }
+
   // 🔒 Anti-repetição (regra universal: nunca repetir mensagem). Mensagens automáticas
   // (ai/system) NÃO são reenviadas se forem idênticas à última que NÓS mandamos nesta
   // conversa — evita follow-up/saudação duplicados e loop da IA. (Humano pode repetir.)
@@ -93,6 +174,19 @@ export async function dispatchOutbound(
     if (lastOut && norm(lastOut.content) === norm(text)) {
       console.warn('[flow dispatch] mensagem repetida bloqueada:', text.slice(0, 60))
       return
+    }
+    // 2026-11-12 (regra do dono: nunca repetir resposta): bloqueia também mensagem QUASE IGUAL a
+    // qualquer outra já enviada na conversa (ex.: a mesma recepção reescrita). Orçamento fica de fora
+    // (é reenviado de propósito quando o cliente volta) — para ele vale só a trava de texto idêntico.
+    if (!/^\s*☀️\s*\*ORÇAMENTO/.test(text)) {
+      const anteriores = await prisma.message.findMany({
+        where: { conversationId, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true },
+      })
+      const { repeteAlguma } = await import('./repeticao')
+      if (repeteAlguma(text, anteriores.map((m) => m.content ?? ''))) {
+        console.warn('[flow dispatch] mensagem quase igual a uma anterior bloqueada:', text.slice(0, 60))
+        return
+      }
     }
   }
 
@@ -128,6 +222,40 @@ export async function dispatchOutbound(
         if (toPhone) {
           const cloud = await import('./cloud-api')
           let waId: string | null = null
+          // ⏰ Janela de 24h FECHADA (pela data REAL da última msg do cliente): texto livre seria recusado
+          //    pela Meta (131047). Automático → manda o TEMPLATE de reabertura; humano → marca na hora
+          //    (a tela oferece "enviar template"), sem gastar envio que vai falhar.
+          if (!(await janelaAberta(conversationId))) {
+            if (senderType === 'human') {
+              await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
+              return
+            }
+            const tmpl = await escolherTemplateReabertura(conv.leadId, templateActionType)
+            if (!tmpl) {
+              console.warn('[flow dispatch] janela 24h fechada e nenhum template APPROVED — não enviado')
+              await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
+              return
+            }
+            const firstName = (conv.contact?.name || '').split(' ')[0] || 'Cliente'
+            const corpo = tmpl.bodyText.replace(/\{\{1\}\}/g, firstName)
+            // Não repete o MESMO template de reabertura em menos de 24h (fluxos com várias msgs agendadas).
+            const repetido = await prisma.message.findFirst({
+              where: { conversationId, direction: 'outbound', id: { not: createdMsg.id }, content: corpo, createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
+              select: { id: true },
+            })
+            if (repetido) {
+              await prisma.message.delete({ where: { id: createdMsg.id } }).catch(() => {})
+              return
+            }
+            const components = tmpl.bodyText.includes('{{1}}') ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }] : []
+            const tid = await cloud.sendCloudTemplate(cloudAccount.cloudPhoneNumberId, toPhone, tmpl.name, tmpl.language, components)
+            await prisma.message.update({
+              where: { id: createdMsg.id },
+              data: { content: corpo, externalId: tid ?? undefined },
+            }).catch(() => {})
+            console.log(`[flow dispatch] janela 24h fechada (msg do cliente antiga) — enviou template "${tmpl.name}" para ${toPhone}`)
+            return
+          }
           try {
             waId = media
               ? await cloud.sendCloudMedia(cloudAccount.cloudPhoneNumberId, toPhone, media.url, media.type, text)
@@ -272,8 +400,10 @@ export async function enterStage(leadId: string, stageId: string) {
   //    por 3 dias". Vale pras duas etapas ("Recebeu orçamento automático" e "...manual").
   if (!isSimulator && /or[çc]amento/i.test(stage.name)) {
     await prisma.scheduledAction.updateMany({ where: { leadId, type: 'budget_validity', done: false }, data: { done: true } })
+    // 💰 Economia: sai DENTRO da janela de 24h (mensagem comum, grátis), não como template pago.
+    const runAt = await horarioDentroDaJanela(conv.id, leadId, new Date(Date.now() + 24 * 60 * 60 * 1000))
     await prisma.scheduledAction.create({
-      data: { leadId, conversationId: conv.id, stageId, type: 'budget_validity', payload: {} as object, runAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+      data: { leadId, conversationId: conv.id, stageId, type: 'budget_validity', payload: {} as object, runAt },
     }).catch(() => {})
   }
 
@@ -345,7 +475,7 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
 
   // Saudação baseada na HORA REAL de agora (Brasília).
   const sendHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-  const saud = sendHour < 12 ? 'Bom dia' : sendHour < 18 ? 'Boa tarde' : 'Boa noite'
+  const saud = saudacaoAgora()
 
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
   const nome = lead?.contact?.name?.split(' ')[0] ?? ''
@@ -370,15 +500,18 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
 export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string): Promise<boolean> {
   // [^\d]{0,40}: tolera frases naturais entre "indicação" e o número, ex.: "minha indicação é de
   // um kit de 700 kWh" (o trecho " é de um kit de " sozinho já tem 16 chars — o limite antigo de 15 barrava).
-  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico|indica|sugiro|sugest[aã]o|sugerir|sugere|recomend[oa]|recomenda[çc][aã]o|recomendar|mand[oa]|mandar|pass[oa]|passar|envi[oa]|enviar|orient[oa]|orienta[çc][aã]o|coloc[oa]|colocar|fecha[or]?|montar?|mont[oa]|faz|fa[çc]o|kit\s+de|kit)\b[^\d]{0,40}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
+  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico|indica|sugiro|sugest[aã]o|sugerir|sugere|recomend[oa]|recomenda[çc][aã]o|recomendar|mand[oae]|mandar|pass[oae]|passar|envi[oae]|enviar|orient[oa]|orienta[çc][aã]o|coloc[oae]|colocar|fecha[or]?|montar?|mont[oae]|faz|fa[çc][oa]|kit\s+de|kit)\b[^\d]{0,40}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
   if (!ind) return false
   const raw = ind[1].includes(',') ? ind[1].replace(/\./g, '').replace(',', '.')
     : (/^\d{1,3}(\.\d{3})+$/.test(ind[1]) ? ind[1].replace(/\./g, '') : ind[1])
   const kwh = Math.round(parseFloat(raw) || 0)
-  const { calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido } = await import('./solar-calc')
+  const { calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido, aplicarHibrido } = await import('./solar-calc')
   if (!consumoKwhValido(kwh)) return false   // fora da faixa realista → não trata (manda texto normal)
   await carregarTabelaFinanciamento()
-  const solar = calcularSolarPorKwh(kwh)
+  // 🔋 Híbrido (cliente pediu, ou o operador escreveu "híbrido" no comando) → fórmula × 240%
+  const { leadQuerHibrido } = await import('./hibrido')
+  const hib = await leadQuerHibrido(leadId, conversationId, text)
+  const solar = hib ? aplicarHibrido(calcularSolarPorKwh(kwh)) : calcularSolarPorKwh(kwh)
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
   await prisma.lead.update({ where: { id: leadId }, data: {
@@ -456,7 +589,7 @@ export async function processDueActions() {
   // Tipos de NUDGE automático da IA. Se a IA estiver pausada no lead (operador assumiu) ou for
   // atendimento humano, NENHUM desses dispara — evita cobrança/follow-up no meio de uma
   // negociação que você assumiu.
-  const NUDGE_TYPES = new Set(['flow_continue', 'flow_noreply', 'budget_followup', 'budget_validity', 'reengage', 'chegada_followup', 'after_hours_resume', 'no_reply', 'ac_followup'])
+  const NUDGE_TYPES = new Set(['consultor_20min', 'adiada_horario', 'flow_continue', 'flow_noreply', 'budget_followup', 'budget_validity', 'reengage', 'chegada_followup', 'after_hours_resume', 'no_reply', 'ac_followup'])
 
   for (const a of due) {
     try {
@@ -490,6 +623,17 @@ export async function processDueActions() {
           continue
         }
       }
+      // 🌙 Mensagem automática que ficou guardada por estar fora do horário (8h–19h) → envia agora.
+      //    Se o cliente escreveu depois, ela ficou velha: não envia.
+      if (a.type === 'adiada_horario') {
+        const p = (a.payload as { text?: string; media?: { url: string; type: 'image' | 'video' | 'document' | 'audio' } | null; senderType?: 'ai' | 'system'; skipDedup?: boolean; templateActionType?: string | null; forceAccountId?: string | null }) ?? {}
+        const escreveu = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+        if (!escreveu && (p.text || p.media)) {
+          await dispatchOutbound(a.conversationId, p.text ?? '', p.media ?? undefined, p.senderType ?? 'system', undefined, !!p.skipDedup, p.templateActionType ?? undefined, p.forceAccountId ?? undefined)
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
       if (a.type === 'no_reply') {
         await handleNoReply(a)
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
@@ -507,6 +651,19 @@ export async function processDueActions() {
       }
       if (a.type === 'flow_continue') {
         const pl = (a.payload as { stageId?: string; index?: number }) ?? {}
+        // "Conseguiu ver o orçamento?" (etapas Recebeu orçamento): se o cliente JÁ conversou depois
+        // do orçamento, a pergunta não faz sentido → não envia (regra do dono, 2026-11-05).
+        if (pl.stageId) {
+          const stg = await prisma.stage.findUnique({ where: { id: pl.stageId }, select: { name: true } })
+          if (/recebeu or[cç]amento/i.test(stg?.name ?? '')) {
+            const respondeu = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+            if (respondeu > 0) {
+              console.log('[flow_continue] cliente já respondeu após o orçamento — follow-up "conseguiu ver?" pulado')
+              await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+              continue
+            }
+          }
+        }
         if (pl.stageId && typeof pl.index === 'number') {
           const { resumeAfterWait } = await import('./flow-blocks')
           await resumeAfterWait(a.conversationId, a.leadId, pl.stageId, pl.index)
@@ -517,6 +674,27 @@ export async function processDueActions() {
       if (a.type === 'flow_noreply') {
         const { handleFlowNoReply } = await import('./flow-blocks')
         await handleFlowNoReply(a)
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      // 👤 "Henrique falando" — 20 min sem resposta à recepção, só DENTRO do horário de atendimento.
+      //    Se o cliente respondeu (cancelado no engine) ou já passou do horário → não envia.
+      if (a.type === 'consultor_20min') {
+        try {
+          const escreveu = await prisma.message.count({ where: { conversationId: a.conversationId, direction: 'inbound', createdAt: { gt: a.createdAt } } })
+          const ldc = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { customFields: true, pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+          const { nextAllowedSlot: nas, janelaDoFunil: jdf } = await import('./schedule-window')
+          const jan = jdf(ldc?.pipeline?.sendStartHour, ldc?.pipeline?.sendEndHour)
+          const agora = new Date()
+          const dentro = nas(agora, jan).getTime() <= agora.getTime() + 1000
+          if (!escreveu && dentro && ldc) {
+            const msg = `${saudacaoAgora()}. Henrique falando. Obrigado pelo seu contato. Serei seu consultor técnico. Você quer continuar seu atendimento?`
+            // a partir daqui, quando o cliente responder, a IA escreve COMO o Henrique (agent.ts)
+            const cf = (ldc.customFields as Record<string, unknown> | null) ?? {}
+            await prisma.lead.update({ where: { id: a.leadId }, data: { customFields: { ...cf, personaHenrique: new Date().toISOString() } as object } })
+            await dispatchOutbound(a.conversationId, msg, undefined, 'ai')
+          }
+        } catch (e) { console.error('[consultor_20min]', e) }
         await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
@@ -584,7 +762,7 @@ export async function processDueActions() {
         if (ldv && !ldv.humanOnly && ldv.status === 'open') {
           const cfg = await prisma.systemConfig.findUnique({ where: { key: 'budget_validity_message' } })
           const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-          const saud = spHour < 12 ? 'Bom dia' : spHour < 18 ? 'Boa tarde' : 'Boa noite'
+          const saud = saudacaoAgora()
           const msg = (cfg?.value || DEFAULT_BUDGET_VALIDITY).replace(/\{SAUDACAO\}/g, saud)
           await dispatchOutbound(a.conversationId, msg, undefined, 'ai', undefined, false, 'budget_validity')
         }
@@ -624,7 +802,7 @@ export async function processDueActions() {
         const aplica = lead && !lead.humanOnly && lead.aiEnabled && lead.status === 'open' && inboundDepois === 0
         if (aplica) {
           const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-          const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+          const saud = saudacaoAgora()
           const nome = lead.contact?.name?.split(' ')[0] ?? ''
           const cfg = await prisma.systemConfig.findUnique({ where: { key: 'after_hours_resume_message' } })
           const msg = (cfg?.value || `${saud}${nome ? ', ' + nome : ''}! 😊 Retomando seu contato com a KeroSolar. Pra eu já preparar seu orçamento de energia solar, me envia a *foto da sua conta de luz* — ou me diz seu *consumo médio em kWh* ou o *valor médio da conta*. Qualquer uma já serve!`)

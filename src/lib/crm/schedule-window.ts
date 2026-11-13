@@ -3,7 +3,7 @@ import 'server-only'
 /**
  * Janela de envio das mensagens automáticas.
  * - Mensagens de bot agendadas: dias úteis (seg–sex), 9h–18h.
- * - Regra global: nada é enviado após 21h nem antes das 9h.
+ * - Regra global (dono, 2026-11-09): NENHUMA mensagem automática antes das 8h nem a partir das 19h.
  * - Espaçamento "humano" entre mensagens (simula digitação), determinístico.
  *
  * Brasil não tem horário de verão desde 2019 → fuso fixo UTC−3.
@@ -16,8 +16,8 @@ export const JANELA_PADRAO = {
   endHour: 18,        // mensagens de bot agendadas: 9–18
   businessOnly: true, // só dias úteis
 }
-export const HARD_END_HOUR = 21   // nada depois das 21h (regra global)
-export const HARD_START_HOUR = 9  // nada antes das 9h
+export const HARD_END_HOUR = 19   // nada a partir das 19h (regra global do dono)
+export const HARD_START_HOUR = 8  // nada antes das 8h (regra global do dono)
 
 /** Componentes de data no fuso de Brasília. */
 function spParts(d: Date) {
@@ -36,8 +36,9 @@ export type Janela = { startHour: number; endHour: number; businessOnly: boolean
 
 /** Monta a janela a partir das horas configuradas no funil (com limites sãos). */
 export function janelaDoFunil(startHour?: number | null, endHour?: number | null): Janela {
-  const s = typeof startHour === 'number' ? Math.max(0, Math.min(23, startHour)) : JANELA_PADRAO.startHour
-  const e = typeof endHour === 'number' ? Math.max(s + 1, Math.min(23, endHour)) : JANELA_PADRAO.endHour
+  // o funil pode ser MAIS restrito, nunca mais largo que a regra global (8h–19h)
+  const s = typeof startHour === 'number' ? Math.max(HARD_START_HOUR, Math.min(HARD_END_HOUR - 1, startHour)) : JANELA_PADRAO.startHour
+  const e = typeof endHour === 'number' ? Math.max(s + 1, Math.min(HARD_END_HOUR, endHour)) : JANELA_PADRAO.endHour
   return { startHour: s, endHour: e, businessOnly: true }
 }
 
@@ -64,7 +65,7 @@ export function nextAllowedSlot(after: Date, janela: Janela = JANELA_PADRAO): Da
   return t
 }
 
-/** Regra global: nada após 21h / antes das 9h. Empurra pro próximo horário válido. */
+/** Regra global: nada a partir das 19h / antes das 8h. Empurra pro próximo horário válido. */
 export function respeitaHorarioGlobal(after: Date): Date {
   const { hour, date } = spParts(after)
   if (hour >= HARD_END_HOUR) {
@@ -83,4 +84,10 @@ export function tempoDigitacaoMs(text: string): number {
   const base = 4000                       // 4s de "lendo/pensando"
   const porChar = 45                      // ~22 caracteres/seg
   return base + Math.min(text.length, 600) * porChar  // teto ~31s
+}
+
+/** Agora (horário de Brasília) está dentro da regra global 8h–19h? */
+export function dentroHorarioGlobal(d: Date = new Date()): boolean {
+  const { hour } = spParts(d)
+  return hour >= HARD_START_HOUR && hour < HARD_END_HOUR
 }

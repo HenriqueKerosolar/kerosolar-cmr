@@ -13,9 +13,18 @@ type Lead = {
   highPriority: boolean
   aiEnabled: boolean
   createdAt: string
+  lastMessageAt: string | null
   customFields: Record<string, unknown> | null
 }
 type Stage = { id: string; name: string; color: string | null; leads: Lead[] }
+
+// "09/11 13:20" no horário de Brasília (sempre, independente do fuso do computador)
+const fmtDataHora = (iso: string) => {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .format(new Date(iso)).replace(',', '')
+  } catch { return '' }
+}
 
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
 const digits = (s: string) => s.replace(/\D/g, '')
@@ -83,6 +92,13 @@ export function LeadsBoard({ stages }: { stages: Stage[] }) {
                         {lead.phone && <p className="text-[11px] text-[--muted-foreground] truncate">{lead.phone}</p>}
                         {qualificacao && <p className="text-[11px] text-[--muted-foreground] truncate">{qualificacao}</p>}
                       </div>
+                    </div>
+                    {/* 🕒 Controle: quando entrou e quando foi a última mensagem */}
+                    <div className="mt-2 text-[11px] text-[--muted-foreground] space-y-0.5">
+                      <p title="Data e hora em que o lead entrou">📥 Entrou: <span className="font-medium text-[--foreground]">{fmtDataHora(lead.createdAt)}</span></p>
+                      {lead.lastMessageAt && lead.lastMessageAt !== lead.createdAt && (
+                        <p title="Data e hora da última mensagem da conversa">💬 Última msg: <span className="font-medium text-[--foreground]">{fmtDataHora(lead.lastMessageAt)}</span></p>
+                      )}
                     </div>
                     {(lead.source || !lead.aiEnabled || lead.value > 0) && (
                       <div className="flex items-center gap-1.5 flex-wrap mt-2">

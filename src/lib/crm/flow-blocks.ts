@@ -1,5 +1,6 @@
 import 'server-only'
 import { prisma } from '@/lib/prisma'
+import { saudacaoAgora, comCumprimento } from './saudacao'
 import { dispatchOutbound, moveLeadToStage } from './flow'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -245,6 +246,6 @@ async function fill(text: string, leadId: string): Promise<string> {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
   const nome = lead?.contact?.name?.split(' ')[0] ?? ''
   const spHour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }).format(new Date()))
-  const saud = spHour >= 5 && spHour < 12 ? 'Bom dia' : spHour >= 12 && spHour < 18 ? 'Boa tarde' : 'Boa noite'
+  const saud = saudacaoAgora()
   return (text || '').replace(/\{nome\}/gi, nome).replace(/\{saudacao\}/gi, saud)
 }

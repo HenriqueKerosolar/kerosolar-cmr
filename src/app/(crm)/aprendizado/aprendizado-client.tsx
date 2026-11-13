@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { updateLearnedAnswer, deleteLearnedAnswer, addLearnedAnswer } from '@/app/actions/learning'
+import { updateLearnedAnswer, deleteLearnedAnswer, deleteLearnedAnswers, addLearnedAnswer } from '@/app/actions/learning'
 
-type Item = { id: string; question: string; answer: string; useCount: number; createdAt: string }
+type Item = { id: string; question: string; answer: string; useCount: number; createdAt: string; sugestaoApagar: string | null }
 
 function dataBr(iso: string) {
   try {
@@ -21,10 +21,25 @@ export function AprendizadoClient({ items }: { items: Item[] }) {
   const [novaQ, setNovaQ] = useState('')
   const [novaA, setNovaA] = useState('')
   const [busca, setBusca] = useState('')
+  const [marcados, setMarcados] = useState<Set<string>>(new Set())
+  const [soSugeridos, setSoSugeridos] = useState(false)
 
-  const filtrados = busca.trim()
-    ? items.filter((i) => (i.question + ' ' + i.answer).toLowerCase().includes(busca.toLowerCase()))
-    : items
+  const qtdSugeridos = items.filter((i) => i.sugestaoApagar).length
+  const filtrados = items
+    .filter((i) => !soSugeridos || i.sugestaoApagar)
+    .filter((i) => !busca.trim() || (i.question + ' ' + i.answer).toLowerCase().includes(busca.toLowerCase()))
+
+  function alternar(id: string) {
+    setMarcados((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function marcarTodosVisiveis(v: boolean) {
+    setMarcados((s) => { const n = new Set(s); for (const i of filtrados) { if (v) n.add(i.id); else n.delete(i.id) } return n })
+  }
+  async function apagarMarcados() {
+    if (busy || !marcados.size || !confirm(`Apagar ${marcados.size} aprendizado(s) marcado(s)? A IA não vai mais usar essas respostas.`)) return
+    setBusy(true)
+    try { await deleteLearnedAnswers([...marcados]); setMarcados(new Set()); router.refresh() } finally { setBusy(false) }
+  }
 
   async function salvar(id: string) {
     if (!q.trim() || !a.trim() || busy) return
@@ -66,11 +81,29 @@ export function AprendizadoClient({ items }: { items: Item[] }) {
       <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔎 Buscar nas respostas aprendidas…"
         className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm" />
 
+      {/* Barra de seleção: marque o que deve sair e apague de uma vez */}
+      <div className="sticky top-0 z-10 rounded-xl border border-[--border] bg-[--card] p-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">☑️ {marcados.size} marcado(s)</span>
+        <button onClick={() => marcarTodosVisiveis(true)} className="text-xs px-2.5 py-1 rounded-lg border border-[--border] hover:bg-[--accent]">Marcar todos da lista</button>
+        <button onClick={() => marcarTodosVisiveis(false)} className="text-xs px-2.5 py-1 rounded-lg border border-[--border] hover:bg-[--accent]">Desmarcar da lista</button>
+        {qtdSugeridos > 0 && (
+          <label className="text-xs flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={soSugeridos} onChange={(e) => setSoSugeridos(e.target.checked)} />
+            Mostrar só os que a IA sugere apagar ({qtdSugeridos})
+          </label>
+        )}
+        <button onClick={apagarMarcados} disabled={busy || !marcados.size}
+          className="text-xs px-3 py-1.5 rounded-lg bg-red-600 text-white disabled:opacity-40 ml-auto">🗑️ Apagar marcados</button>
+      </div>
+
       <p className="text-xs text-[--muted-foreground]">{filtrados.length} de {items.length} aprendizado(s)</p>
 
       <div className="space-y-2">
         {filtrados.map((it) => (
-          <div key={it.id} className="rounded-xl border border-[--border] bg-[--card] p-3 space-y-2">
+          <div key={it.id} className={`rounded-xl border bg-[--card] p-3 flex gap-3 ${marcados.has(it.id) ? 'border-red-400' : 'border-[--border]'}`}>
+            <input type="checkbox" checked={marcados.has(it.id)} onChange={() => alternar(it.id)}
+              className="mt-1 h-5 w-5 shrink-0 cursor-pointer accent-red-600" aria-label="Marcar para apagar" />
+            <div className="flex-1 min-w-0 space-y-2">
             {editId === it.id ? (
               <>
                 <input value={q} onChange={(e) => setQ(e.target.value)}
@@ -85,6 +118,9 @@ export function AprendizadoClient({ items }: { items: Item[] }) {
               </>
             ) : (
               <>
+                {it.sugestaoApagar && (
+                  <p className="text-[11px] inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800">⚠️ IA sugere apagar: {it.sugestaoApagar}</p>
+                )}
                 <p className="text-xs text-[--muted-foreground]">❓ Pergunta</p>
                 <p className="text-sm font-medium">{it.question}</p>
                 <p className="text-xs text-[--muted-foreground] mt-1">💬 Resposta da IA</p>
@@ -98,6 +134,7 @@ export function AprendizadoClient({ items }: { items: Item[] }) {
                 </div>
               </>
             )}
+            </div>
           </div>
         ))}
         {items.length === 0 && (

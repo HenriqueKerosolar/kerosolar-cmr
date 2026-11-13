@@ -1,6 +1,14 @@
 {
   "schema": 1,
   "pecas": {
+    "email-smtp": {
+      "versao": "0.1.0",
+      "caminho": "packages/notificacao/email-smtp/0.1.0",
+      "desde": "2026-11-06",
+      "pacote": "vendor/lib-email-smtp-0.1.0.tgz",
+      "sha256": "7f51c5cf38c3a6764f63130a92447b83e826312b37828a77b53907b7c5174b6e",
+      "manifestoSha256": "bd95787bad600efdd3f7b529e40ef47e9f7f2a8fac67531989816276f7cf2da9"
+    },
     "nervo": {
       "versao": "0.4.2",
       "caminho": "packages/integracao/nervo/0.4.2",
