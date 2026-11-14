@@ -8,4 +8,18 @@ export async function register() {
   // 🩺 Monitor de mensagens de entrada: avisa o dono se o CRM parar de receber.
   const { startInboundMonitor } = await import('@/lib/crm/monitor-inbox')
   startInboundMonitor()
+
+  // 🔗 Nervo (Mind): passada de segurança 1 min após subir (reenvia respostas de DM que ficaram pendentes na
+  //    caixa de saída durável antes de um reinício) e depois UMA vez por dia — regra do dono: nada de cron em
+  //    minutos; o envio normal sai na hora do evento. Desligado (no-op) sem NERVO_BASE_URL.
+  const passadaNervo = async () => {
+    try {
+      const { getCrmNervo } = await import('@/lib/nervo/fromEnv')
+      await getCrmNervo()?.tick()
+    } catch (e) {
+      console.error('[nervo] passada diária falhou', e)
+    }
+  }
+  setTimeout(passadaNervo, 60_000)
+  setInterval(passadaNervo, 24 * 60 * 60 * 1000)
 }

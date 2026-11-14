@@ -489,3 +489,33 @@ model NervoConnection {
 
   @@map("nervo_connection")
 }
+
+/// Caixa de SAÍDA durável do Nervo (@lib/nervo 0.4.2, createPostgresOutbox). Desde 14/11/2026 leva respostas
+/// a clientes (social.message.send): não pode ficar em memória. DDL oficial: scripts/nervo-migrar.mjs.
+model NervoOutbox {
+  id            String  @id
+  envelope      Json
+  status        String  // pending | sent | dead (CHECK no banco)
+  attempts      Int     @default(0)
+  nextAttemptAt BigInt  @map("next_attempt_at")
+  leaseUntil    BigInt  @default(0) @map("lease_until")
+  createdAt     BigInt  @map("created_at")
+  sentAt        BigInt? @map("sent_at")
+  lastError     String? @map("last_error")
+
+  @@index([status, nextAttemptAt], map: "nervo_outbox_due")
+  @@map("nervo_outbox")
+}
+
+/// Caixa de ENTRADA durável do Nervo (createPostgresInbox): o mesmo evento entregue duas vezes executa uma vez.
+model NervoInbox {
+  id         String  @id
+  state      String  // busy | done (CHECK no banco)
+  token      String?
+  leaseUntil BigInt  @default(0) @map("lease_until")
+  response   String?
+  doneAt     BigInt? @map("done_at")
+
+  @@index([state, doneAt], map: "nervo_inbox_done")
+  @@map("nervo_inbox")
+}

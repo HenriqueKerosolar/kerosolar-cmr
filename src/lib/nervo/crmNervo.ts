@@ -7,12 +7,12 @@
 // (NERVO_BASE_URL). O dono aceita UM pedido no painel do Mind e a credencial (Key, tenant, segredo de
 // entrega) chega direto a este CRM, que a guarda cifrada no próprio banco (tabela `nervo_connection`).
 //
-// Durabilidade: a CONEXÃO pareada é durável em Postgres (`createPostgresConnectionStore`) — sem isso,
-// cada deploy no Railway (que reinicia o processo) forçaria o dono a aceitar o pareamento de novo. A
-// caixa de SAÍDA dos eventos fica em memória (padrão da peça): aceitável aqui porque `publish()` já
-// tenta o envio na hora (`sendNow` padrão) e, falhando, é melhor esforço — a troca de estágio já
-// aconteceu no banco antes disso e nunca é desfeita por uma falha do Nervo.
-import { createNervoConnection, createPostgresConnectionStore, isNervoError, redact, type Connection, type EventHandler, type FetchLike, type InboundRequest, type InboundResponse, type PgQuery } from '@lib/nervo'
+// Durabilidade: a CONEXÃO pareada, a caixa de SAÍDA e a caixa de ENTRADA ficam em Postgres
+// (`nervo_connection`, `nervo_outbox`, `nervo_inbox`). Desde as DMs da Meta (14/11/2026) a caixa de saída
+// leva RESPOSTAS A CLIENTES (`social.message.send`): não pode se perder num reinício do Railway. O envio
+// sai na hora do evento (`sendNow`); o que falhar fica pendente e sai no cron DIÁRIO de segurança
+// (`tick()` — regra do dono: nada de cron em minutos).
+import { createNervoConnection, createPostgresConnectionStore, createPostgresInbox, createPostgresOutbox, isNervoError, redact, type Connection, type ConnectionStatus, type EventHandler, type FetchLike, type InboundRequest, type InboundResponse, type PgQuery } from '@lib/nervo'
 import type { NervoConfig } from './config'
 
 export const NERVO_PRODUCT_ID = 'kerosolar-crm'
@@ -28,7 +28,19 @@ export interface CrmNervoDeps {
   now?: () => number
   log?: Log
   /** Injetável nos testes. Padrão: `createNervoConnection` de verdade. */
-  connection?: Pick<Connection, 'publish' | 'advance' | 'on' | 'receive'>
+  connection?: Pick<Connection, 'publish' | 'advance' | 'on' | 'receive'> & Partial<Pick<Connection, 'status' | 'tick'>>
+}
+
+/** `social.message.send` v1 — contrato combinado com o Mind Marketing (bff/src/nervo/socialMessages.ts de lá). */
+export interface SocialMessageSendPayload {
+  clientAccountId: string
+  channel: 'facebook' | 'instagram'
+  pageId: string
+  recipientId: string
+  text: string
+  /** Id ÚNICO do pedido (usamos o id da Message do CRM): o Marketing deduplica por ele e devolve no `social.message.sent`. */
+  requestId: string
+  replyToExternalId?: string
 }
 
 export interface LeadOutcomeInput {
@@ -50,6 +62,17 @@ export interface CrmNervo {
   on(type: string, handler: EventHandler): void
   /** Ponto de entrada do que o Mind entrega — ligue à rota HTTP de inbound deste CRM. */
   receive(req: InboundRequest): Promise<InboundResponse>
+  /**
+   * Pede ao Marketing para entregar uma resposta na Meta. NUNCA lança: `queued` (sai assim que der — a caixa
+   * de saída é durável), `unpaired` (CRM ainda não conectado ao Mind: a resposta NÃO sai) ou `error`.
+   */
+  publishSocialMessageSend(payload: SocialMessageSendPayload): Promise<'queued' | 'unpaired' | 'error'>
+  /** Estado da conexão com o Mind SEM falar com ele (para a tela). */
+  status(): Promise<ConnectionStatus | undefined>
+  /** Um passo do pareamento (pede ao Mind / confere se o dono aceitou). `restart` = pedir de novo. */
+  advance(restart?: boolean): Promise<ConnectionStatus | undefined>
+  /** advance + envio do que ficou pendente: o cron DIÁRIO de segurança e o botão "Verificar agora". */
+  tick(): Promise<void>
 }
 
 function errorText(error: unknown): string {
@@ -67,6 +90,9 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
       installationId: config.installationId,
       inbound: { url: config.inboundUrl },
       store: createPostgresConnectionStore(deps.query),
+      outbox: createPostgresOutbox(deps.query),
+      inbox: createPostgresInbox(deps.query),
+      provides: { events: [{ type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }] },
       seal: { secrets: config.sealSecrets },
       timeoutMs: 8_000,
       retries: 1,
@@ -108,5 +134,23 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
     publishLeadLost: (input) => publish('lead.lost', input, undefined),
     on: (type, handler) => connection.on(type, handler),
     receive: (req) => connection.receive(req),
+    async publishSocialMessageSend(payload) {
+      try {
+        await connection.publish('social.message.send', payload, { correlationId: payload.requestId })
+        return 'queued'
+      } catch (error) {
+        if (isNervoError(error) && error.code === 'NERVO_UNPAIRED') {
+          log('warn', 'Nervo: resposta de DM NÃO enviada — o CRM não está conectado ao Mind', { requestId: payload.requestId })
+          return 'unpaired'
+        }
+        log('error', 'Nervo: falha ao enfileirar resposta de DM', { error: errorText(error), requestId: payload.requestId })
+        return 'error'
+      }
+    },
+    status: async () => (connection.status ? connection.status().catch(() => undefined) : undefined),
+    advance: async (restart) => connection.advance(restart ? { restart: true } : undefined).catch(() => undefined),
+    tick: async () => {
+      if (connection.tick) await connection.tick().catch((e: unknown) => log('warn', 'Nervo: tick falhou', { error: errorText(e) }))
+    },
   }
 }

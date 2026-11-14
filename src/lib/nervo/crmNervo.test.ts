@@ -104,3 +104,29 @@ describe('createCrmNervo', () => {
     expect(receive).toHaveBeenCalledWith(req)
   })
 })
+
+describe('publishSocialMessageSend (respostas de DM pelo Mind Marketing)', () => {
+  const payload = { clientAccountId: config.mindMarketingClientAccountId, channel: 'facebook' as const, pageId: 'p1', recipientId: 'psid1', text: 'Olá!', requestId: 'msg1' }
+
+  it('publica social.message.send com requestId como correlationId → queued', async () => {
+    const publish = vi.fn().mockResolvedValue({ id: 'evt1', duplicate: false, queued: true })
+    expect(await nervoWith(publish).publishSocialMessageSend(payload)).toBe('queued')
+    expect(publish).toHaveBeenCalledWith('social.message.send', payload, { correlationId: 'msg1' })
+  })
+
+  it('CRM ainda não pareado com o Mind → unpaired (nunca lança)', async () => {
+    const publish = vi.fn().mockRejectedValue(new NervoError('NERVO_UNPAIRED', 'sem conexão'))
+    expect(await nervoWith(publish).publishSocialMessageSend(payload)).toBe('unpaired')
+  })
+
+  it('outra falha → error (nunca lança)', async () => {
+    const publish = vi.fn().mockRejectedValue(new Error('rede'))
+    expect(await nervoWith(publish).publishSocialMessageSend(payload)).toBe('error')
+  })
+
+  it('status/tick sem suporte na conexão injetada não quebram', async () => {
+    const nervo = nervoWith(vi.fn())
+    expect(await nervo.status()).toBeUndefined()
+    await expect(nervo.tick()).resolves.toBeUndefined()
+  })
+})

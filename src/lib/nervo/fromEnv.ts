@@ -8,6 +8,7 @@ import { loadNervoConfig } from './config'
 import { createPrismaQuery } from './prismaQuery'
 import { createSocialEngagementHandler } from './socialEngagementHandler'
 import type { SocialEngagementRow } from './socialEngagement'
+import { SOCIAL_MESSAGE_RECEIVED, SOCIAL_MESSAGE_SENT, createSocialMessageReceivedHandler, createSocialMessageSentHandler } from './socialMessages'
 
 type Log = (level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) => void
 
@@ -30,8 +31,20 @@ export function getCrmNervo(): CrmNervo | undefined {
   }
   try {
     const nervo = createCrmNervo({ config: result.config, query: createPrismaQuery(prisma), log })
+    // 💬 Mensagens diretas (Messenger / Instagram Direct) da KeroSolar, vindas do Mind Marketing (14/11/2026):
+    // o CRM atende igual ao WhatsApp e devolve a resposta pelo Nervo. Ver dmBridge.ts e socialMessages.ts.
+    const clientAccountId = result.config.mindMarketingClientAccountId
+    nervo.on(SOCIAL_MESSAGE_RECEIVED, createSocialMessageReceivedHandler({
+      clientAccountId,
+      process: async (input) => (await import('./dmBridge')).processarDmRecebida(input),
+      log,
+    }))
+    nervo.on(SOCIAL_MESSAGE_SENT, createSocialMessageSentHandler({
+      clientAccountId,
+      markResult: async (r) => (await import('./dmBridge')).marcarResultadoEnvio(r),
+    }))
     // Comentário do Facebook/Instagram, publicado pelo Mind Marketing — só leitura (quem responde é o
-    // Marketing). DM não entra aqui (já chega direto pelo webhook da Meta, ver socialEngagementHandler.ts).
+    // Marketing). DM não entra aqui: chega pelo social.message.received acima (ver socialEngagementHandler.ts).
     // `externalId` único: reentrega do Nervo nunca duplica a linha.
     nervo.on(
       'social.engagement.captured',
