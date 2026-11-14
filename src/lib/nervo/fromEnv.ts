@@ -8,7 +8,7 @@ import { loadNervoConfig } from './config'
 import { createPrismaQuery } from './prismaQuery'
 import { createSocialEngagementHandler } from './socialEngagementHandler'
 import type { SocialEngagementRow } from './socialEngagement'
-import { SOCIAL_MESSAGE_RECEIVED, SOCIAL_MESSAGE_SENT, createSocialMessageReceivedHandler, createSocialMessageSentHandler } from './socialMessages'
+import { SOCIAL_COMMENT_REPLIED, SOCIAL_MESSAGE_RECEIVED, SOCIAL_MESSAGE_SENT, createSocialCommentRepliedHandler, createSocialMessageReceivedHandler, createSocialMessageSentHandler } from './socialMessages'
 
 type Log = (level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) => void
 
@@ -42,6 +42,11 @@ export function getCrmNervo(): CrmNervo | undefined {
     nervo.on(SOCIAL_MESSAGE_SENT, createSocialMessageSentHandler({
       clientAccountId,
       markResult: async (r) => (await import('./dmBridge')).marcarResultadoEnvio(r),
+    }))
+    // ✍️ Resposta a comentário escrita no CRM: o Marketing confirma se publicou na Meta.
+    nervo.on(SOCIAL_COMMENT_REPLIED, createSocialCommentRepliedHandler({
+      clientAccountId,
+      markResult: async (r) => (await import('./commentReplies')).marcarRespostaComentario(r),
     }))
     // Comentário do Facebook/Instagram, publicado pelo Mind Marketing — só leitura (quem responde é o
     // Marketing). DM não entra aqui: chega pelo social.message.received acima (ver socialEngagementHandler.ts).

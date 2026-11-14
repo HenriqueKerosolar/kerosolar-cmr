@@ -90,3 +90,38 @@ export function createSocialMessageSentHandler(deps: SentHandlerDeps) {
     await deps.markResult(parsed.data)
   }
 }
+
+// ─── Resposta a COMENTÁRIOS escrita no CRM (14/11/2026) ────────────────────────────────────────────────
+//   CRM -> Marketing: `social.comment.reply`   { clientAccountId, channel, commentId, text, requestId }
+//   Marketing -> CRM: `social.comment.replied` { clientAccountId, requestId, ok, replyId?, error? }
+// O comentário chega pelo `social.engagement.captured` (commentId = o externalId dele). O Marketing continua
+// respondendo comentários sozinho; isto só deixa o atendente responder também, pelo CRM, quando precisar.
+export const SOCIAL_COMMENT_REPLY = 'social.comment.reply'
+export const SOCIAL_COMMENT_REPLIED = 'social.comment.replied'
+
+export const socialCommentRepliedSchema = z.object({
+  clientAccountId: z.string().min(1).max(128),
+  requestId: z.string().min(1).max(128),
+  ok: z.boolean(),
+  replyId: z.string().max(256).optional(),
+  error: z.object({ code: z.enum(['TOKEN_EXPIRED', 'NOT_CONNECTED', 'NOT_FOUND', 'META_ERROR']), message: z.string().max(2000) }).optional(),
+})
+export type SocialCommentReplied = z.infer<typeof socialCommentRepliedSchema>
+
+export function motivoFalhaComentario(error: SocialCommentReplied['error']): string {
+  switch (error?.code) {
+    case 'NOT_FOUND': return 'Não respondido: o comentário foi apagado ou não existe mais na Meta.'
+    case 'TOKEN_EXPIRED': return 'Não respondido: a conexão do Marketing com a Meta expirou (reconectar no Mind Marketing).'
+    case 'NOT_CONNECTED': return 'Não respondido: a Página não está liberada no Mind Marketing.'
+    default: return `Não respondido pela Meta${error?.message ? ` — ${error.message}` : ''}.`
+  }
+}
+
+export function createSocialCommentRepliedHandler(deps: { clientAccountId: string; markResult(result: SocialCommentReplied): Promise<void> }) {
+  return async function handleSocialCommentReplied(event: EventEnvelope): Promise<void> {
+    const parsed = socialCommentRepliedSchema.safeParse(event.payload)
+    if (!parsed.success) reject(`payload inválido em ${event.type}`)
+    if (parsed.data.clientAccountId !== deps.clientAccountId) reject('conta de cliente diferente da KeroSolar — ignorada')
+    await deps.markResult(parsed.data)
+  }
+}

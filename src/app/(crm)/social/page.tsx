@@ -1,5 +1,6 @@
 import { verifySession } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
+import { ResponderComentario } from './responder-comentario'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,16 +17,19 @@ function horaBrasilia(d: Date): string {
 export default async function SocialPage() {
   await verifySession()
 
-  const items = await prisma.socialEngagement.findMany({ where: { kind: 'comment' }, orderBy: { occurredAt: 'desc' }, take: 100 })
+  const items = await prisma.socialEngagement.findMany({
+    where: { kind: 'comment' }, orderBy: { occurredAt: 'desc' }, take: 100,
+    include: { replies: { orderBy: { createdAt: 'asc' }, select: { id: true, text: true, status: true, error: true, createdAt: true } } },
+  })
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-3xl">
       <div>
         <h1 className="text-xl font-bold">Comentários</h1>
         <p className="text-sm text-[--muted-foreground]">
-          Comentários em posts do Facebook/Instagram — quem responde é o Mind Marketing; aqui é só pra acompanhar sem
-          precisar abrir lá. DM não aparece aqui: já chega direto no{' '}
-          <a href="/inbox" className="underline">Inbox</a>.
+          Comentários em posts do Facebook/Instagram. O Mind Marketing responde automaticamente; quando precisar, você
+          também pode responder por aqui (a resposta é publicada no comentário, em nome da página). Mensagens diretas
+          chegam no{' '}<a href="/inbox" className="underline">Inbox</a>.
         </p>
       </div>
 
@@ -49,6 +53,7 @@ export default async function SocialPage() {
                   Ver post
                 </a>
               )}
+              <ResponderComentario engagementId={it.id} respostas={it.replies.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))} />
             </div>
           ))}
         </div>

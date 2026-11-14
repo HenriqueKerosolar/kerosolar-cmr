@@ -43,6 +43,17 @@ export interface SocialMessageSendPayload {
   replyToExternalId?: string
 }
 
+/** `social.comment.reply` v1 — o atendente responde um comentário pelo CRM; o Marketing responde na Meta. */
+export interface SocialCommentReplyPayload {
+  clientAccountId: string
+  channel: 'facebook' | 'instagram'
+  /** externalId do comentário (o mesmo do `social.engagement.captured`). */
+  commentId: string
+  text: string
+  /** id da SocialCommentReply do CRM: o Marketing deduplica por ele e devolve no `social.comment.replied`. */
+  requestId: string
+}
+
 export interface LeadOutcomeInput {
   leadId: string
   contactPhone?: string | null
@@ -67,6 +78,8 @@ export interface CrmNervo {
    * de saída é durável), `unpaired` (CRM ainda não conectado ao Mind: a resposta NÃO sai) ou `error`.
    */
   publishSocialMessageSend(payload: SocialMessageSendPayload): Promise<'queued' | 'unpaired' | 'error'>
+  /** Pede ao Marketing para RESPONDER um comentário (`social.comment.reply`). Mesmas garantias do envio de DM. */
+  publishSocialCommentReply(payload: SocialCommentReplyPayload): Promise<'queued' | 'unpaired' | 'error'>
   /** Estado da conexão com o Mind SEM falar com ele (para a tela). */
   status(): Promise<ConnectionStatus | undefined>
   /** Um passo do pareamento (pede ao Mind / confere se o dono aceitou). `restart` = pedir de novo. */
@@ -92,7 +105,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
       store: createPostgresConnectionStore(deps.query),
       outbox: createPostgresOutbox(deps.query),
       inbox: createPostgresInbox(deps.query),
-      provides: { events: [{ type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }] },
+      provides: { events: [{ type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }, { type: 'social.comment.reply' }] },
       seal: { secrets: config.sealSecrets },
       timeoutMs: 8_000,
       retries: 1,
@@ -101,6 +114,21 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
       ...(deps.now ? { now: deps.now } : {}),
       log,
     })
+
+  /** Publica um pedido ao Marketing (resposta de DM ou de comentário). Nunca lança. */
+  async function pedir(type: string, payload: object, requestId: string): Promise<'queued' | 'unpaired' | 'error'> {
+    try {
+      await connection.publish(type, payload, { correlationId: requestId })
+      return 'queued'
+    } catch (error) {
+      if (isNervoError(error) && error.code === 'NERVO_UNPAIRED') {
+        log('warn', `Nervo: ${type} NÃO enviado — o CRM não está conectado ao Mind`, { requestId })
+        return 'unpaired'
+      }
+      log('error', `Nervo: falha ao enfileirar ${type}`, { error: errorText(error), requestId })
+      return 'error'
+    }
+  }
 
   async function publish(type: 'lead.won' | 'lead.lost', input: LeadOutcomeInput, valueCents: number | undefined): Promise<void> {
     try {
@@ -134,19 +162,8 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
     publishLeadLost: (input) => publish('lead.lost', input, undefined),
     on: (type, handler) => connection.on(type, handler),
     receive: (req) => connection.receive(req),
-    async publishSocialMessageSend(payload) {
-      try {
-        await connection.publish('social.message.send', payload, { correlationId: payload.requestId })
-        return 'queued'
-      } catch (error) {
-        if (isNervoError(error) && error.code === 'NERVO_UNPAIRED') {
-          log('warn', 'Nervo: resposta de DM NÃO enviada — o CRM não está conectado ao Mind', { requestId: payload.requestId })
-          return 'unpaired'
-        }
-        log('error', 'Nervo: falha ao enfileirar resposta de DM', { error: errorText(error), requestId: payload.requestId })
-        return 'error'
-      }
-    },
+    publishSocialMessageSend: (payload) => pedir('social.message.send', payload, payload.requestId),
+    publishSocialCommentReply: (payload) => pedir('social.comment.reply', payload, payload.requestId),
     status: async () => (connection.status ? connection.status().catch(() => undefined) : undefined),
     advance: async (restart) => connection.advance(restart ? { restart: true } : undefined).catch(() => undefined),
     tick: async () => {

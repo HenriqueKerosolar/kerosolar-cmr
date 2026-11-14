@@ -34,3 +34,11 @@
 ## Pontos de contato
 - Sessão do CRM: **"KerosolarCRM new session (fork)"**. É o nome para usar no SendMessage.
 - O dono aprova o formato final e o momento de publicar.
+
+## Adendo (14/11/2026) — responder COMENTÁRIOS pelo CRM
+Pedido do dono: além das DMs, poder responder comentários pelo CRM quando precisar. O Marketing continua respondendo comentários automaticamente; isto só acrescenta a resposta manual.
+- **CRM → Marketing** `social.comment.reply` v1: `{ clientAccountId, channel: 'facebook'|'instagram', commentId, text, requestId }`. `commentId` é o `externalId` do comentário publicado no `social.engagement.captured`, e `requestId` é o id da `SocialCommentReply` do CRM, usado para deduplicar.
+- **Marketing → CRM** `social.comment.replied` v1: `{ clientAccountId, requestId, ok, replyId?, error?: { code: 'TOKEN_EXPIRED'|'NOT_CONNECTED'|'NOT_FOUND'|'META_ERROR', message } }`.
+- O Marketing responde pela API de comentários da Meta. Ele deduplica por `requestId` e tira o negrito estilo WhatsApp (`*texto*`).
+- Hoje só os comentários do Facebook chegam ao CRM. Se o Marketing passar a publicar os do Instagram, o CRM já aceita `channel: 'instagram'`.
+- Lado CRM: pronto no ramo `responder-comentarios`, com a tabela `social_comment_replies` (`scripts/migrar-respostas-comentario.mjs`). Publicado só junto com o lado do Marketing.

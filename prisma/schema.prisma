@@ -471,8 +471,28 @@ model SocialEngagement {
   occurredAt    DateTime
   createdAt     DateTime @default(now())
 
+  replies SocialCommentReply[]
+
   @@index([createdAt])
   @@map("social_engagements")
+}
+
+/// Resposta a um comentário do Facebook/Instagram escrita NO CRM (14/11/2026). O CRM pede ao Mind Marketing
+/// (`social.comment.reply`), que responde na Meta e confirma (`social.comment.replied`). id = requestId.
+model SocialCommentReply {
+  id              String           @id @default(cuid())
+  engagementId    String
+  engagement      SocialEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  text            String
+  status          String           @default("pending") // pending | sent | failed
+  replyExternalId String? // id da resposta na Meta
+  error           String?
+  authorUserId    String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([engagementId])
+  @@map("social_comment_replies")
 }
 
 /// Conexão pareada deste CRM com o Mind (peça @lib/nervo 0.4.2): o dono aceita UMA vez no painel

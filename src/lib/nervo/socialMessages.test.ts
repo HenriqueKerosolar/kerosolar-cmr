@@ -86,3 +86,17 @@ describe('social.message.sent', () => {
     expect(motivoFalhaEnvio({ code: 'META_ERROR', message: 'limite' })).toMatch(/limite/)
   })
 })
+
+describe('social.comment.replied (resposta a comentário escrita no CRM)', () => {
+  it('marca respondido e falha; recusa outra conta e payload inválido', async () => {
+    const { createSocialCommentRepliedHandler, motivoFalhaComentario } = await import('./socialMessages')
+    const markResult = vi.fn().mockResolvedValue(undefined)
+    const h = createSocialCommentRepliedHandler({ clientAccountId: CONTA, markResult })
+    await h(envelope('social.comment.replied', { clientAccountId: CONTA, requestId: 'r1', ok: true, replyId: 'c_9' }))
+    await h(envelope('social.comment.replied', { clientAccountId: CONTA, requestId: 'r2', ok: false, error: { code: 'NOT_FOUND', message: 'x' } }))
+    expect(markResult).toHaveBeenCalledTimes(2)
+    await expect(h(envelope('social.comment.replied', { clientAccountId: 'outra', requestId: 'r3', ok: true }))).rejects.toBeInstanceOf(NervoRejection)
+    await expect(h(envelope('social.comment.replied', { requestId: 'r4' }))).rejects.toBeInstanceOf(NervoRejection)
+    expect(motivoFalhaComentario({ code: 'NOT_FOUND', message: '' })).toMatch(/apagado/)
+  })
+})

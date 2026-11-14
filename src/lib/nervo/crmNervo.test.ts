@@ -130,3 +130,12 @@ describe('publishSocialMessageSend (respostas de DM pelo Mind Marketing)', () =>
     await expect(nervo.tick()).resolves.toBeUndefined()
   })
 })
+
+describe('publishSocialCommentReply', () => {
+  it('publica social.comment.reply com requestId como correlationId', async () => {
+    const publish = vi.fn().mockResolvedValue({ id: 'e', duplicate: false, queued: true })
+    const p = { clientAccountId: config.mindMarketingClientAccountId, channel: 'facebook' as const, commentId: 'c_1', text: 'Obrigado!', requestId: 'r1' }
+    expect(await nervoWith(publish).publishSocialCommentReply(p)).toBe('queued')
+    expect(publish).toHaveBeenCalledWith('social.comment.reply', p, { correlationId: 'r1' })
+  })
+})
