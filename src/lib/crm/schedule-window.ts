@@ -91,3 +91,14 @@ export function dentroHorarioGlobal(d: Date = new Date()): boolean {
   const { hour } = spParts(d)
   return hour >= HARD_START_HOUR && hour < HARD_END_HOUR
 }
+
+/** Feriados nacionais fixos (MM-DD) — mesmos que a IA usa para falar de dias úteis. */
+export const FERIADOS_FIXOS = ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '11-20', '12-25']
+
+/** A data (no fuso de Brasília) é DIA ÚTIL? (seg–sex e não é feriado nacional fixo) */
+export function ehDiaUtil(d: Date): boolean {
+  const { day, date } = spParts(d)
+  if (day === 0 || day === 6) return false
+  const mmdd = `${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+  return !FERIADOS_FIXOS.includes(mmdd)
+}

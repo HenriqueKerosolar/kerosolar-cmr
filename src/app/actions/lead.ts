@@ -255,7 +255,9 @@ export async function moveLeadStage(leadId: string, stageId: string) {
     }
   }
 
-  await enterStage(leadId, stageId).catch(() => {})
+  // ⚡ As mensagens automáticas da etapa nova (com o "tempo de digitação" simulado) saem em SEGUNDO
+  //    PLANO — antes o botão esperava tudo terminar e a tela travava de 4 a 30 s por mensagem.
+  void enterStage(leadId, stageId).catch((e) => console.error('[moveLeadStage] enterStage', e))
   revalidatePath(`/leads/${leadId}`)
   revalidatePath('/leads')
 }

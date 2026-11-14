@@ -103,10 +103,21 @@ export async function janelaAberta(conversationId: string): Promise<boolean> {
 
 /** Template APROVADO pra reabrir a conversa fora da janela: o pedido (se houver) → com orçamento
  *  "budget_followup" → sem orçamento "chegada_followup" → "reengage". */
-async function escolherTemplateReabertura(leadId: string | null, preferido?: string) {
+async function escolherTemplateReabertura(leadId: string | null, preferido?: string, conversationId?: string) {
   const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } }) : null
-  const temOrc = !!(lead?.customFields as Record<string, unknown> | null)?.solar
-  const ordem = [preferido, temOrc ? 'budget_followup' : 'chegada_followup', 'reengage'].filter(Boolean) as string[]
+  const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+  const temOrc = !!cf.solar
+  // 🗓️ Regra do dono (2026-11-14): cliente que escreveu no FIM DE SEMANA / FERIADO e parou (sem orçamento,
+  //    sem conta) → no dia útil seguinte recebe o template "fim_de_semana" ("estamos de volta...").
+  let fimDeSemana = false
+  if (conversationId && !temOrc && !cf.consumoKwh && !cf.billValue) {
+    const ultIn = await prisma.message.findFirst({ where: { conversationId, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+    if (ultIn) {
+      const { ehDiaUtil } = await import('./schedule-window')
+      fimDeSemana = !ehDiaUtil(ultIn.createdAt)
+    }
+  }
+  const ordem = [fimDeSemana ? 'fim_de_semana' : null, preferido, temOrc ? 'budget_followup' : 'chegada_followup', 'reengage'].filter(Boolean) as string[]
   for (const a of ordem) {
     const t = await prisma.whatsappTemplate.findFirst({ where: { actionType: a, metaStatus: 'APPROVED' } })
     if (t) return t
@@ -230,7 +241,7 @@ export async function dispatchOutbound(
               await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})
               return
             }
-            const tmpl = await escolherTemplateReabertura(conv.leadId, templateActionType)
+            const tmpl = await escolherTemplateReabertura(conv.leadId, templateActionType, conversationId)
             if (!tmpl) {
               console.warn('[flow dispatch] janela 24h fechada e nenhum template APPROVED — não enviado')
               await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'janela_24h_sem_template' } }).catch(() => {})

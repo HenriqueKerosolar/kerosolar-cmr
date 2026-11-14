@@ -271,7 +271,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           </div>
           {/* Botão Fechar conversa — encerra (pausa automações até o cliente voltar) */}
           {lead.conversationId && !lead.conversationResolved && (
-            <button onClick={() => { if (confirm('Encerrar esta conversa? As automações ficam pausadas até o cliente enviar uma nova mensagem.')) run(() => encerrarConversa(lead.conversationId!)) }}
+            <button onClick={() => { if (confirm('Encerrar esta conversa? As automações ficam pausadas até o cliente enviar uma nova mensagem.')) startTransition(async () => { await encerrarConversa(lead.conversationId!); if (window.history.length > 1) router.back(); else router.push('/inbox') }) }}
               title="Encerrar conversa — pausa follow-ups até o cliente voltar"
               className="ml-auto shrink-0 px-3 py-2 rounded-lg text-xs font-semibold transition border border-[--border] hover:bg-[--accent]">
               <span className="hidden sm:inline">✓ Fechar conversa</span>

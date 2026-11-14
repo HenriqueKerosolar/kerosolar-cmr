@@ -34,6 +34,7 @@ const ACTION_LABELS: Record<string, string> = {
   budget_followup: 'Follow-up de Orçamento',
   budget_validity: 'Validade do Orçamento',
   after_hours_resume: 'Retomada Fora do Horário',
+  fim_de_semana: 'Retomada de fim de semana/feriado',
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -109,6 +110,7 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
   const [aiExplanation, setAiExplanation] = useState('')
   const [saving, setSaving] = useState(false)
   const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [enviandoId, setEnviandoId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -164,6 +166,23 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
       setError(e instanceof Error ? e.message : 'Erro')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // 📤 Envia o template para a Meta aprovar (antes era manual no Meta Business Manager)
+  async function enviarParaMeta(t: Template) {
+    if (!confirm(`Enviar o template "${t.displayName}" para a Meta aprovar?\n\nA análise costuma levar de alguns minutos a 24h. Depois use o Sync para ver o status.`)) return
+    setEnviandoId(t.id)
+    try {
+      const res = await fetch(`/api/templates/${t.id}/submit`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao enviar')
+      setTemplates((prev) => prev.map((x) => (x.id === t.id ? { ...x, ...data.template } : x)))
+      alert('Enviado! A Meta está analisando o template. Clique em Sync mais tarde para ver se foi aprovado.')
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Erro ao enviar')
+    } finally {
+      setEnviandoId(null)
     }
   }
 
@@ -284,7 +303,7 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
       {/* Aviso sobre o fluxo */}
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300 space-y-1">
         <p className="font-semibold">Como funciona</p>
-        <p>Crie o template aqui → copie o nome exato → submeta no <strong>Meta Business Manager</strong> → aguarde aprovação → sincronize o status. Após aprovado, o sistema usa automaticamente o template quando a janela de 24h estiver fechada.</p>
+        <p>Crie o template aqui → clique em <strong>📤 Enviar p/ aprovação</strong> → aguarde a Meta aprovar (minutos a 24h) → clique em <strong>↻ Sync</strong> para ver o status. Após aprovado, o sistema usa automaticamente o template quando a janela de 24h estiver fechada.</p>
       </div>
 
       {/* Lista */}
@@ -314,6 +333,16 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
                   <code className="text-xs text-[--muted-foreground] font-mono">{t.name}</code>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {(!t.metaStatus || ['NAO_ENVIADO', 'PENDENTE_ENVIO', 'REJECTED'].includes(t.metaStatus)) && (
+                    <button
+                      onClick={() => enviarParaMeta(t)}
+                      disabled={enviandoId === t.id}
+                      title="Envia o template para a Meta analisar e aprovar"
+                      className="px-3 py-1.5 rounded-lg bg-orange-600 text-white text-xs font-semibold hover:bg-orange-700 transition disabled:opacity-50"
+                    >
+                      {enviandoId === t.id ? 'Enviando...' : '📤 Enviar p/ aprovação'}
+                    </button>
+                  )}
                   <button
                     onClick={() => sincronizar(t)}
                     disabled={syncingId === t.id}
