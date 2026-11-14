@@ -6,7 +6,7 @@ import { simularCartao } from './card-calc'
  * (https://lp.kerosolar.com.br/simulador/)
  */
 
-export const FATOR_CONVERSAO = 20.87      // valor do sistema = conta × 20,87
+export const FATOR_CONVERSAO = 23         // R$ por kWh de consumo mensal: valor do sistema = kWh × 23,00 (dono, 2026-11-13; antes 20,87)
 export const ECONOMIA_PERCENT_PADRAO = 80 // % de economia (70–85)
 export const REAJUSTE_PADRAO = 8          // reajuste anual da energia (%)
 export const TARIFA_KWH = 1.22            // R$ por kWh — usado p/ comunicar "atende conta de ~R$ (kWh × 1,22)"
@@ -143,8 +143,8 @@ export function reaisParaKwh(reais: number): number {
 
 /**
  * Núcleo do cálculo. valorSistema é informado explicitamente:
- * - quando o cliente dá kWh:   valorSistema = kWh × 20,87
- * - quando o cliente dá R$:    valorSistema = R$ × 20,87
+ * - quando o cliente dá kWh:   valorSistema = kWh × FATOR_CONVERSAO (R$ 23,00)
+ * - quando o cliente dá R$:    converte p/ kWh (R$ ÷ 1,22) e valorSistema = kWh × FATOR_CONVERSAO
  * contaReais (a conta em R$) é usada para a ECONOMIA.
  */
 function calcularCore(
@@ -153,8 +153,8 @@ function calcularCore(
   consumoKwh: number,
   opts: { economiaPercent?: number; reajuste?: number } = {},
 ): SolarResult {
-  // 🚫 PISO: nenhum sistema sai abaixo do kit mínimo (R$ 7.670). A fórmula kWh × 20,87 só
-  //    alcança esse valor em ~367 kWh, então consumos menores cairiam abaixo do piso — o que
+  // 🚫 PISO: nenhum sistema sai abaixo do kit mínimo (R$ 7.670). A fórmula kWh × FATOR_CONVERSAO só
+  //    alcança esse valor em ~334 kWh (com R$ 23,00), então consumos menores cairiam abaixo do piso — o que
   //    não pode acontecer. Abaixo do piso, usa o piso (e payback/parcelas recalculam por ele).
   valorSistema = Math.max(Math.round(valorSistema), MINIMO_KIT_PRECO)
 
@@ -202,13 +202,13 @@ function calcularCore(
   }
 }
 
-/** Cliente informou a CONTA em R$ → converte pra kWh (÷ tarifa) e o sistema = kWh × 20,87. */
+/** Cliente informou a CONTA em R$ → converte pra kWh (÷ tarifa) e o sistema = kWh × FATOR_CONVERSAO. */
 export function calcularSolar(contaReais: number, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
   const kwh = reaisParaKwh(contaReais)           // R$ → kWh (÷ 1,22)
   return calcularCore(contaReais, Math.round(kwh * FATOR_CONVERSAO), kwh, opts)
 }
 
-/** Cliente informou o CONSUMO em kWh → sistema = kWh × 20,87; conta = kWh × tarifa (para a economia). */
+/** Cliente informou o CONSUMO em kWh → sistema = kWh × FATOR_CONVERSAO; conta = kWh × tarifa (para a economia). */
 export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
   return calcularCore(kwhParaReais(kwh), Math.round(kwh * FATOR_CONVERSAO), kwh, opts)
 }

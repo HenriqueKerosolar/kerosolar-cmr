@@ -64,6 +64,23 @@ const EMPTY_FORM = {
   actionType: '',
 }
 
+
+/** As variáveis do template vêm em 3 formatos no banco: [{index, description}], ["nome"] ou {"1": "nome"}.
+ *  Normaliza tudo para [{index, description}] — antes, o formato {"1": ...} derrubava a tela. */
+function normalizarVariaveis(v: unknown): { index: number; description: string }[] {
+  if (Array.isArray(v)) {
+    return v.map((x, i) => (x && typeof x === 'object' && 'index' in (x as object))
+      ? { index: Number((x as { index: unknown }).index) || i + 1, description: String((x as { description?: unknown }).description ?? '') }
+      : { index: i + 1, description: String(x ?? '') })
+  }
+  if (v && typeof v === 'object') {
+    return Object.entries(v as Record<string, unknown>)
+      .map(([k, d]) => ({ index: Number(k) || 0, description: String(d ?? '') }))
+      .filter((x) => x.index > 0).sort((a, b) => a.index - b.index)
+  }
+  return []
+}
+
 export function TemplatesClient({ initial }: { initial: Template[] }) {
   const [templates, setTemplates] = useState<Template[]>(initial)
   const [showModal, setShowModal] = useState(false)
@@ -113,7 +130,7 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
         name: t.name || f.name,
         displayName: t.displayName || f.displayName,
         bodyText: t.bodyText || f.bodyText,
-        variables: t.variables || [],
+        variables: normalizarVariaveis(t.variables),
       }))
       setAiExplanation(t.explanation || '')
     } catch (e: unknown) {
@@ -176,7 +193,7 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
   }
 
   const previewBody = (t: Template) => {
-    const vars = (t.variables as { index: number; description: string }[] | null) || []
+    const vars = normalizarVariaveis(t.variables)
     let text = t.bodyText
     vars.forEach((v) => {
       text = text.replace(`{{${v.index}}}`, `[${v.description}]`)
@@ -321,9 +338,9 @@ export function TemplatesClient({ initial }: { initial: Template[] }) {
               </div>
 
               {/* Variáveis */}
-              {(t.variables as { index: number; description: string }[] | null)?.length ? (
+              {normalizarVariaveis(t.variables).length ? (
                 <div className="flex flex-wrap gap-2">
-                  {(t.variables as { index: number; description: string }[]).map((v) => (
+                  {normalizarVariaveis(t.variables).map((v) => (
                     <span key={v.index} className="text-xs px-2 py-0.5 rounded bg-[--accent] text-[--muted-foreground]">
                       {'{{'}{ v.index }{'}}' } → {v.description}
                     </span>
