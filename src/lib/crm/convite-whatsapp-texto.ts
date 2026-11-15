@@ -22,10 +22,18 @@ export function extrairCodigoConvite(texto: string): string | null {
   return m ? m[1] : null
 }
 
-export function linkConviteWhatsapp(code: string, channel: string): string {
-  const origem = channel === 'facebook' ? 'Facebook' : 'Instagram'
-  const msg = `Olá! Vim do ${origem} e quero continuar meu atendimento. Código: ${code}`
-  return `https://wa.me/${NUMERO_WHATSAPP}?text=${encodeURIComponent(msg)}`
+/**
+ * Link CURTO no domínio da KeroSolar (pedido do dono, 15/11/2026): o site redireciona para o WhatsApp com
+ * "Olá! Quero continuar meu atendimento. Código: XXXXX" (site: src/app/w/[code]/route.ts). A origem
+ * (Instagram/Facebook) o CRM já sabe pelo convite gravado no contato.
+ */
+export function linkConviteWhatsapp(code: string, _channel?: string): string {
+  return `https://kerosolar.com.br/w/${code}`
+}
+
+/** Link direto do WhatsApp (sem o site), caso um dia o link curto não sirva. */
+export function linkConviteWhatsappDireto(code: string): string {
+  return `https://wa.me/${NUMERO_WHATSAPP}?text=${encodeURIComponent(`Olá! Quero continuar meu atendimento. Código: ${code}`)}`
 }
 
 export function textoConvite(link: string): string {

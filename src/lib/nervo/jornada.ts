@@ -41,7 +41,7 @@ export function montarJornada(d: DadosJornada, fechadoEm: Date | null): Jornada 
 
   const caminho: string[] = []
   const add = (nome: string | null | undefined) => {
-    const n = nome?.trim()
+    const n = nome?.trim().slice(0, 80) // limite combinado com o Marketing
     if (n && caminho[caminho.length - 1] !== n) caminho.push(n)
   }
   add(entrada)
