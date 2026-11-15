@@ -88,6 +88,32 @@ async function marcar(leadId: string, campo: string): Promise<void> {
 }
 
 /**
+ * Venda ganha de quem veio de ANÚNCIO DE WHATSAPP (CTWA: o CRM tem o `ctwaClid` do clique) → Purchase na
+ * Conversions API da Meta, uma vez por lead. As vendas de Messenger/Instagram vão pelo Mind Marketing (dona
+ * da conexão com a Meta) usando o MESMO event_id `<leadId>:purchase` — se as duas pontas mandarem, a Meta
+ * conta uma vez só. Decisão do dono (15/11/2026): mandar as vendas para a Meta.
+ */
+async function compraParaMetaCtwa(leadId: string): Promise<void> {
+  try {
+    const full = await prisma.lead.findUnique({
+      where: { id: leadId },
+      include: { contact: true, conversations: { where: { channel: 'whatsapp' }, include: { account: true }, take: 1 } },
+    })
+    const cf = (full?.customFields as Record<string, unknown> | null) ?? {}
+    const clid = (full?.contact as { ctwaClid?: string | null } | null)?.ctwaClid ?? null
+    if (!full || !clid || cf.compraMetaEnviadaEm) return
+    const { sendCapiEvent } = await import('@/lib/crm/capi')
+    const ok = await sendCapiEvent({
+      eventName: 'Purchase', ctwaClid: clid, wabaId: full.conversations[0]?.account?.cloudWabaId ?? null,
+      value: full.value || 0, currency: 'BRL', phone: full.contact?.phone ?? null, eventId: `${leadId}:purchase`,
+    })
+    if (ok) await marcar(leadId, 'compraMetaEnviadaEm')
+  } catch (e) {
+    console.error('[capi] purchase da venda ganha falhou (ignorado):', e)
+  }
+}
+
+/**
  * Tudo o que o Marketing precisa saber quando o lead ENTRA numa etapa (chamado por `enterStage`, por onde
  * passam a troca manual, a IA e os fluxos): `lead.qualified` (uma vez), e `lead.won` / `lead.lost` quando a
  * etapa é de venda ganha / perdida — cada um UMA vez por lead (marcas em customFields), mesmo que o lead
@@ -99,6 +125,7 @@ export async function publicarDesfechoAoEntrar(leadId: string, stageId: string):
   try {
     const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { isWon: true, isLost: true } })
     if (!stage?.isWon && !stage?.isLost) return
+    if (stage.isWon) await compraParaMetaCtwa(leadId)
     const campo = stage.isWon ? 'vendaGanhaEnviadaEm' : 'vendaPerdidaEnviadaEm'
     const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
     if ((lead?.customFields as Record<string, unknown> | null)?.[campo]) return

@@ -212,34 +212,8 @@ export async function moveLeadStage(leadId: string, stageId: string) {
   })
   await prisma.note.create({ data: { leadId, type: 'stage_change', content: `Movido para "${stage?.name}".` } })
 
-  // 🆕 CTWA: venda ganha → manda Purchase pra Meta com o valor, ligado ao clique do anúncio.
-  if (stage?.isWon) {
-    try {
-      const full = await prisma.lead.findUnique({
-        where: { id: leadId },
-        include: { contact: true, conversations: { include: { account: true }, take: 1 } },
-      })
-      const clid = (full?.contact as { ctwaClid?: string | null } | null)?.ctwaClid ?? null
-      if (clid) {
-        const wabaId = full?.conversations?.[0]?.account?.cloudWabaId ?? null
-        const { sendCapiEvent } = await import('@/lib/crm/capi')
-        void sendCapiEvent({
-          eventName: 'Purchase',
-          ctwaClid: clid,
-          wabaId,
-          value: full?.value || 0,
-          currency: 'BRL',
-          phone: full?.contact?.phone ?? null,
-          eventId: `${leadId}:purchase`,
-        }).catch(() => {})
-      }
-    } catch (e) {
-      console.error('[capi] purchase no won falhou (ignorado):', e)
-    }
-  }
-
-  // 🆕 Nervo: o desfecho para o Mind Marketing (qualificado / venda ganha / perdida) sai no `enterStage`
-  //    abaixo — o mesmo caminho da IA e dos fluxos (leadOutcome.ts).
+  // 🆕 Venda ganha: a compra para a Meta (CTWA) e o desfecho para o Mind Marketing (qualificado / venda
+  //    ganha / perdida) saem no `enterStage` abaixo — o mesmo caminho da IA e dos fluxos (leadOutcome.ts).
 
   // ⚡ As mensagens automáticas da etapa nova (com o "tempo de digitação" simulado) saem em SEGUNDO
   //    PLANO — antes o botão esperava tudo terminar e a tela travava de 4 a 30 s por mensagem.
