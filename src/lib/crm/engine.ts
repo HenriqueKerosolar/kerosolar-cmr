@@ -1189,7 +1189,15 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
 
   // 6) Aplica no CRM
   const contactUpdate: Prisma.ContactUncheckedUpdateInput = {}
-  if (result.contact.name && !contact.name)   contactUpdate.name  = result.contact.name
+  // 👤 Nome do contato (regra do dono, 14/11/2026): SÓ quando a própria pessoa DIGITOU o nome na conversa.
+  //    Nunca o titular de conta de luz/documento (a IA via a foto da conta e punha o titular — "DELSON").
+  const veioDeDocumento = !!(input.imageBase64 || input.pdfBase64 || input.pdfText)
+  const nmz = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const primeiroNome = nmz((result.contact.name ?? '').trim().split(/\s+/)[0] ?? '')
+  const digitadoPeloCliente = primeiroNome.length >= 3 && !veioDeDocumento && history
+    .filter((h) => h.role === 'user' && !h.imageBase64 && !h.pdfBase64)
+    .some((h) => new RegExp(`(^|[^a-z])${primeiroNome.replace(/[^a-z]/g, '')}([^a-z]|$)`).test(nmz(h.content.split('\n\n[Conteúdo da conta de luz')[0] ?? '')))
+  if (result.contact.name && !contact.name && digitadoPeloCliente) contactUpdate.name = result.contact.name
   if (result.contact.email && !contact.email) contactUpdate.email = result.contact.email
   if (Object.keys(contactUpdate).length) {
     await prisma.contact.update({ where: { id: contact.id }, data: contactUpdate })
@@ -1325,7 +1333,13 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
 
   // Orçamento NOVO calculado nesta interação → envia o orçamento DETERMINÍSTICO.
   // Inclui o kit mínimo (300 kWh): sempre mostra o orçamento formatado, nunca deixa a IA descrever.
-  const consumoAntes = typeof cf.consumoKwh === 'number' ? cf.consumoKwh : null
+  // Consumo do orçamento JÁ apresentado: o campo consumoKwh OU o do orçamento salvo (cf.solar). Antes só olhava
+  // consumoKwh — que a leitura da conta por foto não gravava —, então a mensagem seguinte em que a IA citava o
+  // consumo era tratada como "consumo novo" e o orçamento saía de novo (14/11/2026: "Quais documentos para
+  // financiamento?" → orçamento repetido).
+  const solarSalvo = cf.solar as { consumoKwh?: number } | undefined
+  const consumoAntes = typeof cf.consumoKwh === 'number' ? cf.consumoKwh
+    : typeof solarSalvo?.consumoKwh === 'number' ? solarSalvo.consumoKwh : null
   // Só (re)apresenta o orçamento se for o PRIMEIRO ou se o consumo mudou de forma RELEVANTE
   // (> 5% ou > 20 kWh). Evita reenviar um orçamento quase idêntico (ex.: 538 → 531) quando o
   // cliente manda a conta confirmando praticamente o mesmo consumo.
@@ -1503,9 +1517,19 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   if (!presentBudget && outboundText) {
     const ult = await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true } })
     const { repeteAlguma } = await import('./repeticao')
-    if (repeteAlguma(outboundText, ult.map((m) => m.content ?? ''))) {
-      console.log('[engine] resposta repetida bloqueada — pedindo para refazer a pergunta')
-      outboundText = 'Não entendi bem sua pergunta 🤔 Pode refazer de outro jeito pra eu te responder certinho?'
+    const anteriores = ult.map((m) => m.content ?? '')
+    if (repeteAlguma(outboundText, anteriores)) {
+      // A IA ia repetir o PEDIDO DE DADOS (conta de luz / kWh) — o cliente ainda não mandou. "Não entendi" aí não
+      // faz sentido (ex.: cliente disse "Continuar"): usa uma forma curta e diferente de pedir, que não repete.
+      const pedeDados = /conta de luz|kwh|consumo|valor (m[eé]dio )?da conta/i.test(outboundText)
+      const variantes = [
+        'Perfeito! 😊 Pra eu seguir, me manda a *foto da conta de luz* ou me diz o *consumo em kWh*.',
+        'Combinado! Assim que você me mandar a conta de luz (foto ou PDF) — ou o consumo em kWh — eu já te passo o orçamento 😊',
+        'Fico no aguardo da sua conta de luz (ou do consumo em kWh) pra montar o seu orçamento 😊',
+      ]
+      const alternativa = pedeDados ? variantes.find((v) => !repeteAlguma(v, anteriores)) : undefined
+      console.log('[engine] resposta repetida bloqueada — %s', alternativa ? 'pedido de dados reescrito' : 'pedindo para refazer a pergunta')
+      outboundText = alternativa ?? 'Não entendi bem sua pergunta 🤔 Pode refazer de outro jeito pra eu te responder certinho?'
     }
   }
 

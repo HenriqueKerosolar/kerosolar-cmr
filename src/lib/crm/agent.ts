@@ -51,6 +51,8 @@ const JSON_FORMAT = `RESPONDA SOMENTE com um JSON válido (sem texto fora dele):
 {
   "reply": "mensagem a enviar (obrigatório)",
   "contact": { "name": string|null, "email": string|null, "city": string|null, "state": string|null },
+  // contact.name: SOMENTE se a própria pessoa disser como se chama na conversa. NUNCA tire o nome de conta de luz,
+  // documento ou foto — o titular da conta pode ser outra pessoa (pai, mãe, inquilino). Na dúvida: null.
   "qualification": {
     "billValue": number|null,
     "consumoKwh": number|null,
