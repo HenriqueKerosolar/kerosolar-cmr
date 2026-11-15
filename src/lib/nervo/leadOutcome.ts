@@ -121,6 +121,7 @@ async function compraParaMetaCtwa(leadId: string): Promise<void> {
  * Melhor esforço: nunca lança.
  */
 export async function publicarDesfechoAoEntrar(leadId: string, stageId: string): Promise<void> {
+  await publicarNivelSePreciso(leadId, stageId)
   await publicarQualificadoSePreciso(leadId, stageId)
   try {
     const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { isWon: true, isLost: true } })
@@ -139,6 +140,48 @@ export async function publicarDesfechoAoEntrar(leadId: string, stageId: string):
     await marcar(leadId, campo)
   } catch (e) {
     console.error('[nervo] desfecho do lead falhou (ignorado):', e)
+  }
+}
+
+/** O envio do nível só sai quando o Marketing confirmou a recepção (chave NERVO_SEND_STAGE_LEVEL=1 no Railway). */
+export function nivelLigado(): boolean {
+  return process.env.NERVO_SEND_STAGE_LEVEL === '1'
+}
+
+const NIVEIS = ['top', 'middle', 'bottom'] as const
+type Nivel = (typeof NIVEIS)[number]
+const MARCA_NIVEL: Record<Nivel, string> = { top: 'nivelTopoEm', middle: 'nivelMeioEm', bottom: 'nivelFimEm' }
+
+export function lerNivel(v: unknown): Nivel | null {
+  return typeof v === 'string' && (NIVEIS as readonly string[]).includes(v) ? (v as Nivel) : null
+}
+
+/**
+ * `lead.stage.reached` (combinado com o Marketing, 15/11/2026): níveis do funil definidos pelo dono — TOPO
+ * (chegada, não respondeu), MEIO (recebeu orçamento, ficou de enviar a conta), FIM (financiamento em diante e
+ * Fechou). O nível é a coluna `Stage.funnelLevel` (escolhida na tela de Funis), não o nome da etapa. Vai UMA
+ * vez por nível por lead (marcas em customFields); nível pulado não é enviado; sem retroativo. Nunca lança.
+ */
+export async function publicarNivelSePreciso(leadId: string, stageId: string): Promise<void> {
+  if (!nivelLigado()) return
+  try {
+    const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { name: true, funnelLevel: true } })
+    const nivel = lerNivel(stage?.funnelLevel)
+    if (!stage || !nivel) return
+    const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
+    if (!lead || (lead.customFields as Record<string, unknown> | null)?.[MARCA_NIVEL[nivel]]) return
+    const { getCrmNervo } = await import('./fromEnv')
+    const nervo = getCrmNervo()
+    if (!nervo) return
+    const desfecho = await montarDesfecho(leadId)
+    if (!desfecho) return
+    const r = await nervo.publishLeadStageReached({
+      leadId, funnelLevel: nivel, stageName: stage.name,
+      sourceChannel: desfecho.input.sourceChannel ?? null, sourceAdId: desfecho.input.sourceAdId ?? null,
+    })
+    if (r === 'queued') await marcar(leadId, MARCA_NIVEL[nivel])
+  } catch (e) {
+    console.error('[nervo] lead.stage.reached falhou (ignorado):', e)
   }
 }
 

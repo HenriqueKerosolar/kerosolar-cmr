@@ -110,6 +110,8 @@ model Stage {
   sortOrder  Int      @default(0)
   isWon      Boolean  @default(false)
   isLost     Boolean  @default(false)
+  // Nível do funil para o Marketing ('top' | 'middle' | 'bottom'; null = não conta). Evento lead.stage.reached.
+  funnelLevel String?
   // IA opcional por etapa (sobrescreve a do funil quando preenchido)
   botPrompt  String?
   botEnabled Boolean  @default(true)

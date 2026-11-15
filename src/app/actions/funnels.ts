@@ -94,8 +94,12 @@ export type StageFlow = {
 export async function updateStage(id: string, data: {
   name?: string; color?: string; isWon?: boolean; isLost?: boolean
   botEnabled?: boolean; botPrompt?: string; flow?: Record<string, unknown>
+  funnelLevel?: 'top' | 'middle' | 'bottom' | null
 }) {
   await verifySession()
+  if (data.funnelLevel !== undefined && data.funnelLevel !== null && !['top', 'middle', 'bottom'].includes(data.funnelLevel)) {
+    throw new Error('Nível do funil inválido.')
+  }
   await prisma.stage.update({
     where: { id },
     data: { ...data, flow: data.flow !== undefined ? (data.flow as unknown as object) : undefined },

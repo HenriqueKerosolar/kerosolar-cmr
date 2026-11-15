@@ -12,6 +12,7 @@ type StageFlow = { blocks?: FlowBlock[]; openingMessages?: unknown[]; handoffToA
 type Stage = {
   id: string; name: string; color: string | null; sortOrder: number
   isWon: boolean; isLost: boolean; botEnabled: boolean; botPrompt: string | null
+  funnelLevel: string | null
   flow: StageFlow | null
 }
 type Pipeline = {
@@ -135,6 +136,14 @@ function StagesEditor({ pipeline, run, pending }: { pipeline: Pipeline; run: (fn
             </div>
             <input defaultValue={s.name} onBlur={(e) => e.target.value !== s.name && run(() => updateStage(s.id, { name: e.target.value }))}
               className="flex-1 bg-transparent outline-none text-sm font-medium border-b border-transparent focus:border-[--primary]" />
+            <select value={s.funnelLevel ?? ''} title="Nível do funil (enviado ao Marketing)"
+              onChange={(e) => { const v = e.target.value; run(() => updateStage(s.id, { funnelLevel: v === 'top' || v === 'middle' || v === 'bottom' ? v : null })) }}
+              className="text-xs px-2 py-1 rounded-lg border border-[--border] bg-[--background]">
+              <option value="">Sem nível</option>
+              <option value="top">Topo</option>
+              <option value="middle">Meio</option>
+              <option value="bottom">Fim</option>
+            </select>
             <button onClick={() => setExpanded(expanded === s.id ? null : s.id)}
               className={`text-xs px-2.5 py-1 rounded-lg border transition ${expanded === s.id ? 'bg-[--primary] text-[--primary-foreground] border-[--primary]' : 'border-[--border] hover:bg-[--accent]'}`}>
               ⚙️ Bot/IA

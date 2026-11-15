@@ -71,6 +71,17 @@ export interface LeadWonInput extends LeadOutcomeInput {
   valueReais: number
 }
 
+export type FunnelLevel = 'top' | 'middle' | 'bottom'
+
+/** `lead.stage.reached` (combinado com o Marketing, 15/11/2026): o nível vem da coluna `Stage.funnelLevel`. */
+export interface LeadStageReachedInput {
+  leadId: string
+  funnelLevel: FunnelLevel
+  stageName: string
+  sourceChannel?: 'facebook' | 'instagram' | 'whatsapp' | null
+  sourceAdId?: string | null
+}
+
 export interface CrmNervo {
   /** Melhor esforço: NUNCA lança. A troca de estágio no banco já aconteceu antes desta chamada. */
   publishLeadWon(input: LeadWonInput): Promise<void>
@@ -78,6 +89,8 @@ export interface CrmNervo {
   publishLeadLost(input: LeadOutcomeInput): Promise<void>
   /** Lead qualificado (uma vez por lead). NUNCA lança: `queued`, `unpaired` (CRM não conectado) ou `error`. */
   publishLeadQualified(input: LeadOutcomeInput): Promise<'queued' | 'unpaired' | 'error'>
+  /** Lead chegou num NÍVEL do funil (topo/meio/fim), uma vez por nível por lead. NUNCA lança. */
+  publishLeadStageReached(input: LeadStageReachedInput): Promise<'queued' | 'unpaired' | 'error'>
   /** Registra um handler pra um evento que o Mind entrega (ex.: `social.engagement.captured`). */
   on(type: string, handler: EventHandler): void
   /** Ponto de entrada do que o Mind entrega — ligue à rota HTTP de inbound deste CRM. */
@@ -114,7 +127,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
       store: createPostgresConnectionStore(deps.query),
       outbox: createPostgresOutbox(deps.query),
       inbox: createPostgresInbox(deps.query),
-      provides: { events: [{ type: 'lead.qualified' }, { type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }, { type: 'social.comment.reply' }] },
+      provides: { events: [{ type: 'lead.stage.reached' }, { type: 'lead.qualified' },{ type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }, { type: 'social.comment.reply' }] },
       seal: { secrets: config.sealSecrets },
       timeoutMs: 8_000,
       retries: 1,
@@ -175,6 +188,18 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
     publishLeadWon: async (input) => { await publish('lead.won', input, Math.round(input.valueReais * 100)) },
     publishLeadLost: async (input) => { await publish('lead.lost', input, undefined) },
     publishLeadQualified: (input) => publish('lead.qualified', input, undefined),
+    publishLeadStageReached: async (input) => {
+      await connection.advance().catch(() => undefined)
+      return pedir('lead.stage.reached', {
+        clientAccountId: config.mindMarketingClientAccountId,
+        leadId: input.leadId,
+        occurredAt: new Date().toISOString(),
+        funnelLevel: input.funnelLevel,
+        stageName: input.stageName.trim().slice(0, 80),
+        ...(input.sourceChannel ? { sourceChannel: input.sourceChannel } : {}),
+        ...(input.sourceAdId ? { sourceAdId: input.sourceAdId } : {}),
+      }, `${input.leadId}:stage.${input.funnelLevel}`)
+    },
     on: (type, handler) => connection.on(type, handler),
     receive: (req) => connection.receive(req),
     publishSocialMessageSend: (payload) => pedir('social.message.send', payload, payload.requestId),

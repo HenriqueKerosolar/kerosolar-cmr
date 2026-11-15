@@ -23,6 +23,7 @@ const nervo = {
   publishLeadQualified: vi.fn(async () => { chamadas.push('qualified'); return 'queued' as const }),
   publishLeadWon: vi.fn(async () => { chamadas.push('won') }),
   publishLeadLost: vi.fn(async () => { chamadas.push('lost') }),
+  publishLeadStageReached: vi.fn(async (i: { funnelLevel: string }) => { chamadas.push(`nivel:${i.funnelLevel}`); return 'queued' as const }),
 }
 vi.mock('./fromEnv', () => ({ getCrmNervo: () => nervo }))
 
@@ -35,7 +36,9 @@ const nomes = [
   'Financiamento Aprovado. ', 'Vistoria agendada', 'Fechou', 'Em homologação', 'Finalizado', 'Já é cliente',
   'Repescagem', 'Repescagem Insta/Face', '15 dias depois', '30 dias depois', '180 dias depois', 'Leads adquiridos',
 ]
-const funil = nomes.map((name, i) => ({ id: `s${i}`, name, sortOrder: i, isWon: false, isLost: false }))
+// Níveis definidos pelo dono (topo/meio/fim), gravados em Stage.funnelLevel.
+const nivelDe = (i: number) => (i <= 4 ? 'top' : i <= 7 ? 'middle' : i <= 13 ? 'bottom' : null)
+const funil = nomes.map((name, i) => ({ id: `s${i}`, name, sortOrder: i, isWon: false, isLost: false, funnelLevel: nivelDe(i) }))
 const etapa = (nome: string) => funil.find((s) => s.name.trim() === nome)!
 
 describe('etapaQualifica — lead que passa do financiamento (regra do dono 15/11/2026)', () => {
@@ -83,6 +86,30 @@ describe('publicarDesfechoAoEntrar — "Fechou" é venda ganha (regra do dono 15
 
   it('etapa comum antes do financiamento → nada sai', async () => {
     await publicarDesfechoAoEntrar('L1', funil.find((x) => x.name === 'Recebeu orçamento automático')!.id)
+    expect(chamadas).toEqual([])
+  })
+})
+
+describe('lead.stage.reached — nível do funil (combinado com o Marketing 15/11/2026)', () => {
+  const id = (n: string) => funil.find((x) => x.name.trim() === n)!.id
+  beforeEach(() => { chamadas.length = 0; db.lead.customFields = {}; vi.clearAllMocks(); process.env.NERVO_SEND_STAGE_LEVEL = '1'; funil.find((x) => x.name === 'Fechou')!.isWon = true })
+
+  it('uma vez por nível, na ordem; repescagem não conta; Fechou: nível antes de qualified e won', async () => {
+    for (const n of ['Chegada', 'Não respondeu o anúncio', 'Recebeu orçamento automático', 'Ficou de enviar a conta', 'Repescagem', 'Recebeu orçamento manual', 'Fechou']) {
+      await publicarDesfechoAoEntrar('L1', id(n))
+    }
+    expect(chamadas).toEqual(['nivel:top', 'nivel:middle', 'nivel:bottom', 'qualified', 'won'])
+    expect(nervo.publishLeadStageReached).toHaveBeenCalledWith({ leadId: 'L1', funnelLevel: 'bottom', stageName: 'Fechou', sourceChannel: 'instagram', sourceAdId: 'AD9' })
+  })
+
+  it('nível pulado não é enviado', async () => {
+    await publicarDesfechoAoEntrar('L1', id('Recebeu orçamento automático'))
+    expect(chamadas).toEqual(['nivel:middle'])
+  })
+
+  it('chave desligada → nada de nível', async () => {
+    delete process.env.NERVO_SEND_STAGE_LEVEL
+    await publicarDesfechoAoEntrar('L1', id('Chegada'))
     expect(chamadas).toEqual([])
   })
 })
