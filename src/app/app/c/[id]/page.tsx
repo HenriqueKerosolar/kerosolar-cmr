@@ -7,7 +7,7 @@ import { sendManualMessage, moveLeadStage, encerrarConversa } from '@/app/action
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
 type Stage = { id: string; name: string; color: string | null }
 
-const canalIcone: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
+import { iconeCanal } from '@/lib/crm/canal-icone'
 
 /** Converte áudio gravado (webm/mp4…) pra MP3 — formato que o WhatsApp aceita como voz. */
 async function blobToMp3(blob: Blob): Promise<File> {
@@ -65,6 +65,7 @@ export default function ChatPage() {
   const convId = params.id as string
   const [name, setName] = useState('Conversa')
   const [channel, setChannel] = useState('')
+  const [origem, setOrigem] = useState<string | null>(null)
   const [leadId, setLeadId] = useState<string | null>(null)
   const [stages, setStages] = useState<Stage[]>([])
   const [stageId, setStageId] = useState<string | null>(null)
@@ -93,7 +94,7 @@ export default function ChatPage() {
       const r = await fetch(`/api/app/messages?conv=${convId}`, { cache: 'no-store' })
       if (r.ok) {
         const d = await r.json()
-        setName(d.name); setLeadId(d.leadId); setChannel(d.channel || ''); setMsgs(d.messages || [])
+        setName(d.name); setLeadId(d.leadId); setChannel(d.channel || ''); setOrigem(d.origem ?? null); setMsgs(d.messages || [])
         setStages(d.stages || []); setStageId(d.stageId ?? null); setStageName(d.stageName ?? null); setStageColor(d.stageColor ?? null)
       }
     } catch { /* ignora */ }
@@ -258,7 +259,7 @@ export default function ChatPage() {
         <button onClick={() => router.push('/app')} className="px-1 text-2xl leading-none" aria-label="Voltar">←</button>
         <div className="w-9 h-9 rounded-full bg-white/25 flex items-center justify-center font-bold shrink-0">{name[0]?.toUpperCase() ?? '?'}</div>
         <span className="font-semibold truncate flex-1">{name}</span>
-        <span className="text-sm shrink-0">{canalIcone[channel] ?? ''}</span>
+        {channel && (() => { const ic = iconeCanal(channel, origem); return <span className="text-sm shrink-0" title={ic.titulo}>{ic.icone}</span> })()}
         <button onClick={encerrar} title="Encerrar conversa"
           className="shrink-0 text-xs px-2.5 py-1 rounded-full bg-white/20 text-white font-medium whitespace-nowrap">✓ Encerrar</button>
       </header>

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { summarizeQualification } from '@/lib/crm/lead-qualification'
+import { CANAL_ICONE } from '@/lib/crm/canal-icone'
 
 type Lead = {
   id: string
@@ -104,7 +105,7 @@ export function LeadsBoard({ stages }: { stages: Stage[] }) {
                       <div className="flex items-center gap-1.5 flex-wrap mt-2">
                         {lead.source && (
                           <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-[--muted]/60 text-[--muted-foreground]">
-                            {lead.source === 'whatsapp' ? '🟢' : lead.source === 'instagram' ? '📷' : lead.source === 'facebook' ? '💬' : '🧪'} {lead.source}
+                            {CANAL_ICONE[lead.source] ?? '📱'} {lead.source}
                           </span>
                         )}
                         {!lead.aiEnabled && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">👤 humano</span>}

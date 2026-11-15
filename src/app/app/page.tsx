@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { PushSetup } from '@/components/push-setup'
 import { InstallButton } from '@/components/install-button'
+import { iconeCanal } from '@/lib/crm/canal-icone'
 
-type Conv = { id: string; leadId: string | null; channel: string; name: string; phone: string | null; lastText: string; lastAt: string | null; unread: boolean; stage: { name: string; color: string | null } | null }
+type Conv = { id: string; leadId: string | null; channel: string; origem?: string | null; name: string; phone: string | null; lastText: string; lastAt: string | null; unread: boolean; stage: { name: string; color: string | null } | null }
 
 // Formata o telefone BR para exibição: 5521999998888 → (21) 99999-8888
 function formatarTelefone(tel: string | null): string {
@@ -17,7 +18,6 @@ function formatarTelefone(tel: string | null): string {
   return tel
 }
 
-const canalIcone: Record<string, string> = { whatsapp: '🟢', instagram: '📷', facebook: '💬', simulator: '🧪', webchat: '🌐' }
 
 function quando(d: string | null): string {
   if (!d) return ''
@@ -119,7 +119,7 @@ export default function ConversasPage() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className={`truncate ${c.unread ? 'font-bold text-zinc-900' : 'font-medium text-zinc-800'}`}>
-                    <span className="mr-1 text-xs">{canalIcone[c.channel] ?? '📱'}</span>{c.name}
+                    {(() => { const ic = iconeCanal(c.channel, c.origem); return <span className="mr-1 text-xs" title={ic.titulo}>{ic.icone}</span> })()}{c.name}
                   </span>
                   <span className="text-[11px] text-zinc-400 shrink-0">{quando(c.lastAt)}</span>
                 </div>

@@ -3,17 +3,14 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { resolveConversation } from '@/app/actions/lead'
-
-const channelIcon: Record<string, string> = {
-  whatsapp: "🟢", instagram: "📷", facebook: "💬", simulator: "🧪", webchat: "🌐",
-}
+import { iconeCanal } from '@/lib/crm/canal-icone'
 
 type Conv = {
   id: string
   channel: string
   leadId: string | null
   contact: { name: string | null; phone: string | null } | null
-  lead: { highPriority: boolean; aiEnabled: boolean; humanOnly: boolean; createdAt: string; stage: { name: string; color: string | null } } | null
+  lead: { highPriority: boolean; aiEnabled: boolean; humanOnly: boolean; createdAt: string; source?: string | null; stage: { name: string; color: string | null } } | null
   messages: { direction: string; isRead: boolean; content: string; senderType: string }[]
   naoLidas?: number
   resolvedAt: string | null
@@ -70,7 +67,7 @@ export function InboxList({ conversations, verTodas }: { conversations: Conv[]; 
                   <div className="flex items-center gap-1.5">
                     {conv.lead?.highPriority && <span title="Prioridade total">⚡</span>}
                     <span className="font-medium text-sm truncate">{conv.contact?.name ?? conv.contact?.phone ?? 'Desconhecido'}</span>
-                    <span className="text-xs">{channelIcon[conv.channel] ?? '📱'}</span>
+                    {(() => { const ic = iconeCanal(conv.channel, conv.lead?.source); return <span className="text-xs shrink-0" title={ic.titulo}>{ic.icone}</span> })()}
                     {isNew && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 uppercase tracking-wide shrink-0">Novo</span>}
                     {conv.lead && (
                       <span className="text-[11px] px-1.5 py-0.5 rounded-full border border-[--border] ml-auto shrink-0"

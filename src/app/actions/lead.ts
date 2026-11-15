@@ -238,35 +238,8 @@ export async function moveLeadStage(leadId: string, stageId: string) {
     }
   }
 
-  // 🆕 Nervo: lead ganho/perdido → publica o desfecho pro Mind Marketing (receita real, sem
-  // depender de atribuição por campanha). Melhor esforço: nunca desfaz a troca de estágio.
-  if (stage?.isWon || stage?.isLost) {
-    try {
-      const { getCrmNervo } = await import('@/lib/nervo/fromEnv')
-      const nervo = getCrmNervo()
-      if (nervo) {
-        const full = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
-        // Canal de ORIGEM do lead (quem veio do Instagram e fechou pelo WhatsApp conta para o Instagram);
-        // sem origem conhecida, o canal da conversa mais recente. + anúncio de origem (CTWA ou DM de anúncio).
-        const origens = ['facebook', 'instagram', 'whatsapp']
-        const conv = full?.source && origens.includes(full.source) ? null
-          : await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' }, select: { channel: true } })
-        const canal = full?.source && origens.includes(full.source) ? full.source : conv?.channel ?? null
-        const sourceChannel = canal === 'facebook' || canal === 'instagram' || canal === 'whatsapp' ? canal : null
-        const adId = (full?.contact?.adReferral as { source_id?: unknown } | null)?.source_id
-        const outcome = {
-          leadId,
-          contactPhone: full?.contact?.phone ?? null,
-          sourceChannel,
-          sourceAdId: typeof adId === 'string' && adId.trim() ? adId.trim().slice(0, 128) : null,
-        }
-        if (stage?.isWon) await nervo.publishLeadWon({ ...outcome, valueReais: full?.value ?? 0 })
-        else await nervo.publishLeadLost(outcome)
-      }
-    } catch (e) {
-      console.error('[nervo] publicar desfecho do lead falhou (ignorado):', e)
-    }
-  }
+  // 🆕 Nervo: o desfecho para o Mind Marketing (qualificado / venda ganha / perdida) sai no `enterStage`
+  //    abaixo — o mesmo caminho da IA e dos fluxos (leadOutcome.ts).
 
   // ⚡ As mensagens automáticas da etapa nova (com o "tempo de digitação" simulado) saem em SEGUNDO
   //    PLANO — antes o botão esperava tudo terminar e a tela travava de 4 a 30 s por mensagem.

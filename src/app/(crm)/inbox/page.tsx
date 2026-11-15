@@ -35,6 +35,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         aiEnabled: conv.lead.aiEnabled,
         humanOnly: conv.lead.humanOnly,
         createdAt: conv.lead.createdAt.toISOString(),
+        source: conv.lead.source ?? null,
         stage: { name: conv.lead.stage.name, color: conv.lead.stage.color },
       } : null,
       messages: conv.messages.map((m) => ({

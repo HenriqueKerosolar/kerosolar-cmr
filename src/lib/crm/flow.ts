@@ -349,6 +349,14 @@ export async function enterStage(leadId: string, stageId: string) {
     data: { done: true },
   }).catch(() => {})
 
+  // 📈 Desfecho para o Mind Marketing: lead qualificado (passou do financiamento) e venda ganha/perdida
+  //    ("Fechou") — uma vez cada por lead. Vale para troca manual, pela IA ou pelo fluxo (todas passam
+  //    por aqui). Melhor esforço, nunca lança.
+  {
+    const { publicarDesfechoAoEntrar } = await import('@/lib/nervo/leadOutcome')
+    await publicarDesfechoAoEntrar(leadId, stageId)
+  }
+
   // IA pausada (operador assumiu → aiEnabled=false) OU cliente recusou bot (humanOnly) →
   // nenhuma automação dispara, INCLUSIVE a mensagem de abertura da etapa. Mover de etapa com a
   // IA desligada NÃO pode fazer o bot voltar a mandar mensagem (ex.: recepção de "Já é cliente").

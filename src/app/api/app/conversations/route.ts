@@ -18,6 +18,7 @@ export async function GET() {
       id: c.id,
       leadId: c.leadId,
       channel: c.channel,
+      origem: c.lead?.source ?? null,
       name: c.contact?.name || c.contact?.phone || 'Cliente',
       phone: c.contact?.phone || null,
       lastText: last ? (last.direction === 'outbound' ? (last.senderType === 'ai' ? '🤖 ' : '✓ ') : '') + (last.content || '') : '',

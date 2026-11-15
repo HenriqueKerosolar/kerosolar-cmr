@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
     name: conv.contact?.name || conv.contact?.phone || 'Cliente',
     leadId: conv.leadId,
     channel: conv.channel,
+    origem: conv.lead?.source ?? null,
     stageId: conv.lead?.stageId ?? null,
     stageName: conv.lead?.stage?.name ?? null,
     stageColor: conv.lead?.stage?.color ?? null,

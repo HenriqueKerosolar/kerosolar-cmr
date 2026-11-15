@@ -1,7 +1,8 @@
 // Este CRM como sistema do ecossistema (Nervo): publica o desfecho comercial do lead (lead.won / lead.lost)
 // para o Mind Marketing, que já assina esses eventos e grava como conversão real (receita de verdade —
 // hoje toda venda aparece "sem atribuição" do lado do Marketing). Tudo passa pelo Nervo Central (o Mind);
-// nada de conector avulso. `lead.qualified` fica de fora: não há estágio "isQualified" no schema deste CRM.
+// nada de conector avulso. `lead.qualified` (15/11/2026): lead que passa da etapa "Financiamento pedido de
+// documentos" — a regra fica em leadOutcome.ts.
 //
 // Pareamento automático (igual ao Mind Marketing): a única configuração é o endereço do Mind
 // (NERVO_BASE_URL). O dono aceita UM pedido no painel do Mind e a credencial (Key, tenant, segredo de
@@ -73,6 +74,8 @@ export interface CrmNervo {
   publishLeadWon(input: LeadWonInput): Promise<void>
   /** Melhor esforço: NUNCA lança. */
   publishLeadLost(input: LeadOutcomeInput): Promise<void>
+  /** Lead qualificado (uma vez por lead). NUNCA lança: `queued`, `unpaired` (CRM não conectado) ou `error`. */
+  publishLeadQualified(input: LeadOutcomeInput): Promise<'queued' | 'unpaired' | 'error'>
   /** Registra um handler pra um evento que o Mind entrega (ex.: `social.engagement.captured`). */
   on(type: string, handler: EventHandler): void
   /** Ponto de entrada do que o Mind entrega — ligue à rota HTTP de inbound deste CRM. */
@@ -109,7 +112,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
       store: createPostgresConnectionStore(deps.query),
       outbox: createPostgresOutbox(deps.query),
       inbox: createPostgresInbox(deps.query),
-      provides: { events: [{ type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }, { type: 'social.comment.reply' }] },
+      provides: { events: [{ type: 'lead.qualified' }, { type: 'lead.won' }, { type: 'lead.lost' }, { type: 'social.message.send' }, { type: 'social.comment.reply' }] },
       seal: { secrets: config.sealSecrets },
       timeoutMs: 8_000,
       retries: 1,
@@ -134,7 +137,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
     }
   }
 
-  async function publish(type: 'lead.won' | 'lead.lost', input: LeadOutcomeInput, valueCents: number | undefined): Promise<void> {
+  async function publish(type: 'lead.qualified' | 'lead.won' | 'lead.lost', input: LeadOutcomeInput, valueCents: number | undefined): Promise<'queued' | 'unpaired' | 'error'> {
     try {
       // Avança o pareamento (1º pedido ao Mind, ou confere se o dono já aceitou) antes de publicar: é o
       // único gatilho "por evento" deste CRM — sem isso, nada jamais pede o pareamento ao Mind. Melhor
@@ -153,19 +156,22 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
         },
         { correlationId: `${input.leadId}:${type}` },
       )
+      return 'queued'
     } catch (error) {
       if (isNervoError(error) && error.code === 'NERVO_UNPAIRED') {
         // Esperado enquanto o dono não aceitou o pedido no Mind (ou depois de uma revogação): a peça não enfileira sem tenant.
         log('info', `Nervo: ${type} não enviado porque o CRM ainda não está conectado ao Mind (o lead já foi movido aqui)`, { leadId: input.leadId })
-        return
+        return 'unpaired'
       }
       log('warn', `Nervo: não consegui publicar ${type} (o lead já foi movido no CRM; o evento não foi enviado)`, { error: errorText(error), leadId: input.leadId })
+      return 'error'
     }
   }
 
   return {
-    publishLeadWon: (input) => publish('lead.won', input, Math.round(input.valueReais * 100)),
-    publishLeadLost: (input) => publish('lead.lost', input, undefined),
+    publishLeadWon: async (input) => { await publish('lead.won', input, Math.round(input.valueReais * 100)) },
+    publishLeadLost: async (input) => { await publish('lead.lost', input, undefined) },
+    publishLeadQualified: (input) => publish('lead.qualified', input, undefined),
     on: (type, handler) => connection.on(type, handler),
     receive: (req) => connection.receive(req),
     publishSocialMessageSend: (payload) => pedir('social.message.send', payload, payload.requestId),

@@ -244,6 +244,13 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       where: { contactId: contact.id, status: 'open' },
       orderBy: { createdAt: 'desc' },
     })
+    // Cliente que JÁ COMPROU ("Fechou" = venda ganha → status won) e escreve de novo continua no MESMO
+    // cartão (pós-venda: homologação, instalação...). Sem isso cada mensagem abria um lead novo na Chegada
+    // e a IA voltava a vender para quem já comprou. Lead PERDIDO segue a regra antiga (novo atendimento).
+    ?? await prisma.lead.findFirst({
+      where: { contactId: contact.id, status: 'won' },
+      orderBy: { closedAt: 'desc' },
+    })
   if (!lead) {
     isNewLead = true
     // 📷 Lead novo do Facebook/Instagram entra na etapa própria "Chegada Insta/Face" (pedido do dono, 14/11/2026),
