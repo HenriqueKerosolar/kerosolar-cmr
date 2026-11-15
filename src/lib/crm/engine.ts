@@ -1131,7 +1131,12 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     const reclama = /(nao recebi|nao chegou|nao veio|ningu[eé]m (me )?respond|nao (me )?respond|manda(r)?( de)? novo|reenvi|cad[eê].*or[çc]amento|pedi.*or[çc]amento|or[çc]amento.*(nao|ningu)|(duas|tr[eê]s|v[aá]rias) vezes)/.test(txtR2)
     if (reclama) {
       const { dispatchOutbound } = await import('./flow')
-      const intro = 'Olha, seu orçamento já está pronto sim! 😊 Desculpa se não chegou direitinho antes — segue ele novamente pra você:'
+      // Só pede desculpa quando o cliente RECLAMA (não recebeu, ninguém respondeu, pediu várias vezes).
+      // Pedido simples ("me reenvia por aqui", "manda de novo") → resposta direta, sem desculpa.
+      const reclamacao = /(nao recebi|nao chegou|nao veio|ningu[eé]m (me )?respond|nao (me )?respond|cad[eê].*or[çc]amento|or[çc]amento.*(nao|ningu)|(duas|tr[eê]s|v[aá]rias) vezes)/.test(txtR2)
+      const intro = reclamacao
+        ? 'Desculpa! 😊 Seu orçamento já está pronto, segue aqui pra você:'
+        : 'Claro! 😊 Segue seu orçamento aqui:'
       await simularDigitacao(intro)
       await dispatchOutbound(conversation.id, intro, undefined, 'ai')
       await new Promise((r) => setTimeout(r, 1500))
