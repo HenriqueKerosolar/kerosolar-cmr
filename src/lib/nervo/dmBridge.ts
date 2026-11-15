@@ -50,14 +50,19 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
   const campo = input.channel === 'facebook' ? 'facebookId' : 'instagramId'
   const bridge: MetaBridge = { clientAccountId: input.clientAccountId, pageId: input.pageId, channel: input.channel }
   const existente = await prisma.contact.findFirst({ where: { [campo]: input.senderId }, select: { id: true, customFields: true, name: true } })
+  // Anúncio de origem (clique no anúncio → DM): guardado no mesmo campo do CTWA do WhatsApp (`adReferral.source_id`),
+  // para o desfecho do lead (lead.won/lost) levar o `sourceAdId` ao painel do Marketing.
+  const anuncio = input.referral?.adId
+    ? { adReferral: { source_id: input.referral.adId, source: input.referral.source ?? null, ref: input.referral.ref ?? null, channel: input.channel, capturedAt: new Date().toISOString() } as object }
+    : {}
   if (existente) {
     const cf = (existente.customFields as Record<string, unknown> | null) ?? {}
     await prisma.contact.update({
       where: { id: existente.id },
-      data: { customFields: { ...cf, metaBridge: bridge } as object, ...(!existente.name && input.senderName ? { name: input.senderName } : {}) },
+      data: { customFields: { ...cf, metaBridge: bridge } as object, ...anuncio, ...(!existente.name && input.senderName ? { name: input.senderName } : {}) },
     })
   } else {
-    await prisma.contact.create({ data: { [campo]: input.senderId, name: input.senderName ?? null, customFields: { metaBridge: bridge } as object } })
+    await prisma.contact.create({ data: { [campo]: input.senderId, name: input.senderName ?? null, customFields: { metaBridge: bridge } as object, ...anuncio } })
   }
 
   // 2) Atende pelo mesmo motor do WhatsApp.
@@ -91,6 +96,25 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
   if (result.followUp) {
     const { dispatchOutbound } = await import('@/lib/crm/flow')
     await dispatchOutbound(result.conversationId, result.followUp, undefined, 'ai').catch(() => {})
+  }
+
+  // 4) Interesse real (mandou a conta, pediu orçamento por kWh/R$, vai conversar com a esposa...) → convida
+  //    UMA vez para seguir no WhatsApp, com o link que junta tudo no mesmo lead (convite-whatsapp.ts).
+  try {
+    const { interesseReal, criarConviteWhatsapp } = await import('@/lib/crm/convite-whatsapp')
+    const mandouArquivo = !!imagem || (input.attachments ?? []).some((a) => /file|pdf|document/i.test(a.type))
+    if (interesseReal(input.text, mandouArquivo)) {
+      const conv = await prisma.conversation.findUnique({ where: { id: result.conversationId }, select: { aiEnabled: true, lead: { select: { aiEnabled: true, humanOnly: true } } } })
+      if (conv?.aiEnabled && conv.lead?.aiEnabled && !conv.lead.humanOnly) {
+        const texto = await criarConviteWhatsapp(result.contactId, result.leadId, input.channel)
+        if (texto) {
+          const { dispatchOutbound } = await import('@/lib/crm/flow')
+          await dispatchOutbound(result.conversationId, texto, undefined, 'ai')
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[dm] convite para o WhatsApp falhou (ignorado):', e)
   }
 }
 

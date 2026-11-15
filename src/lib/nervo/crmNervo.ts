@@ -57,6 +57,10 @@ export interface SocialCommentReplyPayload {
 export interface LeadOutcomeInput {
   leadId: string
   contactPhone?: string | null
+  /** Canal da conversa do lead (painel do Marketing compara custo/qualidade por canal). Opcional. */
+  sourceChannel?: 'facebook' | 'instagram' | 'whatsapp' | null
+  /** Anúncio de origem (id do anúncio da Meta). Opcional. */
+  sourceAdId?: string | null
 }
 
 export interface LeadWonInput extends LeadOutcomeInput {
@@ -144,6 +148,8 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
           ...(valueCents !== undefined ? { valueCents, currency: 'BRL' } : {}),
           occurredAt: new Date().toISOString(),
           ...(input.contactPhone ? { contactPhone: input.contactPhone } : {}),
+          ...(input.sourceChannel ? { sourceChannel: input.sourceChannel } : {}),
+          ...(input.sourceAdId ? { sourceAdId: input.sourceAdId } : {}),
         },
         { correlationId: `${input.leadId}:${type}` },
       )

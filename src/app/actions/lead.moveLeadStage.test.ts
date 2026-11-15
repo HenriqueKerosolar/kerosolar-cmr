@@ -9,10 +9,12 @@ const leadFindUnique = vi.fn()
 const leadUpdate = vi.fn().mockResolvedValue(undefined)
 const stageFindUnique = vi.fn()
 const noteCreate = vi.fn().mockResolvedValue(undefined)
+const conversationFindFirst = vi.fn().mockResolvedValue(null)
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     lead: { findUnique: leadFindUnique, update: leadUpdate },
+    conversation: { findFirst: conversationFindFirst },
     stage: { findUnique: stageFindUnique },
     note: { create: noteCreate },
   },
@@ -42,7 +44,7 @@ describe('moveLeadStage — publicação no Nervo (lead.won / lead.lost)', () =>
     await moveLeadStage('lead1', 'stage-won')
 
     expect(leadUpdate).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'lead1' }, data: expect.objectContaining({ stageId: 'stage-won', status: 'won' }) }))
-    expect(publishLeadWon).toHaveBeenCalledWith({ leadId: 'lead1', contactPhone: '5511999998888', valueReais: 1500 })
+    expect(publishLeadWon).toHaveBeenCalledWith({ leadId: 'lead1', contactPhone: '5511999998888', valueReais: 1500, sourceChannel: null, sourceAdId: null })
     expect(publishLeadLost).not.toHaveBeenCalled()
   })
 
@@ -54,8 +56,19 @@ describe('moveLeadStage — publicação no Nervo (lead.won / lead.lost)', () =>
     await moveLeadStage('lead2', 'stage-lost')
 
     expect(leadUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'lost' }) }))
-    expect(publishLeadLost).toHaveBeenCalledWith({ leadId: 'lead2', contactPhone: null })
+    expect(publishLeadLost).toHaveBeenCalledWith({ leadId: 'lead2', contactPhone: null, sourceChannel: null, sourceAdId: null })
     expect(publishLeadWon).not.toHaveBeenCalled()
+  })
+
+  it('desfecho leva o canal da conversa e o anúncio de origem', async () => {
+    leadFindUnique.mockResolvedValue({ id: 'lead7', stageId: 'stage-open', value: 900, source: 'instagram', contact: { phone: null, ctwaClid: null, adReferral: { source_id: '1202000001' } } })
+    stageFindUnique.mockResolvedValue(WON_STAGE)
+    conversationFindFirst.mockResolvedValueOnce({ channel: 'instagram' })
+
+    const { moveLeadStage } = await import('./lead')
+    await moveLeadStage('lead7', 'stage-won')
+
+    expect(publishLeadWon).toHaveBeenCalledWith({ leadId: 'lead7', contactPhone: null, valueReais: 900, sourceChannel: 'instagram', sourceAdId: '1202000001' })
   })
 
   it('não publica nada quando a etapa de destino não é ganha nem perdida', async () => {

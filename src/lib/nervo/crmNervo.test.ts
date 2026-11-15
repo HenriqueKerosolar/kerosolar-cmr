@@ -53,6 +53,18 @@ describe('createCrmNervo', () => {
     expect(payload).not.toHaveProperty('valueCents')
     expect(payload).not.toHaveProperty('contactPhone')
     expect(payload).toMatchObject({ clientAccountId: config.mindMarketingClientAccountId, leadId: 'lead2' })
+    expect(payload).not.toHaveProperty('sourceChannel')
+    expect(payload).not.toHaveProperty('sourceAdId')
+  })
+
+  it('desfecho leva o canal e o anúncio de origem quando o CRM sabe', async () => {
+    const publish = vi.fn().mockResolvedValue({ id: 'evt9', duplicate: false, queued: true })
+    const nervo = nervoWith(publish)
+
+    await nervo.publishLeadWon({ leadId: 'lead9', valueReais: 10, sourceChannel: 'instagram', sourceAdId: '120200000000001' })
+
+    const [, payload] = publish.mock.calls[0]!
+    expect(payload).toMatchObject({ sourceChannel: 'instagram', sourceAdId: '120200000000001' })
   })
 
   it('falha de rede (ou qualquer erro do Nervo) nunca lança — é melhor esforço', async () => {

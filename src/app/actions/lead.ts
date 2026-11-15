@@ -246,7 +246,20 @@ export async function moveLeadStage(leadId: string, stageId: string) {
       const nervo = getCrmNervo()
       if (nervo) {
         const full = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
-        const outcome = { leadId, contactPhone: full?.contact?.phone ?? null }
+        // Canal de ORIGEM do lead (quem veio do Instagram e fechou pelo WhatsApp conta para o Instagram);
+        // sem origem conhecida, o canal da conversa mais recente. + anúncio de origem (CTWA ou DM de anúncio).
+        const origens = ['facebook', 'instagram', 'whatsapp']
+        const conv = full?.source && origens.includes(full.source) ? null
+          : await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' }, select: { channel: true } })
+        const canal = full?.source && origens.includes(full.source) ? full.source : conv?.channel ?? null
+        const sourceChannel = canal === 'facebook' || canal === 'instagram' || canal === 'whatsapp' ? canal : null
+        const adId = (full?.contact?.adReferral as { source_id?: unknown } | null)?.source_id
+        const outcome = {
+          leadId,
+          contactPhone: full?.contact?.phone ?? null,
+          sourceChannel,
+          sourceAdId: typeof adId === 'string' && adId.trim() ? adId.trim().slice(0, 128) : null,
+        }
         if (stage?.isWon) await nervo.publishLeadWon({ ...outcome, valueReais: full?.value ?? 0 })
         else await nervo.publishLeadLost(outcome)
       }

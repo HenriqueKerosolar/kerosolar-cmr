@@ -172,7 +172,15 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // 1) Contato
   const idField   = channelIdField(channel)
   const matchPhone = input.phone ?? (idField ? null : externalId)
+  // 📲 Cliente veio do Instagram/Facebook pelo link do convite (mensagem com o código) → junta o WhatsApp
+  //    ao MESMO contato e lead do Direct (convite-whatsapp.ts).
+  let convite: { contactId: string; leadId: string } | null = null
+  if (channel === 'whatsapp' && /c[oó]d/i.test(text)) {
+    const { resolverConviteWhatsapp } = await import('./convite-whatsapp')
+    convite = await resolverConviteWhatsapp(text, externalId, input.phone).catch((e) => { console.error('[convite whatsapp]', e); return null })
+  }
   let contact =
+    (convite ? await prisma.contact.findUnique({ where: { id: convite.contactId } }) : null) ||
     (idField ? await prisma.contact.findFirst({ where: { [idField]: externalId } }) : null) ||
     (matchPhone ? await prisma.contact.findFirst({ where: { phone: matchPhone } }) : null)
 
@@ -228,17 +236,26 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
 
   // 3) Lead
   let isNewLead = false
-  let lead = await prisma.lead.findFirst({
-    where: { contactId: contact.id, status: 'open' },
-    orderBy: { createdAt: 'desc' },
-  })
+  // Lead da conversa (aberto) tem preferência: um contato pode ter mais de um lead aberto depois de
+  // juntar Direct + WhatsApp, e cada conversa já sabe a qual lead pertence.
+  const leadPreferido = convite?.leadId ?? conversation.leadId
+  let lead = (leadPreferido ? await prisma.lead.findFirst({ where: { id: leadPreferido, contactId: contact.id, status: 'open' } }) : null)
+    ?? await prisma.lead.findFirst({
+      where: { contactId: contact.id, status: 'open' },
+      orderBy: { createdAt: 'desc' },
+    })
   if (!lead) {
     isNewLead = true
+    // 📷 Lead novo do Facebook/Instagram entra na etapa própria "Chegada Insta/Face" (pedido do dono, 14/11/2026),
+    //    se ela existir no funil; os demais canais entram na primeira etapa (Chegada).
+    const etapaEntrada = (channel === 'facebook' || channel === 'instagram')
+      ? (pipeline.stages.find((s) => /^chegada insta\/face$/i.test(s.name.trim())) ?? firstStage)
+      : firstStage
     lead = await prisma.lead.create({
       data: {
         title:      contact.name ?? `Lead ${channel}`,
         pipelineId: pipeline.id,
-        stageId:    firstStage.id,
+        stageId:    etapaEntrada.id,
         contactId:  contact.id,
         source:     channel,
       },
@@ -313,6 +330,19 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
     reply: null, aiHandled: false, handoff: false,
     stage: pipeline.stages.find((s) => s.id === lead!.stageId)?.name ?? firstStage.name,
+  }
+
+  // 📲 Chegou pelo link do convite (Instagram/Facebook → WhatsApp): recebe o cliente sem recomeçar.
+  //    A IA já enxerga o que foi conversado no Direct (histórico do lead inteiro, ver "5) Agente IA").
+  if (convite && !lead.humanOnly && !isSimulator) {
+    const jaRecebido = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })
+    if (!jaRecebido) {
+      const nome = (contact.name ?? '').trim().split(/\s+/)[0]
+      const msg = `Oi${nome ? `, ${nome}` : ''}! Que bom te ver por aqui 😊 Já estou com tudo o que conversamos, vamos continuar de onde paramos. Como posso te ajudar?`
+      const { dispatchOutbound } = await import('./flow')
+      await dispatchOutbound(conversation.id, msg, undefined, 'ai')
+      return { ...base, reply: null, aiHandled: true }
+    }
   }
 
   // 🔁 Cliente REENVIOU a mesma mensagem (clique duplo, anúncio reenviado) em até 10 min e nós já
@@ -482,7 +512,9 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       // limpa o flowState da conversa
       await prisma.conversation.update({ where: { id: conversation.id }, data: { flowState: Prisma.DbNull } })
       // volta para a primeira etapa (Chegada)
-      const firstStage = pipeline.stages[0]
+      const firstStage = (channel === 'facebook' || channel === 'instagram')
+        ? (pipeline.stages.find((s) => /^chegada insta\/face$/i.test(s.name.trim())) ?? pipeline.stages[0])
+        : pipeline.stages[0]
       await prisma.lead.update({ where: { id: lead.id }, data: { stageId: firstStage.id, status: 'open', closedAt: null, afterHoursAsked: false, afterHoursProceed: false } })
       await prisma.note.create({ data: { leadId: lead.id, type: 'stage_change', content: 'Cliente pediu para reiniciar o atendimento — voltou para Chegada.' } })
       const { enterStage, dispatchOutbound } = await import('./flow')
@@ -895,8 +927,10 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // inverte → conversa em ordem cronológica. Assim a IA SEMPRE vê o contexto atual,
   // mesmo em conversas longas (>40 msgs) — antes pegava as 40 mais antigas e
   // perdia as mensagens recentes, deixando a IA sem ver a pergunta do cliente.
+  // Lê TODAS as conversas do lead (ex.: o cliente começou no Instagram e passou para o WhatsApp pelo
+  // convite): a IA continua de onde parou, sem perguntar de novo o que ele já respondeu.
   const msgsRaw = await prisma.message.findMany({
-    where: { conversationId: conversation.id },
+    where: { OR: [{ conversationId: conversation.id }, { conversation: { leadId: lead.id } }] },
     orderBy: { createdAt: 'desc' }, take: 40,
   })
   const msgs = msgsRaw.reverse()
