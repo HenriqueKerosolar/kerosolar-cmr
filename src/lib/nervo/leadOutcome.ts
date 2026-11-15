@@ -9,13 +9,43 @@
 import 'server-only'
 import { prisma } from '@/lib/prisma'
 import type { LeadOutcomeInput } from './crmNervo'
+import { montarJornada, type DadosJornada, type Jornada } from './jornada'
 
 const ORIGENS = ['facebook', 'instagram', 'whatsapp'] as const
 
-/** Campos comuns do desfecho: telefone, canal de ORIGEM do lead e anúncio de origem. */
-export async function montarDesfecho(leadId: string): Promise<{ input: LeadOutcomeInput; value: number } | null> {
+/** A jornada só vai quando o Marketing confirmou que aceita o campo (chave NERVO_SEND_JOURNEY=1 no Railway). */
+export function jornadaLigada(): boolean {
+  return process.env.NERVO_SEND_JOURNEY === '1'
+}
+
+/** Lê do banco o que a jornada precisa e monta (jornada.ts). Melhor esforço: erro → sem jornada. */
+async function lerJornada(leadId: string, lead: { createdAt: Date; stageId: string; customFields: unknown; contact: { customFields: unknown } | null }, fechadoEm: Date | null): Promise<Jornada | null> {
+  try {
+    const [notas, mensagens, etapa] = await Promise.all([
+      prisma.note.findMany({ where: { leadId }, orderBy: { createdAt: 'asc' }, select: { content: true, createdAt: true }, take: 500 }),
+      prisma.message.findMany({ where: { conversation: { leadId } }, orderBy: { createdAt: 'asc' }, select: { direction: true, senderType: true, content: true, createdAt: true }, take: 2000 }),
+      prisma.stage.findUnique({ where: { id: lead.stageId }, select: { name: true } }),
+    ])
+    const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+    const convite = ((lead.contact?.customFields as Record<string, unknown> | null)?.conviteWhats ?? null) as DadosJornada['convite']
+    return montarJornada({
+      notas, mensagens, etapaAtual: etapa?.name ?? null, leadCriadoEm: lead.createdAt,
+      qualificadoEm: typeof cf.qualificadoEm === 'string' ? cf.qualificadoEm : null, convite, leadId,
+    }, fechadoEm)
+  } catch (e) {
+    console.error('[nervo] montar jornada falhou (segue sem ela):', e)
+    return null
+  }
+}
+
+/**
+ * Campos comuns do desfecho: telefone, canal de ORIGEM do lead, anúncio de origem e (quando ligada) a
+ * jornada. `fechadoEm` = momento da venda ganha/perdida (null no lead.qualified).
+ */
+export async function montarDesfecho(leadId: string, fechadoEm: Date | null = null): Promise<{ input: LeadOutcomeInput; value: number } | null> {
   const full = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
   if (!full) return null
+  const journey = jornadaLigada() ? await lerJornada(leadId, full, fechadoEm) : null
   // Canal de ORIGEM (quem veio do Instagram e fechou pelo WhatsApp conta para o Instagram); sem origem
   // conhecida, o canal da conversa mais recente.
   const origem = full.source && (ORIGENS as readonly string[]).includes(full.source) ? full.source : null
@@ -30,6 +60,7 @@ export async function montarDesfecho(leadId: string): Promise<{ input: LeadOutco
       contactPhone: full.contact?.phone ?? null,
       sourceChannel,
       sourceAdId: typeof adId === 'string' && adId.trim() ? adId.trim().slice(0, 128) : null,
+      ...(journey ? { journey: journey as unknown as Record<string, unknown> } : {}),
     },
   }
 }
@@ -74,7 +105,7 @@ export async function publicarDesfechoAoEntrar(leadId: string, stageId: string):
     const { getCrmNervo } = await import('./fromEnv')
     const nervo = getCrmNervo()
     if (!nervo) return
-    const desfecho = await montarDesfecho(leadId)
+    const desfecho = await montarDesfecho(leadId, new Date())
     if (!desfecho) return
     if (stage.isWon) await nervo.publishLeadWon({ ...desfecho.input, valueReais: desfecho.value })
     else await nervo.publishLeadLost(desfecho.input)

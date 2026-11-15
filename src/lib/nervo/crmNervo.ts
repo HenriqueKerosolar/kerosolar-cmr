@@ -62,6 +62,8 @@ export interface LeadOutcomeInput {
   sourceChannel?: 'facebook' | 'instagram' | 'whatsapp' | null
   /** Anúncio de origem (id do anúncio da Meta). Opcional. */
   sourceAdId?: string | null
+  /** Jornada do lead no funil (leadOutcome.ts → montarJornada). Opcional; só vai quando combinado com o Marketing. */
+  journey?: Record<string, unknown> | null
 }
 
 export interface LeadWonInput extends LeadOutcomeInput {
@@ -153,6 +155,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
           ...(input.contactPhone ? { contactPhone: input.contactPhone } : {}),
           ...(input.sourceChannel ? { sourceChannel: input.sourceChannel } : {}),
           ...(input.sourceAdId ? { sourceAdId: input.sourceAdId } : {}),
+          ...(input.journey ? { journey: input.journey } : {}),
         },
         { correlationId: `${input.leadId}:${type}` },
       )

@@ -268,7 +268,8 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       },
     })
     await prisma.note.create({
-      data: { leadId: lead.id, type: 'system', content: `Lead criado via ${channel}.` },
+      // A etapa de entrada fica na nota: é o início da jornada que vai para o Mind Marketing (leadOutcome.ts).
+      data: { leadId: lead.id, type: 'system', content: `Lead criado via ${channel} — entrou em "${etapaEntrada.name}".` },
     })
   }
   // Atualiza a conversa: vincula ao lead e ADOTA a conta de origem da mensagem. Assim, quando um
