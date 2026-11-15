@@ -41,6 +41,16 @@ describe('createCrmNervo', () => {
     expect(opts).toMatchObject({ correlationId: 'lead1:lead.won' })
   })
 
+  it('lead.won com messaging (veio de Messenger/Instagram) inclui pageId e senderId no payload', async () => {
+    const publish = vi.fn().mockResolvedValue({ id: 'evt1b', duplicate: false, queued: true })
+    const nervo = nervoWith(publish)
+
+    await nervo.publishLeadWon({ leadId: 'lead1b', valueReais: 10, messaging: { pageId: '123', senderId: 'psid-abc' } })
+
+    const [, payload] = publish.mock.calls[0]!
+    expect(payload).toMatchObject({ messaging: { pageId: '123', senderId: 'psid-abc' } })
+  })
+
   it('lead.lost publica sem valor e sem telefone quando o contato não tem telefone', async () => {
     const publish = vi.fn().mockResolvedValue({ id: 'evt2', duplicate: false, queued: true })
     const nervo = nervoWith(publish)

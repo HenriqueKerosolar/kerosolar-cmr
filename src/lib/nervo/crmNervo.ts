@@ -34,6 +34,9 @@ export interface CrmNervoDeps {
 export interface LeadOutcomeInput {
   leadId: string
   contactPhone?: string | null
+  /** Só quando o lead veio de Messenger/Instagram Direct — pro Marketing casar a venda com o clique do
+   * anúncio via Meta CAPI (Conversions API for Messaging). `senderId` é o PSID/IGSID (Conversation.externalId). */
+  messaging?: { pageId: string; senderId: string } | null
 }
 
 export interface LeadWonInput extends LeadOutcomeInput {
@@ -90,6 +93,7 @@ export function createCrmNervo(deps: CrmNervoDeps): CrmNervo {
           ...(valueCents !== undefined ? { valueCents, currency: 'BRL' } : {}),
           occurredAt: new Date().toISOString(),
           ...(input.contactPhone ? { contactPhone: input.contactPhone } : {}),
+          ...(input.messaging ? { messaging: input.messaging } : {}),
         },
         { correlationId: `${input.leadId}:${type}` },
       )

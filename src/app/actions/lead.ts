@@ -246,7 +246,17 @@ export async function moveLeadStage(leadId: string, stageId: string) {
       const nervo = getCrmNervo()
       if (nervo) {
         const full = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })
-        const outcome = { leadId, contactPhone: full?.contact?.phone ?? null }
+        // Veio de Messenger/Instagram Direct → o Marketing casa a venda com o clique do anúncio (Meta
+        // CAPI Messaging). Sem isso o Marketing só ignora o campo, nunca falha a publicação.
+        let messaging: { pageId: string; senderId: string } | null = null
+        if (full?.source === 'facebook' || full?.source === 'instagram') {
+          const [conv, integ] = await Promise.all([
+            prisma.conversation.findFirst({ where: { leadId, channel: full.source } }),
+            prisma.channelIntegration.findUnique({ where: { channel: full.source } }),
+          ])
+          if (conv?.externalId && integ?.externalId) messaging = { pageId: integ.externalId, senderId: conv.externalId }
+        }
+        const outcome = { leadId, contactPhone: full?.contact?.phone ?? null, messaging }
         if (stage?.isWon) await nervo.publishLeadWon({ ...outcome, valueReais: full?.value ?? 0 })
         else await nervo.publishLeadLost(outcome)
       }
