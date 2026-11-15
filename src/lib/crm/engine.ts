@@ -721,6 +721,24 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     return { ...base, aiHandled: true, stage: tgt?.name ?? base.stage }
   }
 
+  // 🏦 COMO É FEITO O FINANCIAMENTO / DOCUMENTOS / APROVAÇÃO (regra do dono, 14/11/2026) — resposta FIXA, sem
+  //    depender da IA: a IA chegou a responder "vou confirmar" e até reenviar o orçamento para essa pergunta.
+  if (aiOn && !lead.humanOnly) {
+    const nf = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const falaFinanciamento = /financ|credito|aprovad|aprovac|pre.?aprov/.test(nf)
+    const perguntaComo = /\bcomo (e|eh|funciona|faz|faco|fazer|seria|consigo|sei)\b|\b(quais|que) (documentos?|dados|papeis|precis\w*)\b|\bdocumentos?\b|\bo que (precisa|preciso|e preciso)\b|\banalise\b|\baprovad|\baprovac|pre.?aprov/.test(nf)
+    const temNumero = /\d/.test(nf)   // "financiamento em 60x", "entrada de 3 mil" → simulação, não esta resposta
+    if (falaFinanciamento && perguntaComo && !temNumero) {
+      const msgFin = 'Para ver se tem financiamento aprovado preciso de: *Nome completo*, *CPF*, *CEP*, *Data de nascimento*, *E-mail* e *Telefone*. 😊\n\n'
+        + 'O ideal é que a conta de luz esteja no nome de quem vai financiar — ou de pai, mãe ou filhos. Pode me mandar esses dados por aqui que eu já faço a análise!'
+      const { dispatchOutbound } = await import('./flow')
+      await simularDigitacao(msgFin)
+      await dispatchOutbound(conversation.id, msgFin, undefined, 'ai', undefined, true)
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: 'Cliente perguntou como funciona o financiamento — pedidos os 6 dados para a análise de crédito.' } }).catch(() => {})
+      return { ...base, reply: null, aiHandled: true }
+    }
+  }
+
   // 💳💰 SIMULAÇÃO DE PAGAMENTO (cartão / financiamento / entrada) — unificado, com MEMÓRIA de
   //    contexto (cf.simMode, cf.cartaoParcelas, cf.entrada). Intercepta só pedidos CLAROS de cartão
   //    ou de entrada/sinal; perguntas genéricas de prazo do financiamento ("em 24x") ficam com a IA
