@@ -3,9 +3,13 @@
 import { useState } from 'react'
 
 type Stage = { id: string; name: string }
+type Template = { id: string; displayName: string; bodyText: string; headerType: string | null }
 
-export function BroadcastButton({ stages }: { stages: Stage[] }) {
+export function BroadcastButton({ stages, templates = [] }: { stages: Stage[]; templates?: Template[] }) {
   const [open, setOpen] = useState(false)
+  // '' = mensagem livre (só chega a quem falou nas últimas 24h); id = template aprovado (chega a todos)
+  const [templateId, setTemplateId] = useState('')
+  const tpl = templates.find((t) => t.id === templateId)
   const [stageId, setStageId] = useState(stages[0]?.id ?? '')
   const [text, setText] = useState('')
   const [mediaUrl, setMediaUrl] = useState('')
@@ -42,12 +46,16 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
   }
 
   async function send() {
-    if (!stageId || !text.trim()) return
+    if (!stageId || (!templateId && !text.trim())) return
+    if (templateId) {
+      const etapa = stages.find((s) => s.id === stageId)?.name ?? ''
+      if (!confirm(`Enviar o template "${tpl?.displayName}" para os leads da etapa "${etapa}"?\n\nA Meta cobra cada mensagem de template.`)) return
+    }
     setSending(true); setResult('')
     const res = await fetch('/api/crm/broadcast', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        stageId, text,
+        stageId, text, templateId: templateId || undefined,
         mediaUrl: mediaUrl || undefined, mediaType: mediaUrl ? 'image' : undefined,
         minDays: minDays ? Number(minDays) : undefined,
         maxDays: maxDays ? Number(maxDays) : undefined,
@@ -123,6 +131,18 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
               <section className="space-y-3 border-t border-[--border] pt-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">💬 Mensagem</p>
                 <div>
+                  <label className="block text-sm font-medium mb-1">Tipo</label>
+                  <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className={inputCls}>
+                    <option value="">Mensagem livre (só chega a quem falou nas últimas 24h)</option>
+                    {templates.map((t) => <option key={t.id} value={t.id}>{t.headerType === 'DOCUMENT' ? '📎 ' : '📄 '}Template: {t.displayName}</option>)}
+                  </select>
+                  {tpl && (
+                    <p className="text-[12px] text-[--muted-foreground] mt-2 whitespace-pre-wrap bg-[--muted]/40 rounded-lg px-3 py-2">
+                      {tpl.headerType === 'DOCUMENT' ? '📎 Com o arquivo anexado\n' : ''}{tpl.bodyText.replace(/\{\{1\}\}/g, 'Maria')}
+                    </p>
+                  )}
+                </div>
+                {!tpl && <><div>
                   <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4}
                     placeholder="Oi {nome}! Temos uma condição especial essa semana..."
                     className={inputCls} />
@@ -142,6 +162,7 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
                   <label className="block text-sm font-medium mb-1">Imagem/vídeo/PDF <span className="text-[--muted-foreground] font-normal">(opcional, URL)</span></label>
                   <input value={mediaUrl} onChange={(e) => setMediaUrl(e.target.value)} className={inputCls} />
                 </div>
+                </>}
               </section>
 
               <p className="text-[11px] text-[--muted-foreground] bg-[--muted]/40 rounded-lg px-3 py-2">
@@ -154,7 +175,7 @@ export function BroadcastButton({ stages }: { stages: Stage[] }) {
             {/* Rodapé */}
             <div className="flex gap-2 justify-end px-6 py-4 border-t border-[--border] sticky bottom-0 bg-white dark:bg-zinc-900 rounded-b-2xl">
               <button onClick={() => setOpen(false)} className="px-4 py-2 text-sm rounded-lg border border-[--border] hover:bg-[--accent]">Fechar</button>
-              <button onClick={send} disabled={sending || !text.trim()}
+              <button onClick={send} disabled={sending || (!templateId && !text.trim())}
                 className="px-5 py-2 rounded-lg bg-[--primary] text-[--primary-foreground] text-sm font-medium disabled:opacity-50">
                 {sending ? 'Agendando…' : '📣 Disparar'}
               </button>

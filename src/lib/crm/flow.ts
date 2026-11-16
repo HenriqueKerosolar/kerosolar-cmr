@@ -603,6 +603,42 @@ async function enviarBroadcastTemplate(a: { id: string; payload: unknown }): Pro
   console.log(`[broadcast] template "${pl.templateName}": ${ok} enviados, ${fail} falhas, ${skip} pulados (de ${convs.length} conversas)`)
 }
 
+/**
+ * 📎 Envia um TEMPLATE aprovado (com o arquivo do cabeçalho, se tiver — ex.: o ebook) para o lead de uma
+ *    ação `send_template`. payload: { templateId }. {{1}} = primeiro nome do cliente.
+ */
+async function enviarTemplateParaLead(a: { leadId: string; conversationId: string; payload: unknown }) {
+  const pl = (a.payload as { templateId?: string }) ?? {}
+  if (!pl.templateId) return
+  const t = await prisma.whatsappTemplate.findUnique({ where: { id: pl.templateId } })
+  if (!t || t.metaStatus !== 'APPROVED') { console.error(`[send_template] template ${pl.templateId} não está aprovado — não enviado`); return }
+  const conv = await prisma.conversation.findUnique({ where: { id: a.conversationId }, include: { contact: true, account: true } })
+  const phone = conv?.contact?.whatsappId || conv?.contact?.phone
+  if (!conv || !phone) return
+  const { numeroNaLista } = await import('./lists')
+  try { if (await numeroNaLista(phone, 'no_receive')) return } catch { /* segue */ }
+  const account = conv.account?.cloudPhoneNumberId ? conv.account
+    : await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
+  if (!account?.cloudPhoneNumberId) { console.error('[send_template] sem conta cloud configurada'); return }
+
+  const nome = conv.contact?.name?.trim().split(/\s+/)[0] || 'tudo bem'
+  const nVars = new Set([...t.bodyText.matchAll(/\{\{(\d+)\}\}/g)].map((m) => m[1])).size
+  const corpo = nVars ? [nome, ...Array(nVars - 1).fill('-')] : []
+  const { componentesDeEnvio } = await import('./template-meta')
+  const { sendCloudTemplate } = await import('./cloud-api')
+  const id = await sendCloudTemplate(account.cloudPhoneNumberId, phone, t.name, t.language || 'pt_BR', componentesDeEnvio(t, corpo))
+  if (!id) { console.error(`[send_template] Meta não aceitou o envio de "${t.name}" para o lead ${a.leadId}`); return }
+  const texto = t.bodyText.replace(/\{\{1\}\}/g, nome)
+  await prisma.message.create({
+    data: {
+      conversationId: conv.id, direction: 'outbound', senderType: 'ai', content: texto, externalId: id,
+      ...(t.headerUrl ? { mediaUrl: t.headerUrl, mediaType: t.headerType === 'IMAGE' ? 'image' : 'document' } : {}),
+    },
+  }).catch(() => {})
+  await prisma.conversation.update({ where: { id: conv.id }, data: { lastMessageAt: new Date() } }).catch(() => {})
+  await prisma.note.create({ data: { leadId: a.leadId, type: 'system', content: `📣 Template "${t.displayName}" enviado (lista de transmissão).` } }).catch(() => {})
+}
+
 /** Processa as ações agendadas vencidas. Chamado pelo poller. */
 export async function processDueActions() {
   const due = await prisma.scheduledAction.findMany({
@@ -673,6 +709,22 @@ export async function processDueActions() {
       if (a.type === 'broadcast_template') {
         const res = await enviarBroadcastTemplate(a)
         if (!res?.rescheduled) await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      if (a.type === 'send_template') {
+        // Disparo por TEMPLATE aprovado para um lead (lista de transmissão com template — ex.: ebook).
+        const ld = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { humanOnly: true, pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+        if (ld?.humanOnly) { await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {}); continue }
+        const janela = janelaDoFunil(ld?.pipeline?.sendStartHour, ld?.pipeline?.sendEndHour)
+        const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date(Math.max(Date.now(), cursor))), janela)
+        if (slot.getTime() > Date.now() + 2000) {
+          await prisma.scheduledAction.update({ where: { id: a.id }, data: { runAt: slot } })
+          cursor = slot.getTime() + 8000
+          continue
+        }
+        await enviarTemplateParaLead(a).catch((e) => console.error('[send_template] falhou:', e))
+        cursor = Date.now() + 8000
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
       if (a.type === 'flow_continue') {

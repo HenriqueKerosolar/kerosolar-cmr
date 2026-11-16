@@ -122,7 +122,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const run = (fn: () => Promise<unknown>) => startTransition(async () => { await fn(); router.refresh() })
 
   async function deletarMensagem(msgId: string) {
-    if (!confirm('Deletar esta mensagem?')) return
+    if (!confirm('Apagar esta mensagem do CRM?\n\n(O WhatsApp não deixa a empresa apagar do celular do cliente — se precisar, mande uma correção.)')) return
     try {
       const res = await fetch(`/api/leads/${lead.id}/messages/${msgId}/delete`, { method: 'DELETE' })
       if (res.ok) {
@@ -310,16 +310,17 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             if (m.senderType === 'system') return <div key={m.id} className="text-center"><span className="text-[11px] text-[--muted-foreground] bg-[--muted]/50 rounded-full px-2 py-0.5">{m.content} · {horaBrasilia(m.createdAt)}</span></div>
             const isIn = m.direction === 'inbound'
             const podeEditar = !isIn && m.senderType === 'human'
+            const podeApagar = !isIn   // sua ou da IA (regra do dono 16/11/2026)
             const editando = editingId === m.id
             return (
               <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'} gap-1 group`}>
-                {podeEditar && !editando && (
+                {podeApagar && !editando && (
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
-                    <button onClick={() => { setEditingId(m.id); setEditText(m.content) }}
+                    {podeEditar && <button onClick={() => { setEditingId(m.id); setEditText(m.content) }}
                       className="px-2 py-1 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-950/30 rounded-lg text-xs"
                       title="Editar mensagem">
                       ✏️
-                    </button>
+                    </button>}
                     <button onClick={() => deletarMensagem(m.id)}
                       className="px-2 py-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-950/30 rounded-lg text-xs"
                       title="Deletar mensagem">

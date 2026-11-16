@@ -391,6 +391,10 @@ model WhatsappTemplate {
   language    String    @default("pt_BR")
   bodyText    String    // texto do corpo com variáveis {{1}} {{2}}...
   variables   Json?     // descrição das variáveis: [{ index: 1, description: "nome do lead" }]
+  // Cabeçalho com arquivo (ex.: o ebook em PDF). headerType: DOCUMENT | IMAGE | null (só texto).
+  headerType     String?
+  headerUrl      String?  // link público do arquivo (a Meta busca dele a cada envio)
+  headerFilename String?  // nome que o cliente vê no WhatsApp (ex.: "Ebook KeroSolar.pdf")
   actionType  String?   // qual ação usa este template: chegada_followup | reengage | budget_followup | etc.
   metaStatus  String?   // APPROVED | PENDING | REJECTED | PAUSED (sincronizado com a Meta)
   metaId      String?   // ID do template na Meta

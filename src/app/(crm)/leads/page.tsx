@@ -18,6 +18,12 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const pipelines = await prisma.pipeline.findMany({ orderBy: { sortOrder: 'asc' } })
   const current = pipelines.find((p) => p.id === funil) ?? pipelines.find((p) => p.isDefault) ?? pipelines[0]
 
+  // Templates aprovados pela Meta (para a lista de transmissão — saem mesmo fora da janela de 24h)
+  const templatesAprovados = await prisma.whatsappTemplate.findMany({
+    where: { metaStatus: 'APPROVED' }, orderBy: { displayName: 'asc' },
+    select: { id: true, displayName: true, bodyText: true, headerType: true },
+  })
+
   const stages = await prisma.stage.findMany({
     where: { pipelineId: current.id },
     orderBy: { sortOrder: 'asc' },
@@ -70,7 +76,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           <span className="text-sm text-[--muted-foreground]">{totalLeads} leads abertos</span>
           <ImportButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
           <NewLeadButton pipelineId={current.id} stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
-          <BroadcastButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
+          <BroadcastButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} templates={templatesAprovados} />
           <ExportButton stages={stages.map((s) => ({ id: s.id, name: s.name }))} />
         </div>
       </div>

@@ -22,7 +22,14 @@ export async function POST(req: NextRequest) {
   const intervalMin = Number.isFinite(body.intervalMin) && body.intervalMin > 0 ? Math.floor(body.intervalMin) : 0 // intervalo mínimo entre envios
   const vary = body.vary === true                                                                    // variar a mensagem por lead (IA)
 
-  if (!stageId || (!text?.trim() && !mediaUrl)) {
+  // Template aprovado (16/11/2026): sai mesmo fora da janela de 24h do WhatsApp (ex.: ebook para "Leads adquiridos")
+  const templateId: string | null = typeof body.templateId === 'string' && body.templateId ? body.templateId : null
+  if (templateId) {
+    const t = await prisma.whatsappTemplate.findUnique({ where: { id: templateId }, select: { metaStatus: true } })
+    if (t?.metaStatus !== 'APPROVED') return NextResponse.json({ error: 'Esse template ainda não foi aprovado pela Meta.' }, { status: 400 })
+  }
+
+  if (!stageId || (!templateId && !text?.trim() && !mediaUrl)) {
     return NextResponse.json({ error: 'Escolha a etapa e escreva a mensagem.' }, { status: 400 })
   }
 
@@ -57,9 +64,17 @@ export async function POST(req: NextRequest) {
     const msg = (text || '').replace(/\{nome\}/gi, nome)
 
     // espaçamento: simula digitação + intervalo mínimo configurado entre envios
-    cursor += Math.max(tempoDigitacaoMs(msg), intervalMin * 60000)
+    cursor += Math.max(templateId ? 8000 : tempoDigitacaoMs(msg), intervalMin * 60000)
     const sendAt = nextAllowedSlot(respeitaHorarioGlobal(new Date(cursor)), janela)
     cursor = sendAt.getTime()
+
+    if (templateId) {
+      await prisma.scheduledAction.create({
+        data: { leadId: lead.id, conversationId: conv.id, stageId, type: 'send_template', payload: { templateId } as object, runAt: sendAt },
+      })
+      agendados++
+      continue
+    }
 
     await prisma.scheduledAction.create({
       data: {
