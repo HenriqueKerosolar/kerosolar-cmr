@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import path from 'path'
 import { getSessionSafe } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
 
@@ -75,6 +76,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
     const waId = sendData.messages?.[0]?.id
 
+    // 💾 Cópia do arquivo no CRM (16/11/2026): antes ficava só o endereço interno da Meta
+    //    (graph.facebook.com/<id>), que o navegador não abre — o PDF enviado não abria no CRM.
+    const { salvarMidiaRecebida } = await import('@/lib/crm/media')
+    const ext = path.extname(file.name || '') || ('.' + ((mime.split('/')[1] || 'bin').split(';')[0]))
+    const copiaLocal = salvarMidiaRecebida(Buffer.from(await file.arrayBuffer()), ext)
+
     // 💾 Grava no histórico
     const createdMsg = await prisma.message.create({
       data: {
@@ -83,7 +90,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         senderType: 'human',
         senderUserId: session.userId,
         content: caption || labels[kind],
-        mediaUrl: `${GRAPH}/${upData.id}`,
+        mediaUrl: copiaLocal ?? `${GRAPH}/${upData.id}`,
         mediaType: kind,
       },
     })
