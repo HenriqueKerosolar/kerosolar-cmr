@@ -738,8 +738,40 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // 4.4) FAQ GLOBAL — respostas-padrão valem mesmo com a IA da etapa desligada,
   //      desde que a etapa tenha automação. Não aciona a IA conversacional.
   if (aiOn || stageAuto) {
-    const { matchGlobalFaq } = await import('./faq')
-    const faq = matchGlobalFaq(text)
+    const { matchGlobalFaqRule } = await import('./faq')
+    const regraFaq = matchGlobalFaqRule(text)
+    let faq: string | null = regraFaq?.answer ?? null
+    // 💵 À VISTA (regra do dono, 16/11/2026): tira os 5% e mostra o valor — sem perguntar se quer o cálculo
+    //    e sem repetir o orçamento. O pedido fica guardado: o próximo orçamento já sai com a linha do à vista.
+    if (regraFaq?.id === 'a_vista') {
+      const sc = await import('./solar-calc')
+      const cfV = (lead.customFields as Record<string, unknown> | null) ?? {}
+      let valorV: number | null = typeof (cfV.solar as { valorSistema?: number } | undefined)?.valorSistema === 'number'
+        ? (cfV.solar as { valorSistema: number }).valorSistema : null
+      // vale o último orçamento ENVIADO na conversa (inclusive o mandado à mão pelo operador)
+      const ultimoOrcV = await prisma.message.findFirst({
+        where: { conversationId: conversation.id, direction: 'outbound', OR: [{ content: { contains: 'Sistema completo' } }, { content: { contains: 'Sistema híbrido' } }] },
+        orderBy: { createdAt: 'desc' }, select: { content: true },
+      })
+      const mV = ultimoOrcV?.content.match(/sistema (?:completo|h[ií]brido[^:\n]*):\s*r\$\s*([\d.,]+)/i)
+      if (mV) { const v = parseFloat(mV[1].replace(/\./g, '').replace(',', '.')); if (isFinite(v) && v > 0) valorV = v }
+      if (!cfV.querAVista) {
+        const cfNovo = { ...cfV, querAVista: true }
+        await prisma.lead.update({ where: { id: lead.id }, data: { customFields: cfNovo as Prisma.InputJsonValue } }).catch(() => {})
+        lead.customFields = cfNovo as Prisma.JsonObject
+      }
+      const trazConta = !!(input.imageBase64 || input.pdfBase64 || input.pdfText)
+      if (trazConta) {
+        faq = null   // a própria mensagem traz a conta: segue o fluxo e o orçamento sai com o valor à vista
+      } else {
+        // conta mandada agora há pouco e ainda sem orçamento → não pede a conta de novo
+        const contaRecente = valorV ? null : await prisma.message.findFirst({
+          where: { conversationId: conversation.id, direction: 'inbound', mediaType: { not: null }, createdAt: { gte: new Date(Date.now() - 3 * 60 * 1000) } },
+          select: { id: true },
+        })
+        faq = sc.respostaAVista(valorV, !!contaRecente)
+      }
+    }
     if (faq) {
       await simularDigitacao(faq)
       await prisma.message.create({
@@ -961,7 +993,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   }
 
   // 4.7) Cálculo solar — extrai dados da mensagem ou da imagem (conta de luz)
-  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida, carregarTabelaFinanciamento, aplicarHibrido } = await import('./solar-calc')
+  const { extrairConsumo, calcularSolar, calcularSolarPorKwh, resumoParaIA, orcamentoTexto, MINIMO_KIT_KWH, MINIMO_KIT_PRECO, consumoKwhValido, contaReaisValida, carregarTabelaFinanciamento, aplicarHibrido, detectarMedidor, ajustarPorMedidor, aplicarTransformador, linhaAVista, TRANSFORMADOR_PRECO } = await import('./solar-calc')
   // Clientes pós-venda ("Já é cliente") não recebem cálculo solar — evita orçamentos indevidos
   const isPosSaleStage = /j[aá]\s*[eé]\s*cliente|p[oó]s.?venda/i.test(currentStage?.name ?? '')
   // Carrega a tabela de financiamento das Configurações (ou usa a padrão) ANTES dos cálculos.
@@ -1086,8 +1118,27 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   const querHibrido = await (await import('./hibrido')).leadQuerHibrido(lead.id, conversation.id, text)
   if (querHibrido) lead.customFields = { ...((lead.customFields as Record<string, unknown> | null) ?? {}), hibrido: true } as Prisma.JsonObject
   if (solar && querHibrido) solar = aplicarHibrido(solar)
-  const consumoClienteKwh = solar?.consumoKwh ?? null
+  let consumoClienteKwh = solar?.consumoKwh ?? null
   let kitMinimo = false
+
+  // 🔌 MEDIDOR (regra do dono, 16/11/2026): lido da conta ou dito pelo cliente, fica guardado no lead.
+  //    Monofásico → precisa de transformador: + R$ 600 no orçamento.
+  const cfMed = (lead.customFields as Record<string, unknown> | null) ?? {}
+  const medidorLido = isPosSaleStage ? null : (detectarMedidor(billData?.medidor) ?? detectarMedidor(text))
+  const medidor = medidorLido ?? (typeof cfMed.medidor === 'string' ? detectarMedidor(cfMed.medidor) : null)
+  if (medidorLido && cfMed.medidor !== medidorLido) {
+    lead.customFields = { ...cfMed, medidor: medidorLido } as Prisma.JsonObject
+  }
+  // Soube AGORA que é monofásico e o orçamento já enviado não tinha o transformador → orçamento atualizado.
+  let transformadorNovo = false
+  if (!solar && medidorLido === 'monofásico' && !lead.humanOnly) {
+    const salvo = cfMed.solar as (Parameters<typeof orcamentoTexto>[0] & { kitMinimo?: boolean }) | undefined
+    if (salvo && typeof salvo.valorSistema === 'number' && Array.isArray(salvo.financiamento) && !salvo.transformador) {
+      solar = aplicarTransformador(salvo)
+      transformadorNovo = true
+      consumoClienteKwh = typeof cfMed.consumoKwh === 'number' ? cfMed.consumoKwh : solar.consumoKwh
+    }
+  }
 
   // Monta a orientação de cálculo pra IA (orçamento normal OU kit mínimo p/ consumo baixo)
   let estimate: string | undefined
@@ -1128,6 +1179,14 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     } else {
       estimate = resumoParaIA(solar)
     }
+    if (transformadorNovo) kitMinimo = !!(cfMed.solar as { kitMinimo?: boolean } | undefined)?.kitMinimo
+    // Conta enviada pelo cliente → o orçamento diz quantos kWh ele precisa (regra do dono, 16/11/2026).
+    if (contaNovaLida && consumoClienteKwh) solar = { ...solar, consumoConta: consumoClienteKwh }
+    // Transformador do medidor monofásico: somado por último (depois do piso do kit mínimo e do híbrido).
+    const antesTrafo = solar.valorSistema
+    solar = ajustarPorMedidor(solar, medidor)
+    if (solar.valorSistema !== antesTrafo && !kitMinimo) estimate = resumoParaIA(solar)
+    if (solar.transformador && kitMinimo) estimate += ` O medidor é MONOFÁSICO: o valor já inclui o transformador (R$ ${TRANSFORMADOR_PRECO}).`
   }
 
   // Cliente reclama que NÃO recebeu / pede o orçamento DE NOVO, mas JÁ TEM orçamento salvo →
@@ -1235,6 +1294,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     if (consumoKwhValido(result.qualification.consumoKwh)) solar = calcularSolarPorKwh(result.qualification.consumoKwh)
     else if (contaReaisValida(result.qualification.billValue)) solar = calcularSolar(result.qualification.billValue)
     if (solar && querHibrido) solar = aplicarHibrido(solar)
+    if (solar) solar = ajustarPorMedidor(solar, medidor)
   }
 
   // 5.5) Cliente reclamou / não quer mais receber → agradece (a própria reply) e entra na BLACK LIST.
@@ -1414,13 +1474,24 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
   // de mandar um orçamento subdimensionado no consumo atual.
   // Conta NOVA lida agora (foto/PDF) → sempre apresenta o orçamento dela (pode ser outra conta do cliente).
-  const presentBudget = !!solar && (mudancaRelevante || contaNovaLida) && !acIntent
+  const presentBudget = !!solar && (mudancaRelevante || contaNovaLida || transformadorNovo) && !acIntent
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
   //          nesse caso preservamos a reply da IA — ela já diz o certo pro cliente.
   // 🕒 nunca "Bom dia" às 17h: corrige o cumprimento da IA pelo horário de Brasília
   let outboundText = presentBudget && solar ? orcamentoTexto(solar) : corrigirCumprimento(result.reply)
+  if (presentBudget && solar) {
+    if (transformadorNovo) {
+      outboundText = `Como o seu medidor é *monofásico*, o sistema precisa de um transformador (R$ ${TRANSFORMADOR_PRECO},00). Segue o orçamento atualizado:\n\n${outboundText}`
+    }
+    // 💵 Cliente pediu o valor À VISTA (pode ter pedido numa mensagem que chegou junto com a conta: lê o lead de novo).
+    const leadAgora = await prisma.lead.findUnique({ where: { id: lead.id }, select: { customFields: true } }).catch(() => null)
+    if ((leadAgora?.customFields as Record<string, unknown> | null)?.querAVista || cf.querAVista) {
+      merged.querAVista = true
+      outboundText += `\n\n${linhaAVista(solar.valorSistema)}`
+    }
+  }
   let outboundSender: 'ai' | 'system' = 'ai'
   if (result.handoff) {
     // pedido para falar com o dono: mantém a resposta acolhedora da IA (já diz que avisou o responsável)

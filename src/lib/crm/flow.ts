@@ -528,17 +528,18 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   // comando incompleto/fora da faixa → avisa o operador (a tela mostra o erro) e NÃO manda nada ao cliente
   if ('erro' in cmd) throw new Error(cmd.erro)
   // Qualquer valor vale (regra do dono 16/11/2026): o operador decidiu o número; só precisa ser > 0.
-  const { calcularSolar, calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, aplicarHibrido } = await import('./solar-calc')
+  const { calcularSolar, calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, aplicarHibrido, ajustarPorMedidor } = await import('./solar-calc')
   if (!(cmd.valor > 0)) throw new Error('O valor precisa ser maior que zero. Nada foi enviado ao cliente.')
   await carregarTabelaFinanciamento()
   // 🔋 Híbrido (cliente pediu, ou o operador escreveu "híbrido" no comando) → fórmula × 240%
   const { leadQuerHibrido } = await import('./hibrido')
   const hib = await leadQuerHibrido(leadId, conversationId, text)
   const base = cmd.tipo === 'kwh' ? calcularSolarPorKwh(cmd.valor) : calcularSolar(cmd.valor)
-  const solar = hib ? aplicarHibrido(base) : base
   const kwh = cmd.tipo === 'kwh' ? `${cmd.valor} kWh` : `conta de R$ ${cmd.valor}`
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+  // 🔌 medidor monofásico (guardado no lead) → o transformador entra no valor (regra do dono, 16/11/2026)
+  const solar = ajustarPorMedidor(hib ? aplicarHibrido(base) : base, cf.medidor as string | undefined)
   await prisma.lead.update({ where: { id: leadId }, data: {
     customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
     value: solar.valorSistema, lastMessageAt: new Date(),
@@ -847,13 +848,15 @@ export async function processDueActions() {
         const pl = (a.payload as { kwh?: number; reais?: number }) ?? {}
         const lead = await prisma.lead.findUnique({ where: { id: a.leadId } })
         if (lead && !lead.humanOnly) {
-          const { calcularSolarPorKwh, calcularSolar, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido, contaReaisValida } = await import('./solar-calc')
+          const { calcularSolarPorKwh, calcularSolar, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido, contaReaisValida, ajustarPorMedidor } = await import('./solar-calc')
           await carregarTabelaFinanciamento()
-          const solar = (typeof pl.kwh === 'number' && consumoKwhValido(pl.kwh)) ? calcularSolarPorKwh(pl.kwh)
+          const solarBase = (typeof pl.kwh === 'number' && consumoKwhValido(pl.kwh)) ? calcularSolarPorKwh(pl.kwh)
                       : (typeof pl.reais === 'number' && contaReaisValida(pl.reais)) ? calcularSolar(pl.reais)
                       : null
-          if (solar) {
+          if (solarBase) {
             const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+            // 🔌 medidor monofásico (guardado no lead) → o transformador entra no valor
+            const solar = ajustarPorMedidor(solarBase, cf.medidor as string | undefined)
             await prisma.lead.update({ where: { id: a.leadId }, data: {
               customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
               value: solar.valorSistema,

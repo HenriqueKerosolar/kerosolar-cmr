@@ -250,7 +250,7 @@ APROVEITAMENTO DA GERAÇÃO EXTRA (incluir SOMENTE no caso do kit de entrada / c
   // Regra fixa: tipo de ligação (medidor) e custo de disponibilidade
   system += `\n\n## REGRA DE LIGAÇÃO (medidor monofásico/bifásico/trifásico):
 - Custo de disponibilidade (mínimo que sempre se paga, mesmo com solar): monofásico 30 kWh, bifásico 50 kWh, trifásico 100 kWh.
-- Se o medidor for MONOFÁSICO: explique que resolvemos de duas formas — (a) sistema monofásico, ou (b) sistema 220V com transformador — e que NÃO há problema nenhum em fazer assim.
+- Se o medidor for MONOFÁSICO: o sistema precisa de um TRANSFORMADOR, que custa R$ 600 e JÁ É SOMADO ao orçamento pelo sistema (nunca some de novo nem invente outro valor). Explique que NÃO há problema nenhum em fazer assim.
 - PORÉM, se o cliente precisar de MAIS DE 800 kWh, é necessário trocar a ligação de qualquer forma: na ENEL pede-se aumento de carga para BIFÁSICO; na LIGHT é necessário solicitar TRIFÁSICO.
 - Se o cliente enviou SÓ a parte da média (histórico de consumo, sem o cabeçalho da conta), tudo bem: você já tem o consumo, então pergunte APENAS o tipo de medidor (monofásico, bifásico ou trifásico), pois isso não aparece na parte da média.`
 
@@ -335,7 +335,7 @@ Responda: "Recebi sua conta! ✅ Já estou encaminhando para análise do nosso c
   // Regra fixa: pagamento à vista
   system += `\n\n## REGRA PAGAMENTO À VISTA: no pagamento à vista há 5% de desconto sobre o valor do sistema. ` +
     `Se o cliente perguntar sobre pagar à vista/no pix/dinheiro, informe o desconto e, se você souber o valor do sistema, ` +
-    `apresente o valor já com 5% de desconto (valor × 0,95).`
+    `apresente DIRETO o valor já com 5% de desconto (valor × 0,95). NÃO pergunte se ele quer que você calcule e NÃO repita o orçamento inteiro.`
 
   // Regra fixa: "pra quanto minha conta cai em reais?" → resposta-padrão (não promete valor exato)
   system += `\n\n## REGRA "PRA QUANTO CAI A CONTA": se o cliente perguntar para quanto a conta cai/vai ficar em reais, ` +

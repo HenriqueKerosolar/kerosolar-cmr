@@ -12,7 +12,7 @@ Status: ✅ implementado · 🔜 a construir · ❓ a confirmar
 - ✅ Custo de disponibilidade: monofásico 30 / bifásico 50 / trifásico 100 kWh
 
 ## Tipo de ligação (medidor)
-- ✅ **Monofásico** → 2 opções: sistema monofásico OU 220V com transformador (sem problema)
+- ✅ **Monofásico** → precisa de transformador: **+ R$ 600 no orçamento** (somado pelo sistema; o orçamento avisa). Se o medidor só for informado depois, sai o orçamento atualizado
 - ✅ Monofásico + **mais de 800 kWh** → trocar ligação: **Enel** = aumento de carga p/ bifásico; **Light** = solicitar trifásico
 - ✅ Conta com **cabeçalho completo** → NÃO perguntar município (já vem na conta)
 - ✅ Cliente mandou **só a média** (sem cabeçalho) → perguntar só o tipo de medidor (mono/bi/tri)
@@ -24,7 +24,8 @@ Status: ✅ implementado · 🔜 a construir · ❓ a confirmar
 
 ## Respostas globais (valem mesmo com IA da etapa desligada, se a etapa tem automação)
 - ✅ "Pra quanto cai a conta?" → script 70–85%, sem valor exato
-- ✅ "Tem desconto à vista?" → **5% de desconto à vista** (valor × 0,95)
+- ✅ "Tem desconto à vista?" → **5% de desconto à vista** (valor × 0,95): responde direto com o valor, sem perguntar se quer o cálculo e sem repetir o orçamento
+- ✅ Cliente mandou a conta → o orçamento diz quantos kWh por mês ele precisa
 
 ## Atendimento / handoff
 - ✅ Cliente pede humano / recusa bot/IA/máquina → **bloqueio total** (humanOnly): para TODAS as automações, cancela agendamentos, transfere p/ humano

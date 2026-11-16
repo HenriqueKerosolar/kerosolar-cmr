@@ -14,7 +14,7 @@ export const RESPOSTA_QUANTO_CAI =
   'variáveis como as bandeiras vigentes. Mas posso dizer que a economia fica de 70% até 85% — ou até mais. ' +
   'E quanto maior o consumo de energia, maior a economia! 😊'
 
-type FaqRule = { id: string; patterns: RegExp[]; answer: string }
+type FaqRule = { id: 'quanto_cai' | 'a_vista'; patterns: RegExp[]; answer: string }
 
 const RULES: FaqRule[] = [
   {
@@ -33,14 +33,25 @@ const RULES: FaqRule[] = [
   {
     id: 'a_vista',
     patterns: [
-      /a\s*vista/,
+      /\ba\s*vista\b/,
       /pagar?\s+(tudo|de uma vez|no dinheiro|no pix|adiantado)/,
       /desconto\s+(a\s*vista|no pix|no dinheiro|pagamento)/,
       /(tem|tem algum|qual o|qual)\s+desconto/,
     ],
-    answer: 'Sim! 😊 No pagamento à vista você tem 5% de desconto. Quer que eu calcule o valor já com o desconto?',
+    // Resposta de reserva: o motor (engine.ts) troca pelo valor já com os 5% (regra do dono, 16/11/2026:
+    // não perguntar se quer o cálculo — tirar os 5% e mostrar).
+    answer: 'Sim! 😊 No pagamento à vista você tem 5% de desconto.',
   },
 ]
+
+/** Regra de FAQ que casa com a mensagem (com o id, para o motor montar a resposta com números). */
+export function matchGlobalFaqRule(text: string): { id: FaqRule['id']; answer: string } | null {
+  const t = norm(text)
+  for (const rule of RULES) {
+    if (rule.patterns.some((re) => re.test(t))) return { id: rule.id, answer: rule.answer }
+  }
+  return null
+}
 
 /** Retorna a resposta global se a mensagem casar com alguma FAQ; senão null. */
 export function matchGlobalFaq(text: string): string | null {

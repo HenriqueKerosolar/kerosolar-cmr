@@ -121,6 +121,8 @@ export type SolarResult = {
   economiaImediata: number   // conta atual − menor parcela (economia já no 1º mês)
   baixoConsumo: boolean      // consumo < 250 kWh → solar sozinho economiza pouco
   hibrido?: boolean          // sistema HÍBRIDO (com bateria) — valor = fórmula × 240%
+  transformador?: boolean    // medidor MONOFÁSICO → o valor já inclui o transformador (R$ 600)
+  consumoConta?: number      // kWh/mês lidos da CONTA que o cliente mandou (aparece no orçamento)
 }
 
 // Observações exatamente como na página do simulador
@@ -218,7 +220,77 @@ export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: numb
 export const FATOR_HIBRIDO = 2.4
 export function aplicarHibrido(r: SolarResult, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
   if (r.hibrido) return r
-  return { ...calcularCore(r.contaReais, Math.round(r.valorSistema * FATOR_HIBRIDO), r.consumoKwh, opts), hibrido: true }
+  // o transformador (medidor monofásico) não entra no multiplicador: sai antes e volta depois
+  const semTrafo = r.valorSistema - (r.transformador ? TRANSFORMADOR_PRECO : 0)
+  const h: SolarResult = { ...calcularCore(r.contaReais, Math.round(semTrafo * FATOR_HIBRIDO), r.consumoKwh, opts), hibrido: true, consumoConta: r.consumoConta }
+  return r.transformador ? aplicarTransformador(h) : h
+}
+
+// ── 🔌 MEDIDOR MONOFÁSICO → TRANSFORMADOR (regra do dono, 16/11/2026) ─────────
+// Medidor monofásico exige transformador: o orçamento sobe R$ 600 (valor fixo, somado DEPOIS do piso do kit
+// mínimo e DEPOIS do multiplicador do híbrido — o transformador não é multiplicado).
+export const TRANSFORMADOR_PRECO = 600
+
+export type Medidor = 'monofásico' | 'bifásico' | 'trifásico'
+
+/** Lê o tipo de medidor de um texto (conta lida, resposta do cliente). Mais de um tipo no mesmo texto
+ *  ("é monofásico ou bifásico?") é dúvida, não informação → null. */
+export function detectarMedidor(texto: string | null | undefined): Medidor | null {
+  const t = (texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  if (/\bnao\b[^.!?\n]{0,20}(mono|bi|tri)fas/.test(t)) return null   // "não é monofásico" não informa o tipo
+  const achados: Medidor[] = []
+  if (/\bmonofas/.test(t)) achados.push('monofásico')
+  if (/\bbifas/.test(t)) achados.push('bifásico')
+  if (/\btrifas/.test(t)) achados.push('trifásico')
+  return achados.length === 1 ? achados[0] : null
+}
+
+/** Troca o valor do sistema e refaz só o que depende dele (retorno, ROI, parcelas). Economia não muda. */
+function comValorSistema(r: SolarResult, valorSistema: number): SolarResult {
+  const paybackAnos = r.economiaAnual > 0 ? Math.round((valorSistema / r.economiaAnual) * 10) / 10 : 0
+  const roiPercent = valorSistema > 0 ? Math.round(((r.economia30Anos - valorSistema) / valorSistema) * 100) : 0
+  let rendimentoPoupanca = 0, inv = valorSistema
+  for (let i = 0; i < 30; i++) { rendimentoPoupanca += inv * 0.05; inv *= 1.05 }
+  const vsPoupanca = rendimentoPoupanca > 0 ? Math.round(r.economia30Anos / rendimentoPoupanca) : 0
+  const financiamento = Object.keys(_tabelaAtiva).map(Number).sort((a, b) => a - b).map((prazo) => ({
+    prazo, taxa: _tabelaAtiva[prazo].taxa, parcela: Math.round(parcelaFinanciamento(valorSistema, prazo) * 100) / 100,
+  }))
+  const menorParcela = Math.min(...financiamento.map((f) => f.parcela).filter((p) => p > 0))
+  return {
+    ...r, valorSistema, paybackAnos, roiPercent, vsPoupanca, financiamento, menorParcela,
+    economiaImediata: Math.max(0, Math.round((r.contaReais - menorParcela) * 100) / 100),
+  }
+}
+
+/** Soma o transformador ao orçamento (uma vez só). */
+export function aplicarTransformador(r: SolarResult): SolarResult {
+  if (r.transformador) return r
+  return { ...comValorSistema(r, r.valorSistema + TRANSFORMADOR_PRECO), transformador: true }
+}
+
+/** Aplica o transformador quando o medidor é monofásico; nos outros casos devolve o orçamento como está. */
+export function ajustarPorMedidor(r: SolarResult, medidor: string | null | undefined): SolarResult {
+  return detectarMedidor(medidor) === 'monofásico' ? aplicarTransformador(r) : r
+}
+
+// ── 💵 À VISTA: 5% de desconto (regra do dono) ────────────────────────────────
+export const DESCONTO_A_VISTA = 0.05
+export function valorAVista(valorSistema: number): number {
+  return Math.round(valorSistema * (1 - DESCONTO_A_VISTA) * 100) / 100
+}
+/** Linha única com o valor à vista (usada na resposta direta e no fim do orçamento de quem pediu à vista). */
+export function linhaAVista(valorSistema: number): string {
+  return `💵 *À vista (5% de desconto): ${brl(valorAVista(valorSistema))}*`
+}
+/** Resposta para "tem desconto à vista?" (regra do dono, 16/11/2026): só tira os 5% e mostra o valor —
+ *  sem perguntar se quer o cálculo e sem repetir o orçamento. */
+export function respostaAVista(valorSistema: number | null, contaEmAnalise = false): string {
+  if (valorSistema && valorSistema > 0) {
+    return `No pagamento à vista você tem *5% de desconto* 😊\n\n🔆 Sistema: ${brl(valorSistema)}\n${linhaAVista(valorSistema)}`
+  }
+  return contaEmAnalise
+    ? 'Sim! 😊 No pagamento à vista você tem *5% de desconto*. Já estou vendo a sua conta e te passo o valor com o desconto.'
+    : 'Sim! 😊 No pagamento à vista você tem *5% de desconto*. Me manda a sua conta de luz (foto ou PDF) ou o consumo em kWh que eu já te passo o valor com o desconto.'
 }
 
 /** Cliente pediu equipamento híbrido / com bateria? */
@@ -322,6 +394,8 @@ export function resumoParaIA(r: SolarResult): string {
       ? `Menor parcela: ${brl(r.menorParcela)} — economia imediata vs conta atual: ${brl(r.economiaImediata)}/mês`
       : `Menor parcela: ${brl(r.menorParcela)} — ATENÇÃO: a parcela fica ACIMA da conta de luz atual; É PROIBIDO dizer que a parcela é menor que a conta ou que o cliente economiza desde o 1º mês`,
     ...(r.hibrido ? ['Sistema HÍBRIDO (com bateria): o valor já inclui o banco de baterias (fórmula padrão × 240%)'] : []),
+    ...(r.transformador ? [`Medidor MONOFÁSICO: o valor do sistema JÁ INCLUI o transformador (${brl(TRANSFORMADOR_PRECO)})`] : []),
+    `Pagamento à vista (5% de desconto): ${brl(valorAVista(r.valorSistema))}`,
     `OBSERVAÇÕES: ${OBSERVACOES.financiamento} ${OBSERVACOES.carencia} ${OBSERVACOES.disclaimer}`,
   ].join('. ')
 }
@@ -352,11 +426,21 @@ export function orcamentoTexto(r: SolarResult): string {
     ? `\n\n✅ *Já no 1º mês a parcela fica menor que a sua conta de luz* — você economiza ${brl(r.economiaImediata)}/mês desde o começo.`
     : ''
 
+  // Regra do dono (16/11/2026): quando o cliente MANDA A CONTA, o orçamento diz quantos kWh ele precisa.
+  const linhaKwh = r.consumoConta && r.consumoConta > 0
+    ? `\n⚡ *Pela sua conta, você precisa de ${Math.round(r.consumoConta).toLocaleString('pt-BR')} kWh por mês*${
+        r.consumoConta < r.consumoKwh ? ` _(o menor sistema que fazemos gera ${r.consumoKwh.toLocaleString('pt-BR')} kWh por mês)_` : ''}\n`
+    : ''
+  // Medidor monofásico: o transformador já está somado no valor (regra do dono, 16/11/2026).
+  const linhaTrafo = r.transformador
+    ? `\n_Seu medidor é monofásico: o valor já inclui o transformador (${brl(TRANSFORMADOR_PRECO)})._`
+    : ''
+
   return (
 `☀️ *ORÇAMENTO SOLAR${r.hibrido ? ' HÍBRIDO 🔋' : ''} · KEROSOLAR*
-
+${linhaKwh}
 🔆 *Sistema ${r.hibrido ? 'híbrido (com bateria)' : 'completo'}: ${brl(r.valorSistema)}*
-_Instalado e homologado, pronto pra gerar energia${r.hibrido ? ' — e com bateria pra manter a casa funcionando quando faltar luz' : ''}._
+_Instalado e homologado, pronto pra gerar energia${r.hibrido ? ' — e com bateria pra manter a casa funcionando quando faltar luz' : ''}._${linhaTrafo}
 
 📊 *Seus números*
 • Conta de luz hoje: ${brl(r.contaReais)}/mês

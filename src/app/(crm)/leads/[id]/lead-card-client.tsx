@@ -509,7 +509,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         {/* Qualificação */}
         <div>
           <p className="text-xs font-medium text-[--muted-foreground] mb-1">Qualificação</p>
-          {([['Conta de luz', fmtBRL(cf.billValue)], ['Consumo', cf.consumoKwh ? `${cf.consumoKwh} kWh` : '—'], ['Imóvel', (cf.propertyType as string) ?? '—'], ['Telhado', (cf.roofType as string) ?? '—'], ['Cidade', (cf.city as string) ?? '—']] as [string, string][]).map(([k, v]) => (
+          {([['Conta de luz', fmtBRL(cf.billValue)], ['Consumo', cf.consumoKwh ? `${cf.consumoKwh} kWh` : '—'], ['Imóvel', (cf.propertyType as string) ?? '—'], ['Telhado', (cf.roofType as string) ?? '—'], ['Medidor', (cf.medidor as string) ?? '—'], ['Cidade', (cf.city as string) ?? '—']] as [string, string][]).map(([k, v]) => (
             <div key={k} className="flex justify-between gap-2"><span className="text-[--muted-foreground]">{k}</span><span className="font-medium">{v}</span></div>
           ))}
         </div>
