@@ -137,11 +137,18 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
     })
   }
 
-  // 🧮 COMANDO DO OPERADOR: "minha indicação é XXXX kWh" → calcula e envia o orçamento (em vez
+  // 🧮 COMANDO DO OPERADOR: "faz XXXX" (só isso na mensagem) → calcula e envia o orçamento (em vez
   // do texto literal). Vale em qualquer etapa. (Mesma função usada no app do WhatsApp.)
   if (text && !media) {
     const { comandoIndicacaoKwh } = await import('@/lib/crm/flow')
-    if (await comandoIndicacaoKwh(leadId, conv.id, text)) {
+    let tratado = false
+    try {
+      tratado = await comandoIndicacaoKwh(leadId, conv.id, text)
+    } catch (e) {
+      // "faz" incompleto (sem kWh/R$) ou fora da faixa: nada vai ao cliente; a tela mostra o aviso
+      return { erro: e instanceof Error ? e.message : 'Não consegui montar o orçamento. Nada foi enviado.' }
+    }
+    if (tratado) {
       revalidatePath(`/leads/${leadId}`)
       return
     }

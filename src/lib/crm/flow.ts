@@ -514,26 +514,29 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
 }
 
 /**
- * 🧮 COMANDO DO OPERADOR: "minha indicação é XXXX kWh" → calcula o orçamento por aquele consumo
+ * 🧮 COMANDO DO OPERADOR: "faz XXXX" (XXXX = kWh, a mensagem é só isso) → calcula o orçamento por aquele consumo
  * e envia o orçamento formatado ao cliente (em vez de mandar o texto literal). Vale em QUALQUER
  * etapa e tanto pelo CRM quanto pelo app do WhatsApp. Aceita kwh/kw/k.
  * Retorna true se reconheceu e tratou o comando (aí NÃO se deve enviar/registrar o texto literal).
  */
 export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string): Promise<boolean> {
-  // [^\d]{0,40}: tolera frases naturais entre "indicação" e o número, ex.: "minha indicação é de
-  // um kit de 700 kWh" (o trecho " é de um kit de " sozinho já tem 16 chars — o limite antigo de 15 barrava).
-  const ind = (text || '').match(/\b(?:minha\s+)?(?:indica[çc][aã]o|indico|indica|sugiro|sugest[aã]o|sugerir|sugere|recomend[oa]|recomenda[çc][aã]o|recomendar|mand[oae]|mandar|pass[oae]|passar|envi[oae]|enviar|orient[oa]|orienta[çc][aã]o|coloc[oae]|colocar|fecha[or]?|montar?|mont[oae]|faz|fa[çc][oa]|kit\s+de|kit)\b[^\d]{0,40}([\d.,]+)\s*(?:kwh|kw|k)\b/i)
-  if (!ind) return false
-  const raw = ind[1].includes(',') ? ind[1].replace(/\./g, '').replace(',', '.')
-    : (/^\d{1,3}(\.\d{3})+$/.test(ind[1]) ? ind[1].replace(/\./g, '') : ind[1])
-  const kwh = Math.round(parseFloat(raw) || 0)
-  const { calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, consumoKwhValido, aplicarHibrido } = await import('./solar-calc')
-  if (!consumoKwhValido(kwh)) return false   // fora da faixa realista → não trata (manda texto normal)
+  // Só quando a mensagem INTEIRA é "faz XXXX" (comando-indicacao.ts, regra do dono 16/11/2026) — qualquer
+  // outra frase com kWh vai como texto normal (incidente: orçamento enviado sem ninguém pedir).
+  const { lerComandoIndicacao } = await import('./comando-indicacao')
+  const cmd = lerComandoIndicacao(text)
+  if (!cmd) return false
+  // comando incompleto/fora da faixa → avisa o operador (a tela mostra o erro) e NÃO manda nada ao cliente
+  if ('erro' in cmd) throw new Error(cmd.erro)
+  // Qualquer valor vale (regra do dono 16/11/2026): o operador decidiu o número; só precisa ser > 0.
+  const { calcularSolar, calcularSolarPorKwh, orcamentoTexto, carregarTabelaFinanciamento, aplicarHibrido } = await import('./solar-calc')
+  if (!(cmd.valor > 0)) throw new Error('O valor precisa ser maior que zero. Nada foi enviado ao cliente.')
   await carregarTabelaFinanciamento()
   // 🔋 Híbrido (cliente pediu, ou o operador escreveu "híbrido" no comando) → fórmula × 240%
   const { leadQuerHibrido } = await import('./hibrido')
   const hib = await leadQuerHibrido(leadId, conversationId, text)
-  const solar = hib ? aplicarHibrido(calcularSolarPorKwh(kwh)) : calcularSolarPorKwh(kwh)
+  const base = cmd.tipo === 'kwh' ? calcularSolarPorKwh(cmd.valor) : calcularSolar(cmd.valor)
+  const solar = hib ? aplicarHibrido(base) : base
+  const kwh = cmd.tipo === 'kwh' ? `${cmd.valor} kWh` : `conta de R$ ${cmd.valor}`
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
   await prisma.lead.update({ where: { id: leadId }, data: {
@@ -541,7 +544,7 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
     value: solar.valorSistema, lastMessageAt: new Date(),
   } }).catch(() => {})
   await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'ai')
-  await prisma.note.create({ data: { leadId, type: 'system', content: `Operador indicou ${kwh} kWh → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
+  await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu orçamento ("faz") por ${kwh} → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
   // Enviou orçamento → move pra etapa "Recebeu orçamento automático" (se ainda não estiver lá).
   const alvo = await prisma.stage.findFirst({ where: { name: { contains: 'Recebeu orçamento autom', mode: 'insensitive' } } })
   const ld = await prisma.lead.findUnique({ where: { id: leadId }, select: { stageId: true } })

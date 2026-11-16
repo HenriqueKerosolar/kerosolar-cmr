@@ -119,7 +119,11 @@ export default function ChatPage() {
     setEnviando(true)
     setTexto('')
     setMsgs((m) => [...m, { id: 'tmp-' + Date.now(), direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
-    try { await sendManualMessage(leadId, t); await carregar() } catch { setTexto(t) }
+    try {
+      const r = await sendManualMessage(leadId, t)
+      if (r && 'erro' in r) { alert(r.erro); setTexto(t) }
+      await carregar()
+    } catch { setTexto(t) }
     setEnviando(false)
   }
 

@@ -185,7 +185,11 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
       try { await simulateClientMessage(lead.id, t); await poll() } finally { setSending(false) }
     } else {
       setMessages((m) => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: t, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
-      try { await sendManualMessage(lead.id, t, undefined, sendAccountId || undefined); await poll() } finally { setSending(false) }
+      try {
+        const r = await sendManualMessage(lead.id, t, undefined, sendAccountId || undefined)
+        if (r && 'erro' in r) { alert(r.erro); setText(t) }
+        await poll()
+      } finally { setSending(false) }
     }
   }
 
