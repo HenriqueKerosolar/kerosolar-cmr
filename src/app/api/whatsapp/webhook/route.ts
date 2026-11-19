@@ -167,6 +167,14 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
   const from = (m.from || '').replace(/\D/g, '')
   if (!from) return
 
+  // 🔇 Block list ("não receber"): mensagem desses números é IGNORADA — não entra no CRM, a IA não lê nem
+  //    responde, ninguém é avisado (a tela de Listas já prometia isso, mas o webhook não conferia).
+  const { numeroNaLista } = await import('@/lib/crm/lists')
+  if (await numeroNaLista(from, 'no_receive').catch(() => false)) {
+    console.log('[wa cloud webhook] número na block list — mensagem ignorada')
+    return
+  }
+
   let text = ''
   let displayText: string | undefined
   let imageBase64: string | undefined

@@ -166,7 +166,9 @@ export async function dispatchOutbound(
       return
     }
 
-    if (text) {
+    // Documento: a legenda vira o NOME do arquivo no WhatsApp — não mexe (19/11/2026: o ebook chegou como
+    // "Boa tarde! Guia Anti-Cilada Solar - KeroSolar.pdf").
+    if (text && media?.type !== 'document') {
       text = corrigirCumprimento(text)
       if (!conversando) text = comCumprimento(text)
     }
@@ -709,6 +711,28 @@ export async function processDueActions() {
       if (a.type === 'broadcast_template') {
         const res = await enviarBroadcastTemplate(a)
         if (!res?.rescheduled) await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
+        continue
+      }
+      if (a.type === 'send_ebook') {
+        // 🎁 Ebook de presente (ebook.ts). Respeita o horário de envio do funil; se passar da janela de
+        //    24h do WhatsApp/Meta desde a última mensagem do cliente, não envia (não há template pra isso).
+        const ld = await prisma.lead.findUnique({ where: { id: a.leadId }, select: { pipeline: { select: { sendStartHour: true, sendEndHour: true } } } })
+        const janela = janelaDoFunil(ld?.pipeline?.sendStartHour, ld?.pipeline?.sendEndHour)
+        const slot = nextAllowedSlot(respeitaHorarioGlobal(new Date(Math.max(Date.now(), cursor))), janela)
+        const ultimaDoCliente = await prisma.message.findFirst({ where: { conversation: { leadId: a.leadId }, direction: 'inbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+        const limite24h = (ultimaDoCliente?.createdAt.getTime() ?? 0) + 23 * 3600_000
+        if (slot.getTime() > Date.now() + 2000) {
+          // fora do horário: espera o próximo horário — se ainda couber na janela de 24h; senão desiste
+          if (slot.getTime() < limite24h) {
+            await prisma.scheduledAction.update({ where: { id: a.id }, data: { runAt: slot } })
+            continue
+          }
+        } else if (Date.now() < limite24h) {
+          const { enviarEbook } = await import('./ebook')
+          await enviarEbook(a).catch((e) => console.error('[ebook] envio falhou:', e))
+          cursor = Date.now() + 8000
+        }
+        await prisma.scheduledAction.update({ where: { id: a.id }, data: { done: true } }).catch(() => {})
         continue
       }
       if (a.type === 'send_template') {

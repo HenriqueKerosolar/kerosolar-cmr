@@ -142,6 +142,33 @@ export type IngestResult = {
 //    cliente. Evita que dois webhooks simultâneos (foto + "mandei a conta") façam read-modify-write
 //    do customFields em paralelo e um APAGUE o orçamento do outro (lost update → IA reperguntava).
 const __ingestLocks = new Map<string, Promise<void>>()
+/**
+ * 🔇 Fora do assunto (fora-do-assunto.ts): conta os avisos já mandados a esse contato. Com 2 avisos → BLOQUEIA
+ * (Block list no WhatsApp; no Instagram/Facebook desliga a IA) e devolve 'bloqueado'. Senão devolve o número
+ * do aviso que deve sair agora (1 ou 2).
+ */
+async function avisoOuBloqueio(
+  contact: { id: string; phone: string | null; whatsappId: string | null },
+  conversation: { id: string; channel: string; externalId: string | null },
+  leadId: string,
+): Promise<1 | 2 | 'bloqueado'> {
+  const { AVISO_FORA } = await import('./fora-do-assunto')
+  const avisos = await prisma.message.count({
+    where: { conversation: { contactId: contact.id }, direction: 'outbound', content: { contains: AVISO_FORA } },
+  })
+  if (avisos < 2) return avisos === 0 ? 1 : 2
+  const agora = new Date()
+  const numero = conversation.channel === 'whatsapp' ? (contact.whatsappId || contact.phone || conversation.externalId) : null
+  if (numero) { const { addNaLista } = await import('./lists'); await addNaLista(numero, 'no_receive', 'Bloqueado: mensagens fora do assunto depois de 2 avisos.') }
+  await prisma.scheduledAction.updateMany({ where: { leadId, done: false }, data: { done: true } })
+  await prisma.lead.update({ where: { id: leadId }, data: { aiEnabled: false, humanOnly: true } })
+  await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false, resolvedAt: agora } })
+  await prisma.note.create({ data: { leadId, type: 'system', content: numero
+    ? '🔇 Bloqueado: continuou mandando mensagens fora do assunto depois de 2 avisos — número na Block list (Listas). As mensagens dele passam a ser ignoradas.'
+    : '🔇 Continuou mandando mensagens fora do assunto depois de 2 avisos — IA desligada e automações canceladas (Instagram/Facebook não têm block list por número).' } })
+  return 'bloqueado'
+}
+
 export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
   const key = `${input.channel}:${input.externalId}`
   const prev = __ingestLocks.get(key) ?? Promise.resolve()
@@ -167,7 +194,9 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     ? await prisma.pipeline.findUnique({ where: { id: input.pipelineId }, include: { stages: { orderBy: { sortOrder: 'asc' } } } })
     : null
   if (!pipeline || !pipeline.stages.length) pipeline = await ensureDefaultPipeline()
-  const firstStage = pipeline.stages[0]
+  // Etapa de entrada = a "Chegada" PELO NOME (19/11/2026: uma etapa criada na posição 0 empatou com a
+  // Chegada e leads do WhatsApp caíram nela, sem a regra de sem-resposta). Sem "Chegada" → a 1ª do funil.
+  const firstStage = pipeline.stages.find((s) => /^chegada$/i.test(s.name.trim())) ?? pipeline.stages[0]
 
   // 1) Contato
   const idField   = channelIdField(channel)
@@ -271,6 +300,9 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       // A etapa de entrada fica na nota: é o início da jornada que vai para o Mind Marketing (leadOutcome.ts).
       data: { leadId: lead.id, type: 'system', content: `Lead criado via ${channel} — entrou em "${etapaEntrada.name}".` },
     })
+    // 🎁 Ebook de presente um tempo depois da chegada, em qualquer canal (ebook.ts)
+    const { agendarEbook } = await import('./ebook')
+    await agendarEbook(lead.id, conversation.id, contact.id, channel).catch((e) => console.error('[ebook] agendar falhou:', e))
   }
   // Atualiza a conversa: vincula ao lead e ADOTA a conta de origem da mensagem. Assim, quando um
   // contato antigo (Baileys) escreve agora pela API OFICIAL (cloud), as respostas passam a sair
@@ -497,6 +529,46 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     && (fullPipeline?.botEnabled ?? true)
     && (currentStage?.botEnabled ?? true)
 
+  // 🔇 Só link de vídeo de rede social (reel, TikTok, Kwai...) — regra do dono (18/11/2026): aviso; depois de
+  //    2 avisos, bloqueia. Vale também depois que a IA descartou o lead como spam (IA desligada), mas NÃO
+  //    quando um atendente já escreveu na conversa (aí é ele quem cuida) nem em lead só-humano.
+  if (!isSimulator && !lead.humanOnly) {
+    const { ehSoLinkDeVideo, textoAvisoFora } = await import('./fora-do-assunto')
+    if (ehSoLinkDeVideo(text)) {
+      const atendenteEscreveu = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound', senderType: 'human' } })
+      if (!atendenteEscreveu) {
+        const r = await avisoOuBloqueio(contact, conversation, lead.id)
+        if (r === 'bloqueado') return { ...base, reply: null, aiHandled: true }
+        const aviso = textoAvisoFora(saudacaoAgora(), r)
+        const { dispatchOutbound } = await import('./flow')
+        await simularDigitacao(aviso)
+        await dispatchOutbound(conversation.id, aviso, undefined, 'ai')
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `🔇 Link de vídeo fora do assunto — ${r}º aviso enviado.` } }).catch(() => {})
+        return { ...base, reply: null, aiHandled: true }
+      }
+    }
+  }
+
+  // ➕ AMPLIAÇÃO (cliente JÁ TEM sistema e quer mais placas) — regra do dono (18/11/2026): NÃO manda
+  //    orçamento automático; pergunta o kit instalado (inversor e placas) e pede orçamento antigo / nota
+  //    fiscal / projeto. Depois passa para o consultor (IA desligada, prioridade, tarefa).
+  if (aiOn && !isSimulator) {
+    const cfAmp = (lead.customFields as Record<string, unknown> | null) ?? {}
+    const { ehAmpliacao, textoAmpliacao } = await import('./ampliacao')
+    if (!cfAmp.ampliacao && ehAmpliacao(text)) {
+      const msgAmp = textoAmpliacao(saudacaoAgora())
+      const { dispatchOutbound } = await import('./flow')
+      await simularDigitacao(msgAmp)
+      await dispatchOutbound(conversation.id, msgAmp, undefined, 'ai')
+      await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } })
+      await prisma.lead.update({ where: { id: lead.id }, data: { aiEnabled: false, highPriority: true, customFields: { ...cfAmp, ampliacao: new Date().toISOString() } as object } })
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
+      await prisma.task.create({ data: { leadId: lead.id, title: '➕ Ampliação: ver o kit instalado (inversor/placas) e montar o orçamento', type: 'message', dueAt: now } })
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '➕ Cliente quer AMPLIAR o sistema que já tem — pedimos o kit instalado (inversor e placas) e o orçamento antigo / nota fiscal / projeto. Sem orçamento automático; IA desligada para o consultor assumir.' } })
+      return { ...base, reply: null, aiHandled: true, handoff: true }
+    }
+  }
+
   // A etapa tem alguma automação configurada? (chamada, palavra-chave ou inatividade)
   const stageAuto = stageHasAutomation(currentStage?.flow)
 
@@ -520,16 +592,16 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       // limpa o flowState da conversa
       await prisma.conversation.update({ where: { id: conversation.id }, data: { flowState: Prisma.DbNull } })
       // volta para a primeira etapa (Chegada)
-      const firstStage = (channel === 'facebook' || channel === 'instagram')
-        ? (pipeline.stages.find((s) => /^chegada insta\/face$/i.test(s.name.trim())) ?? pipeline.stages[0])
-        : pipeline.stages[0]
-      await prisma.lead.update({ where: { id: lead.id }, data: { stageId: firstStage.id, status: 'open', closedAt: null, afterHoursAsked: false, afterHoursProceed: false } })
+      const etapaReinicio = (channel === 'facebook' || channel === 'instagram')
+        ? (pipeline.stages.find((s) => /^chegada insta\/face$/i.test(s.name.trim())) ?? firstStage)
+        : firstStage
+      await prisma.lead.update({ where: { id: lead.id }, data: { stageId: etapaReinicio.id, status: 'open', closedAt: null, afterHoursAsked: false, afterHoursProceed: false } })
       await prisma.note.create({ data: { leadId: lead.id, type: 'stage_change', content: 'Cliente pediu para reiniciar o atendimento — voltou para Chegada.' } })
       const { enterStage, dispatchOutbound } = await import('./flow')
       const msg = 'Claro! Vamos começar de novo 😊'
       await simularDigitacao(msg)
       await dispatchOutbound(conversation.id, msg, undefined, 'ai')
-      await enterStage(lead.id, firstStage.id).catch(() => {})
+      await enterStage(lead.id, etapaReinicio.id).catch(() => {})
       // dispatchOutbound já enviou pelo WhatsApp — reply: null evita duplo envio via sendText
       return { ...base, reply: null, aiHandled: true, stage: firstStage.name }
     }
@@ -602,8 +674,14 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       const cfFH = (lead.customFields as Record<string, unknown> | null) ?? {}
       const recebeuRecepcao = typeof cfFH.recepcaoForaHorario === 'string'
         && Date.now() - Date.parse(cfFH.recepcaoForaHorario as string) < 16 * 3600 * 1000   // vale para esta noite
-      // Mandou a conta / consumo → quer continuar, não precisa perguntar
+      // Mandou a conta / consumo → orçamento NA HORA, a qualquer horário (regra do dono, 18/11/2026: "se ele
+      // mandou o valor, não importa se é antes ou depois, responda"). Usa a MESMA leitura do orçamento
+      // (extrairConsumo entende "700kw", "700k", "R$ 600", "consumo de 400"...) — antes "700kw" sem o "h"
+      // não era reconhecido e o cliente recebia a pergunta "continuar agora ou às 9h?".
+      const { extrairConsumo: extrairFH } = await import('./solar-calc')
+      const lidoFH = extrairFH(text)
       const mandouConta = !!(input.imageBase64 || input.pdfBase64 || input.pdfText)
+        || lidoFH.kwh != null || lidoFH.reais != null
         || (/\d/.test(norm) && /(kwh|kw\/h|quilowatt|r\$|reais|conta|pain|placa)/.test(norm))
 
       if (!jaConversou && !lead.afterHoursAsked && !recebeuRecepcao && !querDepois) {
@@ -685,7 +763,9 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     const horarioComercial = spHourC >= 8 && spHourC < 20   // fora disso (20h–8h) o bloco 4.32 já tratou
     const jaRespondemos = await prisma.message.count({ where: { conversationId: conversation.id, direction: 'outbound' } })
     const txtC = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    const jaTemConsumo = /\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC)
+    const lidoC = (await import('./solar-calc')).extrairConsumo(text)   // entende "700kw", "700k"...
+    const jaTemConsumo = lidoC.kwh != null || lidoC.reais != null
+      || (/\d/.test(txtC) && /(kwh|kw\/h|quilowatt|r\$|reais|pain|placa|m[oó]dulo)/.test(txtC))
     // isMetaAdEntry: anúncio Meta sempre dispara a saudação mesmo que jaRespondemos > 0
     // (lead pode ter clicado o anúncio de novo depois de uma conversa anterior).
     // 🖼️ Se o cliente JÁ mandou uma imagem (foto da conta), NÃO dispara a saudação pedindo a conta
@@ -1213,6 +1293,28 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     }
   }
 
+  // 🧰 Profissional oferecendo trabalho (instalador freelance, eletricista...) — regra do dono (18/11/2026):
+  //    agradece, avisa que o contato fica no cadastro e move para a etapa "Profissionais" (criada se faltar).
+  //    Sem orçamento, sem ebook, sem automações.
+  {
+    const { ehProfissionalOferecendoTrabalho, textoProfissional } = await import('./profissional')
+    const etapaAtual = pipeline.stages.find((s) => s.id === lead.stageId)
+    if (ehProfissionalOferecendoTrabalho(text) && !/^profissionais$/i.test(etapaAtual?.name.trim() ?? '')) {
+      const stagesDoFunil = await prisma.stage.findMany({ where: { pipelineId: lead.pipelineId }, orderBy: { sortOrder: 'desc' } })
+      const etapaProf = stagesDoFunil.find((s) => /^profissionais$/i.test(s.name.trim()))
+        ?? await prisma.stage.create({ data: { pipelineId: lead.pipelineId, name: 'Profissionais', color: '#64748b', sortOrder: (stagesDoFunil[0]?.sortOrder ?? 0) + 1, botEnabled: false } })
+      const msgProf = textoProfissional(saudacaoAgora())
+      const { dispatchOutbound } = await import('./flow')
+      await simularDigitacao(msgProf)
+      await dispatchOutbound(conversation.id, msgProf, undefined, 'ai')
+      await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } })   // cancela ebook, cobranças...
+      await prisma.lead.update({ where: { id: lead.id }, data: { stageId: etapaProf.id, aiEnabled: false, lastMessageAt: now } })
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false, resolvedAt: now } })
+      await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '🧰 Profissional oferecendo trabalho — agradecido, contato salvo no cadastro e movido para "Profissionais".' } })
+      return { ...base, reply: null, aiHandled: true }
+    }
+  }
+
   // prompt da etapa sobrescreve o do funil quando preenchido
   // Base de conhecimento: vale SEMPRE — inclusive depois do orçamento, quando surgem as dúvidas de
   // cartão, visita, pagamento (regra do dono, 2026-11-05). Se o orçamento for enviado, ele substitui a resposta.
@@ -1245,8 +1347,8 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   const isEbookRequest = /(e-?book|guia|material|apostila|anti.?cilada|manual.*solar|pdf|catalogo)/.test(normEbook)
   if (isEbookRequest && (aiOn || stageAuto)) {
     const { dispatchOutbound } = await import('./flow')
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://kerosolar-crm-production.up.railway.app').replace(/\/$/, '')
-    const ebookUrl = `${appUrl}/downloads/ebook-kerosolar.pdf`
+    // o PDF oficial fica no site (o mesmo do presente automático — ebook.ts); a cópia antiga do CRM ficou desatualizada
+    const { EBOOK_URL: ebookUrl } = await import('./ebook')
     const nomeCliente = contact.name ? ` ${contact.name.split(' ')[0]}` : ''
     const ebookMsg = result.reply || `Aqui está${nomeCliente}! 😊 Preparei esse guia exclusivo pra você entender tudo sobre energia solar e não cair em armadilhas do mercado. Qualquer dúvida, é só me chamar! ☀️`
     await simularDigitacao(ebookMsg)
@@ -1272,6 +1374,17 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     return { ...base, reply: null, aiHandled: true }
   }
 
+  // 🔇 Mensagem fora do assunto (corrente, meme, vídeo...) — regra do dono (18/11/2026): DOIS avisos;
+  //    insistiu depois deles → número BLOQUEADO (block list: o que ele mandar é ignorado).
+  {
+    const { AVISO_FORA } = await import('./fora-do-assunto')
+    if (result.discardLead && result.reply?.includes(AVISO_FORA)) {
+      const r = await avisoOuBloqueio(contact, conversation, lead.id)
+      if (r === 'bloqueado') return { ...base, reply: null, aiHandled: true }
+      if (r === 2) result.reply = `${result.reply}\n\n⚠️ Este é o segundo aviso: se continuarem chegando mensagens desse tipo, este número será bloqueado.`
+    }
+  }
+
   // Spam/oferta de produto a nós → responde, move para "Leads adquiridos" e fecha conversa
   if (result.discardLead) {
     const leadsAdqStage = await prisma.stage.findFirst({
@@ -1282,6 +1395,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
       data: { status: 'open', aiEnabled: false, closedAt: now, stageId: leadsAdqStage?.id ?? lead.stageId },
     })
     await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false, resolvedAt: now } })
+    await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } })   // ebook, cobranças...
     await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Descartado: oferta/spam — movido para "${leadsAdqStage?.name ?? 'Leads adquiridos'}" e conversa encerrada.` } })
     await simularDigitacao(result.reply)
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: result.reply } })
@@ -1295,6 +1409,12 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     else if (contaReaisValida(result.qualification.billValue)) solar = calcularSolar(result.qualification.billValue)
     if (solar && querHibrido) solar = aplicarHibrido(solar)
     if (solar) solar = ajustarPorMedidor(solar, medidor)
+    // Veio de uma FOTO/PDF da conta (lida pela IA) → é conta nova: o orçamento sai e mostra a MÉDIA lida
+    // (19/11/2026: no Paulo Cotts a média de 420 kWh não apareceu porque só o outro caminho marcava isso).
+    if (solar && (input.imageBase64 || ehPdf) && consumoKwhValido(result.qualification.consumoKwh)) {
+      contaNovaLida = true
+      solar = { ...solar, consumoConta: result.qualification.consumoKwh }
+    }
   }
 
   // 5.5) Cliente reclamou / não quer mais receber → agradece (a própria reply) e entra na BLACK LIST.
@@ -1339,16 +1459,21 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     ...(result.contact.city      ? { city: result.contact.city }        : {}),
     ...(result.contact.state     ? { state: result.contact.state }      : {}),
   }
+  // 💰 Valor REAL da venda digitado pelo atendente (ao fechar ou no campo do card): a IA não troca mais
+  //    o valor nem a simulação por um orçamento automático (pedido do dono, 16/11/2026).
+  // (ampliação de sistema também: o orçamento é do consultor, não da fórmula)
+  const valorDaVendaFixo = !!(merged as Record<string, unknown>).valorVendaManual || !!(merged as Record<string, unknown>).ampliacao
   // Resultado do simulador solar → guarda no lead pra aparecer no card
-  if (solar) {
+  if (solar && !valorDaVendaFixo) {
     merged.billValue = solar.contaReais
     merged.consumoKwh = consumoClienteKwh ?? solar.consumoKwh   // consumo REAL do cliente
     merged.solar = { ...solar, kitMinimo }   // resultado completo (kit mínimo quando consumo baixo)
   }
 
   const leadUpdate: Prisma.LeadUncheckedUpdateInput = { customFields: merged as Prisma.InputJsonValue }
-  // valor do lead = valor do sistema calculado (ou o que a IA estimou)
-  if (solar) leadUpdate.value = solar.valorSistema
+  // valor do lead = valor do sistema calculado (ou o que a IA estimou) — salvo se o valor da venda já foi fixado
+  if (valorDaVendaFixo) { /* mantém o valor da venda */ }
+  else if (solar) leadUpdate.value = solar.valorSistema
   else if (result.estimatedValue != null) leadUpdate.value = result.estimatedValue
   if (result.contact.name && lead.title === `Lead ${channel}`) leadUpdate.title = result.contact.name
 
@@ -1474,7 +1599,11 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // incluir os ares (consumo futuro) — então perguntamos os dados e um humano revisa, em vez
   // de mandar um orçamento subdimensionado no consumo atual.
   // Conta NOVA lida agora (foto/PDF) → sempre apresenta o orçamento dela (pode ser outra conta do cliente).
+  // 18/11/2026: NUNCA manda orçamento automático junto com a passagem para o atendente (a IA passou para o
+  //    humano e o orçamento saiu mesmo assim) nem para quem quer AMPLIAR o sistema que já tem.
+  const ehAmpliacaoLead = !!(lead.customFields as Record<string, unknown> | null)?.ampliacao
   const presentBudget = !!solar && (mudancaRelevante || contaNovaLida || transformadorNovo) && !acIntent
+    && !result.handoff && !ehAmpliacaoLead
 
   // Quando a IA detecta pedido de humano, usa a mensagem PADRÃO de transferência
   // EXCEÇÃO: quando a IA já tem uma mensagem específica de contexto (pós-venda, financiamento etc.)
@@ -1567,8 +1696,21 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     const recentOut = await prisma.message.findMany({
       where: { conversationId: conversation.id, direction: 'outbound', senderType: { in: ['ai', 'system'] } },
       orderBy: { createdAt: 'desc' }, take: 2,
-      select: { content: true },
+      select: { content: true, createdAt: true },
     })
+    // Cliente mandou várias mensagens seguidas ("Olá!" + "Bom dia.") e cada uma rodou o motor: a 2ª resposta
+    // sai igual à 1ª. Isso NÃO é a IA travada (18/11/2026: 6 avisos falsos em 7 dias) — é só a duplicata.
+    // Se o cliente não escreveu nada DEPOIS da última resposta da IA, a duplicata é descartada em silêncio.
+    if (recentOut.length > 0 && normMsg(recentOut[0].content) === normMsg(outboundText)) {
+      const novasDoCliente = await prisma.message.count({
+        where: { conversationId: conversation.id, direction: 'inbound', createdAt: { gt: recentOut[0].createdAt } },
+      })
+      if (novasDoCliente === 0) {
+        console.log('[engine] resposta igual à anterior e sem mensagem nova do cliente (rajada) — duplicata descartada')
+        await prisma.lead.update({ where: { id: lead.id }, data: leadUpdate }).catch(() => {})
+        return { ...base, reply: null, aiHandled: true }
+      }
+    }
     const isExactRepeat  = recentOut.length > 0 && normMsg(recentOut[0].content) === normMsg(outboundText)
     // Loop semântico: 2 respostas anteriores + a nova TODAS compartilham o mesmo prefixo
     const isSemanticLoop = recentOut.length >= 2

@@ -45,22 +45,10 @@ export async function POST(req: Request) {
         })
       }
 
-      // Buscar ou criar stage "Entrou pelo Site"
-      let stage = await prisma.stage.findFirst({
-        where: { pipelineId: pipeline.id, name: 'Entrou pelo Site' },
-      })
-      if (!stage) {
-        stage = await prisma.stage.create({
-          data: {
-            pipelineId: pipeline.id,
-            name: 'Entrou pelo Site',
-            color: '#10b981', // verde
-            sortOrder: 0,
-          },
-        })
-      }
+      // Etapa de entrada do site: "Chegada pelo Site" (etapa-site.ts — nunca cria etapa na posição 0)
+      const stage = await (await import('@/lib/crm/etapa-site')).etapaDoSite(pipeline.id)
 
-      // Criar lead na etapa "Entrou pelo Site"
+      // Criar lead na etapa de entrada do site
       const lead = await prisma.lead.create({
         data: {
           title: body.visitorName, // título do lead (obrigatório)

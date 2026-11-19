@@ -8,6 +8,7 @@ import {
   sendManualMessage, toggleLeadAi, moveLeadStage, updateLeadValue, addNote, addTask, completeTask, deleteLead, simulateClientMessage, encerrarConversa,
 } from '@/app/actions/lead'
 import { summarizeLeadOrigin } from '@/lib/crm/lead-origin'
+import { lerValorBRL } from '@/lib/crm/valor-brl'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
 
@@ -51,6 +52,8 @@ const ACTION_LABELS: Record<string, string> = {
   appointment_reminder: '📞 Lembrete de agendamento',
   ac_followup: '❄️ Follow-up de ar-condicionado',
   redeliver: '🔄 Reenvio de mensagem',
+  send_ebook: '🎁 Envio do ebook de presente',
+  send_template: '📣 Template da lista de transmissão',
 }
 const actionLabel = (t: string) => ACTION_LABELS[t] ?? `⚙️ ${t}`
 
@@ -486,7 +489,19 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         {/* Etapa — transferir o lead de etapa */}
         <div>
           <label className="block text-xs font-medium text-[--muted-foreground] mb-1">Etapa (transferir)</label>
-          <select value={lead.stage.id} onChange={(e) => run(() => moveLeadStage(lead.id, e.target.value))}
+          <select value={lead.stage.id} onChange={(e) => {
+            const destino = lead.pipeline.stages.find((s) => s.id === e.target.value)
+            // 💰 Fechou (venda ganha): pede o valor REAL da venda — é ele que conta (Marketing e Meta)
+            if (destino?.isWon) {
+              const r = prompt(`Valor da venda (R$) — o valor real fechado com o cliente:`, String(lead.value || ''))
+              if (r === null) { e.target.value = lead.stage.id; return }   // cancelou → não move
+              const valor = lerValorBRL(r)
+              if (!valor) { alert('Valor inválido. O lead não foi movido.'); e.target.value = lead.stage.id; return }
+              run(async () => { await updateLeadValue(lead.id, valor); await moveLeadStage(lead.id, destino.id) })
+              return
+            }
+            run(() => moveLeadStage(lead.id, e.target.value))
+          }}
             className="w-full px-2 py-1.5 rounded-lg border border-[--input] bg-[--background] text-sm font-medium">
             {lead.pipeline.stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -494,8 +509,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
 
         {/* Valor */}
         <div>
-          <label className="block text-xs font-medium text-[--muted-foreground] mb-1">Valor estimado</label>
-          <input type="number" defaultValue={lead.value} onBlur={(e) => run(() => updateLeadValue(lead.id, parseFloat(e.target.value) || 0))}
+          <label className="block text-xs font-medium text-[--muted-foreground] mb-1" title="Digite o valor real quando o projeto mudar: a simulação é recalculada e a IA não troca mais esse valor.">Valor da venda (R$) ✏️</label>
+          <input type="number" key={`valor-${lead.value}`} defaultValue={lead.value} onBlur={(e) => run(() => updateLeadValue(lead.id, parseFloat(e.target.value) || 0))}
             className="w-full px-2 py-1.5 rounded-lg border border-[--input] bg-[--background] text-sm" />
         </div>
 
@@ -534,7 +549,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
           if (!s) return null
           return (
             <div className="p-3 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-200 dark:border-amber-900/40">
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1.5">☀️ Simulação Solar</p>
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1.5">☀️ Simulação Solar{(s as { valorManual?: boolean }).valorManual ? ' · valor da venda' : ''}</p>
               {([['Sistema', fmtBRL(s.valorSistema)], ['Economia/mês', fmtBRL(s.economiaMensal)], ['Payback', `${s.paybackAnos} anos`], ['Economia 30 anos', fmtBRL(s.economia30Anos)], ['Menor parcela', fmtBRL(s.menorParcela)]] as [string, string][]).map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-2"><span className="text-[--muted-foreground]">{k}</span><span className="font-medium">{v}</span></div>
               ))}

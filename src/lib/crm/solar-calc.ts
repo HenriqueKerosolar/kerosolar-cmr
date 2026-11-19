@@ -6,7 +6,7 @@ import { simularCartao } from './card-calc'
  * (https://lp.kerosolar.com.br/simulador/)
  */
 
-export const FATOR_CONVERSAO = 23         // R$ por kWh de consumo mensal: valor do sistema = kWh × 23,00 (dono, 2026-11-13; antes 20,87)
+export const FATOR_CONVERSAO = 25.41      // R$ por kWh de consumo mensal: valor do sistema = kWh × 25,41 (dono, 2026-11-19; antes 23,00 e 20,87)
 export const ECONOMIA_PERCENT_PADRAO = 80 // % de economia (70–85)
 export const REAJUSTE_PADRAO = 8          // reajuste anual da energia (%)
 export const TARIFA_KWH = 1.22            // R$ por kWh — usado p/ comunicar "atende conta de ~R$ (kWh × 1,22)"
@@ -145,7 +145,7 @@ export function reaisParaKwh(reais: number): number {
 
 /**
  * Núcleo do cálculo. valorSistema é informado explicitamente:
- * - quando o cliente dá kWh:   valorSistema = kWh × FATOR_CONVERSAO (R$ 23,00)
+ * - quando o cliente dá kWh:   valorSistema = kWh × FATOR_CONVERSAO (R$ 25,41)
  * - quando o cliente dá R$:    converte p/ kWh (R$ ÷ 1,22) e valorSistema = kWh × FATOR_CONVERSAO
  * contaReais (a conta em R$) é usada para a ECONOMIA.
  */
@@ -153,12 +153,13 @@ function calcularCore(
   contaReais: number,
   valorSistema: number,
   consumoKwh: number,
-  opts: { economiaPercent?: number; reajuste?: number } = {},
+  opts: { economiaPercent?: number; reajuste?: number; semPiso?: boolean } = {},
 ): SolarResult {
   // 🚫 PISO: nenhum sistema sai abaixo do kit mínimo (R$ 7.670). A fórmula kWh × FATOR_CONVERSAO só
-  //    alcança esse valor em ~334 kWh (com R$ 23,00), então consumos menores cairiam abaixo do piso — o que
+  //    alcança esse valor em ~302 kWh (com R$ 25,41), então consumos menores cairiam abaixo do piso — o que
   //    não pode acontecer. Abaixo do piso, usa o piso (e payback/parcelas recalculam por ele).
-  valorSistema = Math.max(Math.round(valorSistema), MINIMO_KIT_PRECO)
+  //    Exceção: valor REAL da venda digitado pelo atendente (semPiso) — vale o que ele digitou.
+  valorSistema = opts.semPiso ? Math.round(valorSistema) : Math.max(Math.round(valorSistema), MINIMO_KIT_PRECO)
 
   const economiaPercent = Math.min(100, Math.max(0, opts.economiaPercent ?? ECONOMIA_PERCENT_PADRAO))
   const reajuste = opts.reajuste ?? REAJUSTE_PADRAO
@@ -213,6 +214,16 @@ export function calcularSolar(contaReais: number, opts?: { economiaPercent?: num
 /** Cliente informou o CONSUMO em kWh → sistema = kWh × FATOR_CONVERSAO; conta = kWh × tarifa (para a economia). */
 export function calcularSolarPorKwh(kwh: number, opts?: { economiaPercent?: number; reajuste?: number }): SolarResult {
   return calcularCore(kwhParaReais(kwh), Math.round(kwh * FATOR_CONVERSAO), kwh, opts)
+}
+
+/**
+ * 💰 VALOR REAL DA VENDA (pedido do dono, 16/11/2026): o projeto mudou (mais placas, outro kit...) e o
+ * atendente digita o valor de verdade no campo "Valor da venda". A simulação mantém a conta/consumo do
+ * cliente e recalcula payback, economia e parcelas por esse valor (sem o piso do kit mínimo).
+ */
+export function ajustarValorVenda(r: SolarResult, valor: number): SolarResult & { valorManual: true } {
+  const novo = calcularCore(r.contaReais, valor, r.consumoKwh, { semPiso: true })
+  return { ...novo, hibrido: r.hibrido, transformador: r.transformador, consumoConta: r.consumoConta, valorManual: true }
 }
 
 /** 🔋 Regra do dono (2026-11-11): equipamento HÍBRIDO (com bateria) = fórmula padrão × 240%.
@@ -427,8 +438,9 @@ export function orcamentoTexto(r: SolarResult): string {
     : ''
 
   // Regra do dono (16/11/2026): quando o cliente MANDA A CONTA, o orçamento diz quantos kWh ele precisa.
+  // 19/11/2026: a frase mostra que é a MÉDIA lida da conta (pedido do dono: "mostra o resultado dessa média").
   const linhaKwh = r.consumoConta && r.consumoConta > 0
-    ? `\n⚡ *Pela sua conta, você precisa de ${Math.round(r.consumoConta).toLocaleString('pt-BR')} kWh por mês*${
+    ? `\n📈 *Pela sua conta, a sua média de consumo é de ${Math.round(r.consumoConta).toLocaleString('pt-BR')} kWh por mês*${
         r.consumoConta < r.consumoKwh ? ` _(o menor sistema que fazemos gera ${r.consumoKwh.toLocaleString('pt-BR')} kWh por mês)_` : ''}\n`
     : ''
   // Medidor monofásico: o transformador já está somado no valor (regra do dono, 16/11/2026).

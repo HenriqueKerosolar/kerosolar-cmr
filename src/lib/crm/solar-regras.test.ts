@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+﻿import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
 
@@ -85,12 +85,12 @@ describe('pagamento à vista', () => {
 describe('kWh no orçamento quando o cliente manda a conta', () => {
   it('diz quantos kWh por mês ele precisa', () => {
     const txt = orcamentoTexto({ ...calcularSolarPorKwh(520), consumoConta: 520 })
-    expect(txt).toContain('você precisa de 520 kWh por mês')
+    expect(txt).toContain('a sua média de consumo é de 520 kWh por mês')
   })
 
   it('consumo abaixo do menor sistema: mostra os dois números', () => {
     const txt = orcamentoTexto({ ...calcularSolarPorKwh(300), consumoConta: 180 })
-    expect(txt).toContain('você precisa de 180 kWh por mês')
+    expect(txt).toContain('a sua média de consumo é de 180 kWh por mês')
     expect(txt).toContain('gera 300 kWh por mês')
   })
 

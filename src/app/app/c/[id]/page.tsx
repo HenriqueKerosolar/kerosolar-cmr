@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { sendManualMessage, moveLeadStage, encerrarConversa } from '@/app/actions/lead'
+import { sendManualMessage, moveLeadStage, encerrarConversa, updateLeadValue } from '@/app/actions/lead'
+import { lerValorBRL } from '@/lib/crm/valor-brl'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
-type Stage = { id: string; name: string; color: string | null }
+type Stage = { id: string; name: string; color: string | null; isWon?: boolean }
 
 import { iconeCanal } from '@/lib/crm/canal-icone'
 
@@ -130,8 +131,19 @@ export default function ChatPage() {
   async function trocarEtapa(novoId: string) {
     if (!leadId || novoId === stageId) { setVerEtapas(false); return }
     const s = stages.find((x) => x.id === novoId)
+    // 💰 Fechou (venda ganha): pede o valor REAL da venda — é ele que conta (Marketing e Meta)
+    let valorVenda: number | null = null
+    if (s?.isWon) {
+      const r = prompt('Valor da venda (R$) — o valor real fechado com o cliente:')
+      if (r === null) { setVerEtapas(false); return }
+      valorVenda = lerValorBRL(r)
+      if (!valorVenda) { alert('Valor inválido. O lead não foi movido.'); setVerEtapas(false); return }
+    }
     setStageId(novoId); setStageName(s?.name ?? null); setStageColor(s?.color ?? null); setVerEtapas(false)
-    try { await moveLeadStage(leadId, novoId); await carregar() } catch { /* ignora */ }
+    try {
+      if (valorVenda) await updateLeadValue(leadId, valorVenda)
+      await moveLeadStage(leadId, novoId); await carregar()
+    } catch { /* ignora */ }
   }
 
   async function encerrar() {

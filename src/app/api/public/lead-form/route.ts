@@ -58,12 +58,8 @@ export async function POST(req: NextRequest) {
       pipeline = await prisma.pipeline.create({ data: { name: 'Padrão', isDefault: true }, select: { id: true, botName: true, botPrompt: true, aiModel: true } })
     }
 
-    let stage = await prisma.stage.findFirst({ where: { pipelineId: pipeline.id, name: 'Entrou pelo Site' } })
-    if (!stage) {
-      stage = await prisma.stage.create({
-        data: { pipelineId: pipeline.id, name: 'Entrou pelo Site', color: '#10b981', sortOrder: 0 },
-      })
-    }
+    // Etapa de entrada do site: "Chegada pelo Site" (etapa-site.ts — nunca cria etapa na posição 0)
+    const stage = await (await import('@/lib/crm/etapa-site')).etapaDoSite(pipeline.id)
 
     const campos: Record<string, unknown> = {}
     if (cidade)     campos.city = cidade

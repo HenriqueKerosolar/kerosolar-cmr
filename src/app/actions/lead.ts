@@ -255,9 +255,28 @@ export async function deleteLeadsByStage(stageId: string): Promise<number> {
   return ids.length
 }
 
+/**
+ * Valor REAL da venda (pedido do dono, 16/11/2026): o atendente corrige o valor quando o projeto muda.
+ * A "Simulação Solar" passa a usar esse valor (parcelas e payback recalculados) e fica marcada como
+ * manual — o motor não troca mais por um orçamento automático. É esse valor que vai no lead.won.
+ */
 export async function updateLeadValue(leadId: string, value: number) {
-  await verifySession()
-  await prisma.lead.update({ where: { id: leadId }, data: { value } })
+  const session = await verifySession()
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { value: true, customFields: true } })
+  if (!lead || (lead.value ?? 0) === value) return
+  const cf = (lead.customFields as Record<string, unknown> | null) ?? {}
+  const solar = cf.solar as import('@/lib/crm/solar-calc').SolarResult | undefined
+  let novoCf = cf
+  if (value > 0 && solar && typeof solar.contaReais === 'number') {
+    const { ajustarValorVenda, carregarTabelaFinanciamento } = await import('@/lib/crm/solar-calc')
+    await carregarTabelaFinanciamento()
+    novoCf = { ...cf, solar: ajustarValorVenda(solar, value), valorVendaManual: true }
+  } else if (value > 0) {
+    novoCf = { ...cf, valorVendaManual: true }
+  }
+  await prisma.lead.update({ where: { id: leadId }, data: { value, customFields: novoCf as object } })
+  const fmt = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  await prisma.note.create({ data: { leadId, type: 'system', authorId: session.userId, content: `💰 Valor da venda ajustado: ${fmt(lead.value ?? 0)} → ${fmt(value)}.` } }).catch(() => {})
   revalidatePath(`/leads/${leadId}`)
 }
 

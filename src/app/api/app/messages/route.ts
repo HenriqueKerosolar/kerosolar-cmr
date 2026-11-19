@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
   // Etapas do funil do lead (pra mostrar e mover)
   const stages = conv.lead?.pipelineId
-    ? await prisma.stage.findMany({ where: { pipelineId: conv.lead.pipelineId }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, color: true } })
+    ? await prisma.stage.findMany({ where: { pipelineId: conv.lead.pipelineId }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, color: true, isWon: true } })
     : []
 
   const messages = await prisma.message.findMany({
