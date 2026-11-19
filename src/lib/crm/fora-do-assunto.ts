@@ -17,6 +17,22 @@ export function ehSoLinkDeVideo(texto: string): boolean {
   return resto.length <= 60
 }
 
+/** Texto que é só um cumprimento ("Bom diaaaa", "oi", "boa tarde, tudo bem?") — NUNCA é "fora do assunto"
+ *  (19/11/2026: a IA descartou a Hozana, que pediu orçamento, por um "Bom diaaaa"). */
+export function ehSaudacaoSimples(texto: string): boolean {
+  const t = (texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/[\p{Extended_Pictographic}‍️!?.,;:~*\s]+/gu, ' ').trim()
+  if (!t || t.length > 60) return false
+  const sauda = '(?:o+i+e*|ola+|bo+m+ di+a+|bo+a+ ta+r+de+|bo+a+ no+i+te+|e ai+|opa+|tudo be+m+|td bem|como vai|blz|beleza|ola+ tudo bem)'
+  return new RegExp(`^${sauda}(?: (?:${sauda}|pra (?:voce|vc|vcs)|a todos|amigo|amiga|querid[oa]|henrique|(?:e|com) (?:voce|vc)))*$`).test(t)
+}
+
+/** O cliente já falou de energia solar / orçamento antes nesta conversa? Então ele é cliente: nada de aviso. */
+export function clienteJaFalouDeSolar(mensagensDoCliente: string[]): boolean {
+  return mensagensDoCliente.some((m) =>
+    /(or[cç]amento|energia|solar|placa|painel|pain[eé]is|kwh|\bkw\b|conta de luz|conta|consumo|instala|financ|kit|usina|inversor)/i.test(m || ''))
+}
+
 export function textoAvisoFora(saudacao: string, numeroDoAviso: 1 | 2): string {
   const base = `${saudacao}! 😊 Obrigada pela mensagem! Só precisamos avisar: este canal é voltado ${AVISO_FORA}. Sou uma inteligência artificial e estou configurada para atender apenas assuntos relacionados ao solar. Por isso, peço com carinho que não envie mensagens desse tipo por aqui. Se precisar de um orçamento de energia solar, é só chamar! 👋`
   return numeroDoAviso === 2

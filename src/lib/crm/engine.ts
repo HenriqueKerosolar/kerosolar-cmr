@@ -1377,7 +1377,29 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
   // 🔇 Mensagem fora do assunto (corrente, meme, vídeo...) — regra do dono (18/11/2026): DOIS avisos;
   //    insistiu depois deles → número BLOQUEADO (block list: o que ele mandar é ignorado).
   {
-    const { AVISO_FORA } = await import('./fora-do-assunto')
+    const { AVISO_FORA, ehSaudacaoSimples, clienteJaFalouDeSolar } = await import('./fora-do-assunto')
+    // 🛑 Trava (19/11/2026, Hozana): cumprimento escrito ("Bom diaaaa") ou cliente que JÁ pediu orçamento
+    //    nunca recebe o aviso de "fora do assunto" nem é descartado — a IA responde retomando o atendimento.
+    const anteriores = msgs.filter((m) => m.direction === 'inbound').slice(0, -1).map((m) => m.content)
+    if ((result.discardLead || result.reply?.includes(AVISO_FORA))
+        && (ehSaudacaoSimples(text) || clienteJaFalouDeSolar(anteriores))
+        && !result.reply?.includes('keroservice') && !/98383-7434/.test(result.reply ?? '')) {
+      const r2 = await runAgent(history, {
+        botName:   fullPipeline?.botName,
+        botPrompt: currentStage?.botPrompt || fullPipeline?.botPrompt,
+        model:     fullPipeline?.aiModel,
+        estimate,
+        learned,
+        lead: (lead.customFields as Record<string, unknown> | null) ?? null,
+        stageName: currentStage?.name ?? null,
+        extraRules: `## ATENÇÃO (PRIORIDADE MÁXIMA): esta pessoa é CLIENTE de energia solar (ou só mandou um cumprimento). NÃO use a resposta de "mensagem fora de contexto", NÃO diga que o canal é exclusivo para energia solar e NÃO marque discardLead. Responda o cumprimento com simpatia e retome o atendimento de onde parou (ex.: se ainda falta, peça a foto da conta de luz, o consumo em kWh ou o valor médio da conta).`,
+      })
+      result.reply = r2.reply
+      result.discardLead = false
+      if (!r2.reply || r2.reply.includes(AVISO_FORA)) {
+        result.reply = `${saudacaoAgora()}! 😊 Tudo bem? Para eu seguir com o seu orçamento de energia solar, me envia a foto da sua conta de luz — ou, se preferir, me diz o consumo médio em kWh ou o valor médio da conta em reais.`
+      }
+    }
     if (result.discardLead && result.reply?.includes(AVISO_FORA)) {
       const r = await avisoOuBloqueio(contact, conversation, lead.id)
       if (r === 'bloqueado') return { ...base, reply: null, aiHandled: true }
