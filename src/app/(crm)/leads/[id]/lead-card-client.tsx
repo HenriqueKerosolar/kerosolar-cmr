@@ -9,6 +9,7 @@ import {
 } from '@/app/actions/lead'
 import { summarizeLeadOrigin } from '@/lib/crm/lead-origin'
 import { lerValorBRL } from '@/lib/crm/valor-brl'
+import { QuickReplies } from '@/components/quick-replies'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
 
@@ -86,6 +87,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [pastedFile, setPastedFile] = useState<File | null>(null)
   const [pastedPreview, setPastedPreview] = useState<string | null>(null)
   const [tplOpen, setTplOpen] = useState(false)
+  const [qrOpen, setQrOpen] = useState(false)   // ⚡ respostas rápidas
   const [tplList, setTplList] = useState<{ id: string; displayName: string; bodyText: string; actionType: string | null }[]>([])
   const [tplSending, setTplSending] = useState<string | null>(null)
   const [waAccounts, setWaAccounts] = useState<{ id: string; label: string; provider: string; phone: string | null }[]>([])
@@ -158,7 +160,7 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
     }
   }
 
-  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const file = e.clipboardData.files?.[0]
     if (!file || !file.type.startsWith('image/')) return
     e.preventDefault()
@@ -413,6 +415,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
             </div>
           )}
 
+          {/* ⚡ Respostas rápidas (botão ⚡ ou digitar "/" no campo) */}
+          {!testMode && (qrOpen || /^\/\S*$/.test(text)) && (
+            <QuickReplies filtro={text.startsWith('/') ? text.slice(1) : ''} nomeCliente={lead.contact?.name}
+              onEscolher={(t) => { setText(t); setQrOpen(false) }} onFechar={() => { setQrOpen(false); if (text.startsWith('/')) setText('') }} />
+          )}
+
           {/* Seletor de número: escolhe por qual WhatsApp a mensagem sai (só com 2+ contas conectadas) */}
           {!testMode && waAccounts.length > 1 && (
             <div className="flex items-center gap-2 text-xs">
@@ -446,6 +454,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 📋
               </button>
             )}
+            {!testMode && (
+              <button onClick={() => { setQrOpen(!qrOpen); setTplOpen(false) }} title="Respostas rápidas (ou digite / no campo)"
+                className={`shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border text-lg hover:bg-[--accent] transition-colors ${qrOpen ? 'border-[--primary] bg-[--primary]/10' : 'border-[--input]'}`}>
+                ⚡
+              </button>
+            )}
             <div className="flex-1 flex flex-col gap-1">
               {pastedPreview && (
                 <div className="relative inline-block self-start">
@@ -455,11 +469,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                     className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center leading-none">✕</button>
                 </div>
               )}
-              <input value={text} onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && send()}
+              <textarea value={text} onChange={(e) => setText(e.target.value)}
+                rows={Math.min(6, Math.max(1, text.split('\n').length))}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!/^\/\S*$/.test(text)) send() } }}
                 onPaste={handlePaste}
                 placeholder={pastedFile ? 'Legenda (opcional)…' : testMode ? '📱 Mensagem do cliente (teste do bot)…' : 'Escreva uma mensagem ou cole uma imagem (Ctrl+V)…'}
-                className={`px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : pastedFile ? 'border-blue-400 bg-[--background]' : 'border-[--input] bg-[--background]'}`} />
+                className={`px-3 py-2 rounded-lg border text-sm outline-none ${testMode ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/20' : pastedFile ? 'border-blue-400 bg-[--background]' : 'border-[--input] bg-[--background]'} resize-none`} />
               {!testMode && (
                 <button onClick={melhorarComIA} disabled={improving || !text.trim()}
                   className="text-left px-3 py-1.5 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 font-medium self-start">

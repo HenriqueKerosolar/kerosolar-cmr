@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { sendManualMessage, moveLeadStage, encerrarConversa, updateLeadValue } from '@/app/actions/lead'
 import { lerValorBRL } from '@/lib/crm/valor-brl'
+import { QuickReplies } from '@/components/quick-replies'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
 type Stage = { id: string; name: string; color: string | null; isWon?: boolean }
@@ -75,6 +76,7 @@ export default function ChatPage() {
   const [verEtapas, setVerEtapas] = useState(false)
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [texto, setTexto] = useState('')
+  const [qrOpen, setQrOpen] = useState(false)   // ⚡ respostas rápidas
   const [enviando, setEnviando] = useState(false)
   const fimRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -372,6 +374,12 @@ export default function ChatPage() {
 
       {/* Caixa de resposta */}
       <div className="shrink-0 bg-white border-t border-zinc-200 p-2">
+        {!gravando && (qrOpen || /^\/\S*$/.test(texto)) && (
+          <div className="mb-2 text-zinc-900">
+            <QuickReplies filtro={texto.startsWith('/') ? texto.slice(1) : ''} nomeCliente={name === 'Conversa' ? '' : name}
+              onEscolher={(t) => { setTexto(t); setQrOpen(false) }} onFechar={() => { setQrOpen(false); if (texto.startsWith('/')) setTexto('') }} />
+          </div>
+        )}
         <input ref={fileRef} type="file" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = '' }} />
         {gravando ? (
@@ -385,9 +393,11 @@ export default function ChatPage() {
           <div className="flex items-end gap-1.5">
             <button onClick={() => fileRef.current?.click()} disabled={enviando}
               className="w-10 h-10 rounded-full text-xl text-zinc-500 shrink-0 disabled:opacity-50" title="Anexar arquivo">📎</button>
+            <button onClick={() => setQrOpen(!qrOpen)}
+              className={`w-10 h-10 rounded-full text-xl shrink-0 ${qrOpen ? 'bg-orange-100' : ''}`} title="Respostas rápidas">⚡</button>
             <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={1}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }}
-              placeholder="Mensagem…"
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!/^\/\S*$/.test(texto)) enviar() } }}
+              placeholder="Mensagem… (/ = respostas rápidas)"
               className="flex-1 px-3 py-2 rounded-2xl border border-zinc-300 bg-white text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-300 resize-none max-h-32" />
             {texto.trim() ? (
               <button onClick={enviar} disabled={enviando}

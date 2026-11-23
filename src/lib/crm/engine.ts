@@ -1657,11 +1657,17 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     }
     // Em ambos os casos: desativa IA, cria tarefa e nota
     leadUpdate.aiEnabled = false
+    // 23/11/2026 (Erik Olsen): passou para o humano → NADA de 2ª mensagem automática ("fora do horário,
+    // quer continuar agora?") nem retomada às 9h por cima do atendente.
+    base.followUp = null
+    await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, type: { in: ['after_hours_resume', 'flow_noreply', 'flow_continue', 'chegada_followup'] }, done: false }, data: { done: true } })
+    const naoSoube = /vou (confirmar|verificar)/i.test(result.reply ?? '')
     await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false } })
     // Título da tarefa contextual conforme a etapa atual
     const stageNome = pipeline.stages.find((s) => s.id === lead.stageId)?.name ?? ''
     const taskTitle = /ja.*cliente|already/i.test(stageNome)
       ? '🔧 Atendimento pós-venda — continuar atendimento'
+      : naoSoube ? '❓ IA não soube responder — responder a pergunta do cliente'
       : 'Cliente pediu atendimento humano'
     await prisma.task.create({
       data: { leadId: lead.id, title: taskTitle, type: 'message', dueAt: now },
