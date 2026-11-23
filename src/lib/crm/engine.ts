@@ -169,23 +169,50 @@ async function avisoOuBloqueio(
   return 'bloqueado'
 }
 
-export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
-  const key = `${input.channel}:${input.externalId}`
+async function pegarLock(key: string): Promise<() => void> {
   const prev = __ingestLocks.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const mine = new Promise<void>((r) => { release = r })
+  let soltar!: () => void
+  const mine = new Promise<void>((r) => { soltar = r })
   const chained = prev.then(() => mine)
   __ingestLocks.set(key, chained)
-  try {
-    await prev.catch(() => {})
-    return await ingestMessageInner(input)
-  } finally {
-    release()
+  await prev.catch(() => {})
+  let solto = false
+  return () => {
+    if (solto) return
+    solto = true
+    soltar()
     if (__ingestLocks.get(key) === chained) __ingestLocks.delete(key)
   }
 }
 
-async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
+export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
+  const key = `${input.channel}:${input.externalId}`
+  let release = await pegarLock(key)
+  // ⏳ Espera o cliente terminar de escrever (aguardarCliente): SOLTA o lock durante a espera para as
+  //    próximas mensagens dele serem gravadas, e pega de novo antes de continuar.
+  const pausar = async (ms: number) => {
+    release()
+    await new Promise((r) => setTimeout(r, ms))
+    release = await pegarLock(key)
+  }
+  try {
+    return await ingestMessageInner(input, pausar)
+  } finally {
+    release()
+  }
+}
+
+/** Segundos que a IA espera o cliente terminar de escrever (regra do dono, 23/11/2026). Config: ai_wait_seconds. */
+async function segundosDeEspera(): Promise<number> {
+  try {
+    const cfg = await prisma.systemConfig.findUnique({ where: { key: 'ai_wait_seconds' } })
+    const n = Number(cfg?.value)
+    if (Number.isFinite(n) && n >= 0 && n <= 120) return n
+  } catch { /* padrão */ }
+  return 20
+}
+
+async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => Promise<void>): Promise<IngestResult> {
   const { channel, externalId } = input
   const isSimulator = channel === 'simulator'   // no simulador: timers desativados para testes
   let text = input.text
@@ -336,7 +363,7 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
 
   // 4) Mensagem recebida
   const now = new Date()
-  await prisma.message.create({
+  const msgRecebida = await prisma.message.create({
     data: {
       conversationId: conversation.id, direction: 'inbound', senderType: 'contact',
       content: input.displayText ?? text, externalId: input.externalMessageId ?? null,
@@ -370,6 +397,43 @@ async function ingestMessageInner(input: IngestInput): Promise<IngestResult> {
     contactId: contact.id, conversationId: conversation.id, leadId: lead.id,
     reply: null, aiHandled: false, handoff: false,
     stage: pipeline.stages.find((s) => s.id === lead!.stageId)?.name ?? firstStage.name,
+  }
+
+  // ⏳ ESPERA O CLIENTE TERMINAR DE ESCREVER (regra do dono, 23/11/2026 — Nunes: "Bom dia" / "De onde é a
+  //    empresa?" / "Sou de Maricá" chegaram juntas e a IA respondeu só a saudação, perdendo a pergunta).
+  //    Mensagem de TEXTO no WhatsApp: espera N segundos (ai_wait_seconds, padrão 20). Se chegou outra mensagem
+  //    dele nesse tempo, ESTA não responde — a mais nova responde por todas. Foto/PDF/áudio de conta seguem na hora.
+  const ehTextoPuro = !input.imageBase64 && !input.pdfBase64 && !input.pdfText && !input.mediaType
+  if (pausar && channel === 'whatsapp' && ehTextoPuro && !input.foraJanela) {
+    const espera = await segundosDeEspera()
+    if (espera > 0) {
+      await pausar(espera * 1000)
+      const maisNova = await prisma.message.findFirst({
+        where: { conversationId: conversation.id, direction: 'inbound', id: { not: msgRecebida.id }, createdAt: { gte: msgRecebida.createdAt } },
+        select: { id: true },
+      })
+      if (maisNova) {
+        console.log('[engine] cliente ainda escrevendo — a próxima mensagem responde por esta')
+        return base
+      }
+      // Recarrega o estado (pode ter mudado durante a espera) e junta TODAS as mensagens de texto que o
+      // cliente mandou desde a nossa última resposta → a IA responde tudo de uma vez.
+      const [ld, cv] = await Promise.all([
+        prisma.lead.findUnique({ where: { id: lead.id } }),
+        prisma.conversation.findUnique({ where: { id: conversation.id } }),
+      ])
+      if (ld) lead = { ...lead, ...ld }
+      if (cv) conversation = { ...conversation, ...cv }
+      const ultimaNossa = await prisma.message.findFirst({
+        where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+      })
+      const doCliente = await prisma.message.findMany({
+        where: { conversationId: conversation.id, direction: 'inbound', mediaType: null, ...(ultimaNossa ? { createdAt: { gt: ultimaNossa.createdAt } } : {}) },
+        orderBy: { createdAt: 'asc' }, take: 10, select: { content: true },
+      })
+      const juntas = doCliente.map((m) => (m.content ?? '').trim()).filter(Boolean)
+      if (juntas.length > 1) text = juntas.join('\n')
+    }
   }
 
   // 📲 Chegou pelo link do convite (Instagram/Facebook → WhatsApp): recebe o cliente sem recomeçar.

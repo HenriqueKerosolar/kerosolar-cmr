@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import crypto from 'crypto'
 import { prisma } from '@/lib/prisma'
 
@@ -134,9 +134,13 @@ export async function POST(req: NextRequest) {
 
         const nomeContato = value?.contacts?.[0]?.profile?.name as string | undefined
 
-        for (const m of msgs) {
-          await processarMensagem(m, account, nomeContato)
-        }
+        // Responde 200 à Meta NA HORA e processa depois (after): o motor espera o cliente terminar de
+        // escrever (~20s, engine.ts) e a Meta reenvia o webhook se a resposta demorar.
+        after(async () => {
+          for (const m of msgs) {
+            await processarMensagem(m, account, nomeContato).catch((e) => console.error('[wa cloud processar]', e))
+          }
+        })
       }
     }
   } catch (e) {
