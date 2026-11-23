@@ -143,7 +143,7 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
     const { comandoIndicacaoKwh } = await import('@/lib/crm/flow')
     let tratado = false
     try {
-      tratado = await comandoIndicacaoKwh(leadId, conv.id, text)
+      tratado = await comandoIndicacaoKwh(leadId, conv.id, text, session.userId)
     } catch (e) {
       // "faz" incompleto (sem kWh/R$) ou fora da faixa: nada vai ao cliente; a tela mostra o aviso
       return { erro: e instanceof Error ? e.message : 'Não consegui montar o orçamento. Nada foi enviado.' }

@@ -191,7 +191,8 @@ export async function dispatchOutbound(
     // 2026-11-12 (regra do dono: nunca repetir resposta): bloqueia também mensagem QUASE IGUAL a
     // qualquer outra já enviada na conversa (ex.: a mesma recepção reescrita). Orçamento fica de fora
     // (é reenviado de propósito quando o cliente volta) — para ele vale só a trava de texto idêntico.
-    if (!/^\s*☀️\s*\*ORÇAMENTO/.test(text)) {
+    // (23/11/2026: com o "Bom dia!" na frente o orçamento não era reconhecido e o "faz 600 kwh" da Valessa foi barrado)
+    if (!/^\s*(?:(?:bom dia|boa tarde|boa noite|boa madrugada)[!,.]?\s*)?☀️\s*\*ORÇAMENTO/i.test(text)) {
       const anteriores = await prisma.message.findMany({
         where: { conversationId, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true },
       })
@@ -521,7 +522,7 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
  * etapa e tanto pelo CRM quanto pelo app do WhatsApp. Aceita kwh/kw/k.
  * Retorna true se reconheceu e tratou o comando (aí NÃO se deve enviar/registrar o texto literal).
  */
-export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string): Promise<boolean> {
+export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string, userId?: string): Promise<boolean> {
   // Só quando a mensagem INTEIRA é "faz XXXX" (comando-indicacao.ts, regra do dono 16/11/2026) — qualquer
   // outra frase com kWh vai como texto normal (incidente: orçamento enviado sem ninguém pedir).
   const { lerComandoIndicacao } = await import('./comando-indicacao')
@@ -546,7 +547,9 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
     customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
     value: solar.valorSistema, lastMessageAt: new Date(),
   } }).catch(() => {})
-  await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'ai')
+  // O OPERADOR pediu → sai SEMPRE, como mensagem dele (regra do dono, 23/11/2026: "independente de qualquer
+  // coisa ele deveria ter feito"): sem trava de repetição, sem adiar por horário, com IA em manual ou não.
+  await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'human', userId, true)
   await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu orçamento ("faz") por ${kwh} → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
   // Enviou orçamento → move pra etapa "Recebeu orçamento automático" (se ainda não estiver lá).
   const alvo = await prisma.stage.findFirst({ where: { name: { contains: 'Recebeu orçamento autom', mode: 'insensitive' } } })

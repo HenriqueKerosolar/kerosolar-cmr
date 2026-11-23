@@ -310,6 +310,13 @@ export function pedeHibrido(texto: string): boolean {
   return /\bhibrid\w*|\bbateria\w*|\bbackup\b|armazenamento de energia/.test(t)
 }
 
+/** Cliente pediu explicitamente ON GRID (ligado à rede, sem bateria)? — 23/11/2026 (Valessa: pediu híbrido
+ *  antes e depois "instalação on grid"; o orçamento saiu híbrido). */
+export function pedeOnGrid(texto: string): boolean {
+  const t = (texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  return /\bon[\s-]?grid\b|sem bateria|ligado a rede|conectado a rede/.test(t) && !pedeHibrido(t.replace(/sem bateria/g, ''))
+}
+
 const brl = (n: number) => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 // ── 💰 ENTRADA / SINAL ────────────────────────────────────────────────────────
