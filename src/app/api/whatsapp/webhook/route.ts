@@ -284,6 +284,7 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     pdfText,
     mediaUrl: mediaUrl ?? null,
     mediaType: mediaType ?? null,
+    permitirBelenus: true,   // roda no after() do webhook (a Meta já recebeu o 200)
   })
 
   // 🆕 CTWA: se a mensagem veio de um clique em anúncio, guarda o carimbo no contato
@@ -328,6 +329,11 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
       await new Promise((r) => setTimeout(r, 1500))
       await sendCloudText(account.cloudPhoneNumberId, from, extra).catch((e) => console.error('[wa cloud send extra]', e))
     }
+  }
+  // 📄 PDF do orçamento (Belenus) — sai DEPOIS do texto do orçamento e dos extras
+  if (result?.documentoDepois) {
+    const { enviarDocumentoDepois } = await import('@/lib/crm/belenus/auto')
+    await enviarDocumentoDepois(result.documentoDepois)
   }
   // 2ª mensagem combinada pelo motor (ex.: fora do horário: responde a pergunta e DEPOIS pergunta
   // se o cliente quer continuar agora ou no próximo dia útil) — sai só depois da resposta.

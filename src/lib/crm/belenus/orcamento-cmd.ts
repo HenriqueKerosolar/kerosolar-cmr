@@ -12,9 +12,10 @@ const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', curren
 export const nomeArquivoOrcamento = (numero: string) => `Orcamento-KeroSolar-${numero}.pdf`
 
 /** Gera o PDF do kit cotado e guarda no lead (customFields.orcamentoBelenus). Não envia nada ao cliente. */
-export async function gerarOrcamentoDoLead(leadId: string, r: ResultadoCotacao, agora = new Date()): Promise<OrcamentoSalvo> {
+export async function gerarOrcamentoDoLead(leadId: string, r: ResultadoCotacao, agora = new Date(), cfDaRodada?: Record<string, unknown>): Promise<OrcamentoSalvo> {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true, contact: { select: { name: true, phone: true, whatsappId: true, email: true, customFields: true } } } })
-  const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+  // orçamento automático: o motor passa os customFields desta rodada (consumo/cidade lidos agora ainda não estão no banco)
+  const cf = cfDaRodada ?? (lead?.customFields as Record<string, unknown> | null) ?? {}
   const solar = ehObj(cf.solar) ? cf.solar : {}
   let consumo = num(cf.consumoKwh ?? solar.consumoKwh)
   if (!(consumo > 0)) {

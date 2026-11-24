@@ -126,6 +126,7 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
     ...(imagem ? { imageBase64: imagem.base64, imageMediaType: imagem.mime } : {}),
     ...(pdf ? { pdfBase64: pdf } : {}),
     ...(principal ? { mediaUrl: principal.url, mediaType: principal.tipo } : {}),
+    permitirBelenus: true,   // segue em segundo plano depois do ack ao Mind (socialMessages.ts)
   })
   // anexos extras da mesma mensagem (ex.: 3 fotos) → um item cada no chat, para abrir no CRM
   for (const extra of guardados.slice(1)) {
@@ -147,6 +148,11 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
     } else if (m.content?.trim()) {
       await enviarDmPelaPonte(result.conversationId, m.id, m.content, input.externalId)
     }
+  }
+  // 📄 PDF do orçamento (Belenus) — depois do texto, como anexo pela ponte (enviar-arquivo.ts)
+  if (result.documentoDepois) {
+    const { enviarDocumentoDepois } = await import('@/lib/crm/belenus/auto')
+    await enviarDocumentoDepois(result.documentoDepois)
   }
   // 2ª mensagem combinada pelo motor (ex.: fora do horário) — sai depois da resposta.
   if (result.followUp) {

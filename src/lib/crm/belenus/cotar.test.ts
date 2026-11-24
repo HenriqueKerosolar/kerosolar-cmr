@@ -204,12 +204,30 @@ describe('montarKitBelenus (fetch simulado)', () => {
     expect(f).not.toHaveBeenCalled()
   })
 
-  it('no máximo 1 cotação por vez', async () => {
+  it('FILA: duas cotações pedidas juntas NÃO rodam ao mesmo tempo (a 2ª espera a 1ª terminar)', async () => {
     const b = belenusFalsa({ inversoresMono: [auxsol3k] })
     vi.stubGlobal('fetch', b.fn)
     const p1 = montarKitBelenus({ kwp: 4.34 })
-    await expect(montarKitBelenus({ kwp: 4.34 })).rejects.toThrow(/em andamento/)
+    const p2 = montarKitBelenus({ kwp: 4.34 })
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1.modulo.codigo).toBe('M620')
+    expect(r2.modulo.codigo).toBe('M620')
+    // cada cotação começa com o login; o 2º login só acontece depois da última chamada da 1ª (o salvar)
+    const logins = b.urls.map((u, i) => (u.endsWith('PessoaJuridicaByEmail') ? i : -1)).filter((i) => i >= 0)
+    const salvamentos = b.urls.map((u, i) => (u.endsWith('SalvarOrcamentoCliente') ? i : -1)).filter((i) => i >= 0)
+    expect(logins).toHaveLength(2)
+    expect(logins[1]).toBeGreaterThan(salvamentos[0])
+  })
+
+  it('FILA: quem passa do tempo de espera desiste (o motor manda pela fórmula) e não trava os próximos', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k] })
+    // Belenus "lenta" (5 ms por chamada) para a 1ª cotação ainda estar rodando quando a 2ª desiste
+    vi.stubGlobal('fetch', async (...a: Parameters<typeof b.fn>) => { await new Promise((r) => setTimeout(r, 5)); return b.fn(...a) })
+    const p1 = montarKitBelenus({ kwp: 4.34 })
+    await expect(montarKitBelenus({ kwp: 4.34 }, { esperaMaxMs: 1 })).rejects.toThrow(/fila de cotações/)
     await p1
+    // depois da 1ª, a fila anda normalmente
+    await expect(montarKitBelenus({ kwp: 4.34 })).resolves.toMatchObject({ modulo: { codigo: 'M620' } })
   })
 })
 

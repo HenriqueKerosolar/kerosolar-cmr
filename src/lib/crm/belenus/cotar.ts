@@ -31,16 +31,54 @@ export type EntradaCotacao = {
   entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
 }
 
-// ── trava: no máximo 1 cotação por vez ───────────────────────────────────────
-let emAndamento = false
+// ── FILA: nunca duas cotações ao mesmo tempo (Fase 5, 24/11/2026) ─────────────
+// Antes era uma trava que recusava a 2ª cotação; com o orçamento automático vários clientes podem pedir juntos,
+// então cada um ESPERA a vez até `esperaMaxMs` (padrão 120 s). Estourou → erro (o motor manda pela fórmula).
+export const ESPERA_FILA_MS = 120_000
+let filaBelenus: Promise<void> = Promise.resolve()
 
-export async function montarKitBelenus(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
-  if (emAndamento) throw new ErroBelenus('Já tem uma cotação da Belenus em andamento. Espere ela terminar (cerca de 1 minuto) e mande de novo.')
-  emAndamento = true
+export async function montarKitBelenus(entrada: EntradaCotacao, opts: { esperaMaxMs?: number } = {}): Promise<ResultadoCotacao> {
+  const espera = opts.esperaMaxMs ?? ESPERA_FILA_MS
+  const anterior = filaBelenus
+  let liberar!: () => void
+  const minha = new Promise<void>((r) => { liberar = r })
+  filaBelenus = anterior.then(() => minha)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const estourou = await Promise.race([
+    anterior.then(() => false, () => false),
+    new Promise<boolean>((r) => { timer = setTimeout(() => r(true), espera) }),
+  ])
+  clearTimeout(timer)
+  if (estourou) {
+    // desiste da vez: quem vier depois não espera por esta cotação (só pela que está rodando)
+    liberar()
+    throw new ErroBelenus(`A fila de cotações da Belenus passou de ${Math.round(espera / 1000)} s. Tente de novo em instantes.`)
+  }
   try {
     return await montar(entrada)
   } finally {
-    emAndamento = false
+    liberar()
+  }
+}
+
+/**
+ * Entrada da cotação a partir do lead (customFields + contato) — usada pelo "cota belenus" e pelo orçamento
+ * automático do motor (que passa os customFields já atualizados nesta rodada: medidor/cidade lidos agora).
+ */
+export function entradaDoLead(
+  kwp: number, cf: Record<string, unknown>,
+  contato: Parameters<typeof lerDadosCliente>[0], opts: { micro?: boolean } = {},
+): EntradaCotacao {
+  const cli = lerDadosCliente(contato, cf)
+  return {
+    kwp,
+    ligacao: lerLigacao(cf.medidor),
+    tensao: lerTensao(cf.tensao ?? cf.tensaoAtendimento ?? cf.voltagem),
+    telhado: lerTelhado(cf.telhado ?? cf.tipoTelhado ?? cf.roofType),
+    micro: !!opts.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')),
+    destino: lerDestino(cli.cidade, cli.uf),
+    nomeCliente: cli.nome,
+    entrega: cli.endereco || cli.cep ? { ...(cli.endereco ?? {}), cep: cli.cep } : null,
   }
 }
 
@@ -372,17 +410,10 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
     estimado = true
   }
 
-  const ligacao = lerLigacao(cf.medidor)
-  const tensao = lerTensao(cf.tensao ?? cf.tensaoAtendimento ?? cf.voltagem)
-  const telhado = lerTelhado(cf.telhado ?? cf.tipoTelhado ?? cf.roofType)
-  // frete: município do lead (customFields cidade/município + uf/estado); só CEP não basta (sem consulta externa)
-  // dados do cliente (contato + customFields): cidade/UF (chaves reais: city/state), nome completo e endereço se houver
-  const cli = lerDadosCliente(lead?.contact, cf)
-  const destino = lerDestino(cli.cidade, cli.uf)
-  const entrega = cli.endereco || cli.cep ? { ...(cli.endereco ?? {}), cep: cli.cep } : null
+  // dados do cliente (contato + customFields): medidor, telhado, cidade/UF (chaves reais: city/state), nome e endereço
   let resultado: ResultadoCotacao
   try {
-    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')), destino, nomeCliente: cli.nome, entrega })
+    resultado = await montarKitBelenus(entradaDoLead(kwp, cf, lead?.contact, { micro: !!cmd.micro }))
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha na cotação da Belenus.'
     console.error('[belenus] cotação falhou:', msg)

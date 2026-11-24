@@ -124,6 +124,10 @@ export type IngestInput = {
   foraJanela?: boolean           // mensagem com mais de 24h (reentrega atrasada) → só template, sem IA
   mediaUrl?: string | null       // anexo do cliente salvo (para visualizar no chat)
   mediaType?: 'image' | 'video' | 'document' | 'audio' | null
+  /** ⚡ Orçamento automático pela Belenus (Fase 5). Só quem processa em SEGUNDO PLANO liga (WhatsApp Cloud no after()
+   *  do webhook; Instagram/Facebook pela ponte do Mind). Webchat/simulador/webhook antigo da Meta respondem na hora →
+   *  ficam na fórmula para o cliente não esperar até 2 minutos. */
+  permitirBelenus?: boolean
 }
 
 export type IngestResult = {
@@ -138,6 +142,8 @@ export type IngestResult = {
   followUp?: string | null
   /** Mensagens JÁ GRAVADAS no banco que o chamador deve ENVIAR depois da resposta, nesta ordem (ex.: vários orçamentos). */
   followUps?: string[]
+  /** PDF do orçamento (Belenus) que o chamador envia DEPOIS da resposta (belenus/auto.ts → enviarDocumentoDepois). */
+  documentoDepois?: import('./belenus/auto').DocumentoDepois | null
 }
 
 // 🔒 Lock por conversa (serviço com 1 réplica): serializa o processamento de mensagens do MESMO
@@ -1724,7 +1730,52 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 🕒 nunca "Bom dia" às 17h: corrige o cumprimento da IA pelo horário de Brasília
   let outboundText = presentBudget && solar ? orcamentoTexto(solar) : corrigirCumprimento(result.reply)
   let orcamentosExtras: string[] = []
+  let documentoDepois: import('./belenus/auto').DocumentoDepois | null = null
   if (presentBudget && solar) {
+    // ⚡ ORÇAMENTO AUTOMÁTICO PELA BELENUS (Fase 5 — dono liberou, 24/11/2026): kit e preço reais da distribuidora
+    //    (valor ao cliente = total Belenus × 1,6 + transformador). Falha ou demora (> ~120 s) → fica a fórmula de
+    //    sempre (R$ 25,41/kWh) e o operador é avisado. NÃO usa: simulador/webchat (respondem na hora), híbrido,
+    //    ampliação, valor de venda manual, kit mínimo (consumo baixo), vários valores, atualização só do transformador.
+    {
+      const { extrairVariosValores: variosPre } = await import('./solar-calc')
+      const vp = variosPre(text)
+      const cfRodada = merged as Record<string, unknown>
+      const { podeUsarBelenusNoOrcamento } = await import('./belenus/auto')
+      if (podeUsarBelenusNoOrcamento({
+        permitido: !!input.permitirBelenus, simulador: isSimulator, hibrido: !!solar.hibrido || !!cfRodada.hibrido,
+        ampliacao: ehAmpliacaoLead || !!cfRodada.ampliacao, valorVendaFixo: valorDaVendaFixo, kitMinimo,
+        variosValores: !!vp && vp.valores.length >= 2, soTransformador: transformadorNovo,
+      })) {
+        const { belenusAutoLigado, orcamentoBelenusAuto, documentoDoOrcamento } = await import('./belenus/auto')
+        const chave = await belenusAutoLigado()
+        if (chave.ligado) {
+          const bel = await orcamentoBelenusAuto({ leadId: lead.id, consumoKwh: solar.consumoKwh, cf: cfRodada })
+          if (bel.ok) {
+            const { solarComValorBelenus } = await import('./belenus/auto')
+            // parcelas/payback/economia recalculadas pelo valor da Belenus; transformador só se a Belenus o incluiu
+            const sb = solarComValorBelenus(solar, bel.valorCliente, !!bel.resultado.transformador)
+            solar = sb
+            outboundText = orcamentoTexto(sb)
+            merged.solar = { ...sb, kitMinimo: false }
+            if (bel.orcamento) merged.orcamentoBelenus = bel.orcamento as unknown as Prisma.InputJsonValue
+            leadUpdate.value = bel.valorCliente
+            leadUpdate.customFields = merged as Prisma.InputJsonValue
+            if (bel.orcamento) documentoDepois = documentoDoOrcamento(lead.id, conversation.id, bel.orcamento)
+            await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: bel.nota } }).catch(() => {})
+          } else {
+            await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `⚠️ Belenus falhou: orçamento saiu pela fórmula; motivo: ${bel.motivo}` } }).catch(() => {})
+            const { enviarPush } = await import('./push')
+            enviarPush({
+              title: `⚠️ Belenus falhou — ${contact.name || contact.phone || 'cliente'}`,
+              body: `Orçamento saiu pela fórmula. Motivo: ${bel.motivo}`.slice(0, 180),
+              url: `/leads/${lead.id}`, tag: `belenus-${conversation.id}`,
+            }).catch(() => {})
+          }
+        } else {
+          console.log('[belenus auto] desligado (%s) — orçamento pela fórmula', chave.motivo)
+        }
+      }
+    }
     if (transformadorNovo) {
       outboundText = `Como o seu medidor é *monofásico*, o sistema precisa de um transformador (R$ ${TRANSFORMADOR_PRECO},00). Segue o orçamento atualizado:\n\n${outboundText}`
     }
@@ -2022,5 +2073,5 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   for (const extra of orcamentosExtras) {
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: extra } })
   }
-  return { ...base, reply: outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage, ...(orcamentosExtras.length ? { followUps: orcamentosExtras } : {}) }
+  return { ...base, reply: outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage, ...(orcamentosExtras.length ? { followUps: orcamentosExtras } : {}), ...(documentoDepois ? { documentoDepois } : {}) }
 }
