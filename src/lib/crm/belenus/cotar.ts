@@ -9,7 +9,7 @@ import 'server-only'
 import { ErroBelenus, chamarBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
 import {
   LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, PALAVRAS_TELHADO, RE_NAO_ON_GRID, RE_ON_GRID, TRANSFORMADOR_PRECO,
-  aplicarRegrasComponentes, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor,
+  aplicarRegrasComponentes, calcularDps, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor,
   escolherModulo600, escolherOpcao, kwpPorConsumo, lerComandoBelenus, lerLigacao, lerTelhado, lerTensao, listaDe, num,
   opcaoTexto, paraPeca, potenciaKw, potenciaW, qtdeDe, reLigacao, reTensao, semRepetidos, textoNota,
   totalSeTiverPreco, type Ligacao, type Obj, type ResultadoCotacao, type Telhado,
@@ -45,7 +45,8 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const tensao = entrada.tensao ?? 220
   if (!entrada.tensao && entrada.ligacao) avisos.push(`Tensão do lead não informada: supus ${tensao} V.`)
   const telhado: Telhado = entrada.telhado ?? 'colonial'
-  if (!entrada.telhado) avisos.push('Tipo de telhado do lead não informado: usei estrutura COLONIAL. Confirme com o cliente.')
+  const ajustesEstrutura: string[] = []
+  if (!entrada.telhado) avisos.push('Tipo de telhado do lead não informado: usei estrutura CERÂMICO/COLONIAL (regra do dono). Confirme com o cliente.')
 
   const sessao: SessaoBelenus = await loginBelenus()
   const post = (rota: string, corpo: unknown, etapa: string) => chamarBelenus(P + rota, corpo, { token: sessao.token, etapa })
@@ -94,13 +95,16 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     })
     let r = await post('Inversor', corpo(auxsol ?? ''), `inversores${auxsol ? ' (AUXSOL)' : ''}`)
     let lista = listaDe(r, 'inversores')
-    let escolha = escolherInversor(lista, { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : LIMITE_MONOFASICO_KW })
+    const optsEsc = { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : LIMITE_MONOFASICO_KW, kwpKit: kitKwp }
+    // 1º só AUXSOL na faixa (overload 100%); sem AUXSOL na faixa → todas as marcas na faixa; por último o menor que atende
+    let escolha = escolherInversor(lista, { ...optsEsc, somenteFaixa: !!auxsol })
     if (auxsol && !('inversor' in escolha)) {
       // AUXSOL não serviu: tenta com todas as marcas
       r = await post('Inversor', corpo(''), 'inversores (todas as marcas)')
       lista = listaDe(r, 'inversores')
-      escolha = escolherInversor(lista, { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : LIMITE_MONOFASICO_KW })
+      escolha = escolherInversor(lista, optsEsc)
     }
+    console.log(`[belenus] inversores disponíveis: ${lista.map((i) => `${String(i.item)}=${String(i.potenciaNominalSaida)}kW`).join(', ')}`)
     const parametros = ehObj(r) && ehObj(r.data) ? r.data.parametros : undefined
     return { escolha, parametros, tipoLigacao, tensaoNominal, temAuxsol: !!auxsol }
   }
@@ -126,6 +130,9 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   await post('ConferirPotenciaInversor', { listInversores: [inversorSel], potenciaProjeto: kitKwp, parametros: inv.parametros }, 'conferir potência do inversor')
 
   // 3) ESTRUTURA — TipoEstrutura { modulo } → escolhe pelo telhado; Estrutura com o layout (1 linha × N módulos)
+  // Regra do dono (24/11/2026): estrutura cotada de 4 em 4 painéis, arredondando para cima (38 → 40).
+  const qtdEstrutura = Math.ceil(qtdModulos / 4) * 4
+  if (qtdEstrutura !== qtdModulos) ajustesEstrutura.push(`Estrutura cotada para ${qtdEstrutura} painéis (${qtdModulos} arredondado de 4 em 4 — regra do dono).`)
   const rTipoEst = await post('TipoEstrutura', { modulo: kit.item }, 'tipos de estrutura')
   const grupos = listaDe(rTipoEst, 'listTipos')
   const re = PALAVRAS_TELHADO[telhado]
@@ -140,11 +147,11 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const orientacoes = Array.isArray(grupo.orientacao) ? (grupo.orientacao as unknown[]) : []
   const orientacao = opcaoTexto(orientacoes.find((o) => /retrato/i.test(opcaoTexto(o, 'descricao'))) ?? orientacoes[0], 'descricao') || 'Retrato'
   const layout = [{
-    arranjo: 1, linhas: 1, moduloLinha: qtdModulos, orientacao,
+    arranjo: 1, linhas: 1, moduloLinha: qtdEstrutura, orientacao,
     tipoEstrutura: sub.tipo, grupo: grupo.grupo, subGrupo: sub.subGrupo, observation: sub.observation,
   }]
   const rEst = await post('Estrutura', {
-    semEstrutura: false, site, potenciaProjeto: kitKwp, sugestao: 1, modulo: kit.item, moduloQtde: qtdModulos,
+    semEstrutura: false, site, potenciaProjeto: kitKwp, sugestao: 1, modulo: kit.item, moduloQtde: qtdEstrutura,
     layout, listInversores: [inversorSel],
   }, 'estrutura')
   const estruturaObjs = semRepetidos(listaDe(rEst, 'structure', 'estrutura', 'estruturas')).filter((e) => qtdeDe(e) > 0)
@@ -168,10 +175,24 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const strings = calcularStrings(qtdModulos)
   // DPS: a regra do dono (2 mono/bi, 3 tri) vale no DPS do lado CA quando a Belenus sugerir um; senão no do CC
   const temDpsCa = caSug.some((o) => ehDps(descricaoDe(o)))
+  const ajustesExtra: string[] = []
   const cc = aplicarRegrasComponentes(ccSug.map(paraPeca), ccTodos.map(paraPeca), strings, ligacaoSistema, { aplicarDps: !temDpsCa })
   // cabos de string (preto/vermelho/verde) são do lado CC: no CA só o DPS
   const ca = aplicarRegrasComponentes(caSug.map(paraPeca), [], strings, ligacaoSistema, { aplicarCabos: false, aplicarDps: temDpsCa })
-  if (!temDpsCa && !cc.pecas.some((p) => ehDps(p.descricao))) avisos.push('Nenhum DPS veio nas sugestões da Belenus: incluir manualmente.')
+  // 24/11/2026 (teste real): a Belenus pode não sugerir DPS → busca na lista completa do CA (sugestao 0) e põe a
+  // quantidade da regra do dono (2 mono/bifásico, 3 trifásico). Prefere DPS CA 275 V (rede 127/220 V).
+  if (!temDpsCa && !cc.pecas.some((p) => ehDps(p.descricao))) {
+    const caTodos = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(0), 'componentes CA (todos)'), 'outrosAC', 'outros')).map(paraPeca)
+    const dpss = caTodos.filter((p) => ehDps(p.descricao))
+    const dps = dpss.find((p) => /\bca\b/i.test(p.descricao) && /275\s*v/i.test(p.descricao)) ?? dpss.find((p) => /275\s*v/i.test(p.descricao)) ?? dpss[0]
+    if (dps) {
+      const q = calcularDps(ligacaoSistema)
+      ca.pecas.push({ ...dps, qtde: q, ajuste: 'regra do dono (Belenus não sugeriu DPS)' })
+      ajustesExtra.push(`DPS: incluído "${dps.descricao}" × ${q} (regra do dono: ${ligacaoSistema === 'trifásico' ? 'trifásico' : 'mono/bifásico'}).`)
+    } else {
+      avisos.push('Nenhum DPS veio nas sugestões nem no catálogo da Belenus: incluir manualmente.')
+    }
+  }
 
   const moduloPeca = {
     ...paraPeca(modulo), qtde: qtdModulos,
@@ -187,7 +208,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   return {
     potenciaPedidaKwp: entrada.kwp,
     modulo: moduloPeca, inversor: inversorPeca, estrutura, componentesCC: cc.pecas, componentesCA: ca.pecas,
-    strings, avisos, ajustes: [...cc.ajustes, ...ca.ajustes],
+    strings, avisos, ajustes: [...ajustesEstrutura, ...cc.ajustes, ...ca.ajustes, ...ajustesExtra],
     totalProdutos: totalSeTiverPreco(todas),
   }
 }

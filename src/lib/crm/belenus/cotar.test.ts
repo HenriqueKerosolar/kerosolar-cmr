@@ -54,7 +54,9 @@ function belenusFalsa(c: Cenario) {
           { grupo: 'Telhado Colonial', ordem: 1, orientacao: [{ descricao: 'Paisagem' }, { descricao: 'Retrato' }], subGrupo: [{ tipo: 'COL1', subGrupo: 'Colonial gancho', ordem: 1 }] },
         ] })
       case 'Estrutura':
-        expect(corpo.layout[0]).toMatchObject({ arranjo: 1, linhas: 1, moduloLinha: 7, orientacao: 'Retrato', tipoEstrutura: 'COL1' })
+        // regra do dono: estrutura de 4 em 4 painéis (7 → 8)
+        expect(corpo.layout[0]).toMatchObject({ arranjo: 1, linhas: 1, moduloLinha: 8, orientacao: 'Retrato', tipoEstrutura: 'COL1' })
+        expect(corpo.moduloQtde).toBe(8)
         return ok({ structure: [
           { item: 'E1', descricaoItem: 'TRILHO 2,4M', qtde: 6 }, { item: 'E1', descricaoItem: 'TRILHO 2,4M', qtde: 6 },
           { item: 'E2', descricaoItem: 'GANCHO COLONIAL', qtde: 10 },

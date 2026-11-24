@@ -189,21 +189,46 @@ export function ehMarcaPreferida(inv: unknown): boolean {
   return semAcento(campo(inv, 'fabricante', 'marca', 'descricaoItem', 'descricao')).includes(MARCA_PREFERIDA.toLowerCase())
 }
 
-export type EscolhaInversor = { inversor: Obj; qtdeSugeridaBelenus: number } | { motivo: 'mais-de-um' | 'acima-limite' | 'nenhum' }
+export type EscolhaInversor = { inversor: Obj; qtdeSugeridaBelenus: number } | { motivo: 'mais-de-um' | 'acima-limite' | 'nenhum' | 'fora-da-faixa' }
 
 /**
  * Regras do dono: preferência AUXSOL; usar UM inversor (se a Belenus sugerir mais de 1 → passar para 1 trifásico);
  * medidor monofásico → inversor de no máximo 5 kW.
  */
-export function escolherInversor(inversores: Obj[], opts: { limiteKw?: number } = {}): EscolhaInversor {
+/** Overload máximo aceito (painéis acima da potência do inversor): 30% — regra técnica do prompt da IA (10%–30%). */
+export const OVERLOAD_MAX = 1.3
+/** AUXSOL aceita 100% de overload, mas o dono usa 50% (24/11/2026): kit até 1,5× a potência do inversor. */
+export const OVERLOAD_AUXSOL = 1.5
+
+export function escolherInversor(inversores: Obj[], opts: { limiteKw?: number; kwpKit?: number; somenteFaixa?: boolean } = {}): EscolhaInversor {
   if (!inversores.length) return { motivo: 'nenhum' }
   const ordenados = ordenarComoSite(inversores)
-  const preferidos = [...ordenados.filter(ehMarcaPreferida), ...ordenados.filter((i) => !ehMarcaPreferida(i))]
-  const dentroLimite = (i: Obj) => !opts.limiteKw || potenciaKw(campo(i, 'potenciaNominalSaida', 'potencia', 'maxPotenciaSaida')) <= opts.limiteKw + 1e-9
+  const kw = (i: Obj) => potenciaKw(campo(i, 'potenciaNominalSaida', 'potencia', 'maxPotenciaSaida'))
+  const dentroLimite = (i: Obj) => !opts.limiteKw || kw(i) <= opts.limiteKw + 1e-9
   const qtdSug = (i: Obj) => {
     const q = num(campo(i, 'numInversores', 'qtdSugerida', 'qtde', 'quantidade'))
     return Number.isFinite(q) && q > 0 ? q : 1
   }
+  // 24/11/2026 (teste real 8,68 kWp): a ordem do site pôs o Auxsol de 15 kW na frente — grande demais. O inversor
+  // certo é o MENOR que atende o kit (potência × 1,3 ≥ kWp do kit), preferindo AUXSOL.
+  // Regra do dono (24/11/2026): o inversor fica UM POUCO ABAIXO da potência das placas, respeitando o overload
+  // (até 30%): kWp/1,3 ≤ inversor ≤ kWp → o MAIOR dessa faixa, AUXSOL primeiro. Se nada cair na faixa, o menor acima.
+  // AUXSOL aceita 100% de overload (placas até 2× o inversor) — dono, 24/11/2026; outras marcas, 30%.
+  const overload = (i: Obj) => (ehMarcaPreferida(i) ? OVERLOAD_AUXSOL : OVERLOAD_MAX)
+  const naFaixa = (i: Obj) => !!opts.kwpKit && Number.isFinite(kw(i)) && kw(i) <= opts.kwpKit + 1e-9 && kw(i) * overload(i) + 1e-9 >= opts.kwpKit
+  const atende = (i: Obj) => !opts.kwpKit || !Number.isFinite(kw(i)) || kw(i) * OVERLOAD_MAX + 1e-9 >= opts.kwpKit
+  const porTamanho = (lista: Obj[]) => [...lista].sort((a, b) => (kw(a) || 1e9) - (kw(b) || 1e9))
+  const base = ordenados.filter((i) => qtdSug(i) <= 1 && dentroLimite(i))
+  const faixa = base.filter(naFaixa)
+  // Dono (24/11/2026): o MENOR inversor da faixa (potência × overload ≥ kWp do kit), AUXSOL primeiro.
+  // Ex.: 8 kWp → 6 kW (6 × 1,5 = 9); 4,34 kWp → 3 kW (3 × 1,5 = 4,5) — bate com a cotação do dono.
+  const escolhidoFaixa = porTamanho(faixa.filter(ehMarcaPreferida))[0] ?? porTamanho(faixa)[0]
+  if (escolhidoFaixa) return { inversor: escolhidoFaixa, qtdeSugeridaBelenus: qtdSug(escolhidoFaixa) }
+  if (opts.somenteFaixa) return { motivo: 'fora-da-faixa' }
+  const candidatos = base.filter(atende)
+  const melhor = porTamanho(candidatos.filter(ehMarcaPreferida))[0] ?? porTamanho(candidatos)[0]
+  if (melhor) return { inversor: melhor, qtdeSugeridaBelenus: qtdSug(melhor) }
+  const preferidos = [...ordenados.filter(ehMarcaPreferida), ...ordenados.filter((i) => !ehMarcaPreferida(i))]
   const umSo = preferidos.filter((i) => qtdSug(i) <= 1)
   const ok = umSo.find(dentroLimite)
   if (ok) return { inversor: ok, qtdeSugeridaBelenus: qtdSug(ok) }
@@ -281,7 +306,8 @@ export function aplicarRegrasComponentes(
   let pecas = sugeridos.map((p) => ({ ...p }))
 
   for (const cor of opts.aplicarCabos === false ? [] : (['preto', 'vermelho', 'verde'] as const)) {
-    const querMm = cor === 'verde' ? null : BITOLA_CABO_MM
+    // 24/11/2026: verde também em 6 mm (o robô pegou 4 mm; a cotação do dono usa 6 mm no verde)
+    const querMm = BITOLA_CABO_MM
     const daCor = pecas.filter((p) => corDoCabo(p.descricao) === cor)
     let certo = daCor.find((p) => querMm == null || bitolaMm(p.descricao) === querMm)
     if (!certo) {
