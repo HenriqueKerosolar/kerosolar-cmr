@@ -36,6 +36,21 @@ describe('enviarDmPelaPonte', () => {
     expect(db.message.update).toHaveBeenCalledWith({ where: { id: 'msg1' }, data: { externalId: `${PEDIDO_PENDENTE_PREFIX}msg1` } })
   })
 
+  it('anexo guardado no CRM vai como link ASSINADO; documento vira "file" (24/11/2026)', async () => {
+    process.env.SESSION_SECRET = 'teste'; process.env.NEXT_PUBLIC_APP_URL = 'https://crm.exemplo'
+    db.conversation.findUnique.mockResolvedValue(convFacebook)
+    await enviarDmPelaPonte('conv1', 'msg2', '', undefined, { url: 'https://crm.exemplo/api/uploads/in_1_2.pdf', type: 'document', name: 'Guia.pdf' })
+    const payload = nervoState.nervo!.publishSocialMessageSend.mock.calls[0]![0]
+    expect(payload).toEqual(expect.objectContaining({ text: '', requestId: 'msg2', attachment: expect.objectContaining({ type: 'file', name: 'Guia.pdf' }) }))
+    expect(payload.attachment.url).toMatch(/^https:\/\/crm\.exemplo\/api\/arquivo\/.+\/Guia\.pdf$/)
+  })
+
+  it('anexo com URL já pública vai como está', async () => {
+    db.conversation.findUnique.mockResolvedValue(convFacebook)
+    await enviarDmPelaPonte('conv1', 'msg3', 'Segue', undefined, { url: 'https://www.kerosolar.com.br/ebook.pdf', type: 'document' })
+    expect(nervoState.nervo!.publishSocialMessageSend).toHaveBeenCalledWith(expect.objectContaining({ text: 'Segue', attachment: { type: 'file', url: 'https://www.kerosolar.com.br/ebook.pdf' } }))
+  })
+
   it('conversa que NÃO é da ponte → false (segue o caminho antigo)', async () => {
     db.conversation.findUnique.mockResolvedValue({ channel: 'whatsapp', contact: {} })
     expect(await enviarDmPelaPonte('conv1', 'msg1', 'Olá!')).toBe(false)

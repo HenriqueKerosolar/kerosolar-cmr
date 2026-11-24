@@ -64,13 +64,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       return NextResponse.json({ error: 'Não consegui guardar o arquivo para enviar. Tente de novo.' }, { status: 500 })
     }
     const nomeVisivel = file.name || 'arquivo'
-    const texto = `${caption ? `${caption}\n\n` : ''}📎 ${nomeVisivel}\n${link}`
-    const { dispatchOutbound } = await import('@/lib/crm/flow')
-    // vai como TEXTO (ponte do Marketing); o anexo fica guardado no histórico do CRM para abrir aqui
-    await dispatchOutbound(conv.id, texto, undefined, 'human', session.userId, true)
-    const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id, direction: 'outbound', content: texto }, orderBy: { createdAt: 'desc' }, select: { id: true } })
-    if (ultima) await prisma.message.update({ where: { id: ultima.id }, data: { mediaUrl: copia, mediaType: kind } }).catch(() => {})
+    const labelsIg: Record<Kind, string> = { image: '📷 Foto', audio: '🎤 Áudio', video: '🎬 Vídeo', document: `📎 ${nomeVisivel}` }
+    const msg = await prisma.message.create({
+      data: { conversationId: conv.id, direction: 'outbound', senderType: 'human', senderUserId: session.userId, content: caption || labelsIg[kind], mediaUrl: copia, mediaType: kind },
+    })
+    await prisma.conversation.update({ where: { id: conv.id }, data: { lastMessageAt: new Date() } })
     await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } })
+    // 24/11/2026: ANEXO de verdade pela ponte do Mind Marketing (social.message.send com `attachment`). Se a Meta
+    // recusar o tipo no canal, o Marketing manda o link. Resultado (entregue/falha) volta no social.message.sent.
+    const { enviarDmPelaPonte } = await import('@/lib/nervo/dmBridge')
+    const viaPonte = await enviarDmPelaPonte(conv.id, msg.id, caption, undefined, { url: copia, type: kind, name: nomeVisivel })
+    if (!viaPonte) {
+      // conversa antiga sem a ponte: manda o link como texto pelo caminho antigo
+      const { dispatchOutbound } = await import('@/lib/crm/flow')
+      await dispatchOutbound(conv.id, `${caption ? `${caption}\n\n` : ''}📎 ${nomeVisivel}\n${link}`, undefined, 'human', session.userId, true)
+    }
     return NextResponse.json({ ok: true })
   }
 

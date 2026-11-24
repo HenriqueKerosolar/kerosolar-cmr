@@ -40,6 +40,38 @@ async function baixarImagem(attachments: SocialMessageReceived['attachments']): 
   }
 }
 
+type AnexoGuardado = { url: string; tipo: 'image' | 'video' | 'audio' | 'document'; mime: string; buf: Buffer; compartilhado: boolean }
+
+/** Post/reel/story COMPARTILHADO no Direct (tipo "ig_post", "share", "reel"…): normalmente o anúncio que o cliente viu.
+ *  Não é arquivo nem conta de luz — a IA não lê como conta. */
+const ehCompartilhamento = (tipo: string) => /ig_post|ig_reel|reel|share|story|template|fallback/i.test(tipo || '')
+
+/** 24/11/2026: guarda no CRM os anexos que o cliente mandou pelo Instagram/Facebook (o link da Meta vence) para
+ *  abrir no chat. Melhor esforço: o que falhar fica só no texto "📎 ... enviado". */
+async function guardarAnexos(attachments: SocialMessageReceived['attachments']): Promise<AnexoGuardado[]> {
+  const out: AnexoGuardado[] = []
+  const { salvarMidiaRecebida } = await import('@/lib/crm/media')
+  for (const a of (attachments ?? []).slice(0, 5)) {
+    try {
+      const res = await fetch(a.url, { signal: AbortSignal.timeout(20_000) })
+      if (!res.ok) continue
+      const mime = (res.headers.get('content-type') || '').split(';')[0].toLowerCase()
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (!buf.length || buf.length > 25 * 1024 * 1024) continue
+      const tipo: AnexoGuardado['tipo'] = /^image\//.test(mime) || /image|photo/i.test(a.type) ? 'image'
+        : /^video\//.test(mime) || /video/i.test(a.type) ? 'video'
+        : /^audio\//.test(mime) || /audio/i.test(a.type) ? 'audio' : 'document'
+      const ext = mime === 'application/pdf' ? '.pdf' : mime.includes('jpeg') ? '.jpg' : mime.includes('png') ? '.png'
+        : mime.includes('webp') ? '.webp' : mime.includes('mp4') ? '.mp4' : mime.includes('mpeg') ? '.mp3'
+        : mime.includes('ogg') ? '.ogg' : mime.includes('aac') ? '.aac' : mime.includes('gif') ? '.gif'
+        : ('.' + ((new URL(a.url).pathname.split('.').pop() || 'bin').slice(0, 5)))
+      const url = salvarMidiaRecebida(buf, ext)
+      if (url) out.push({ url, tipo, mime, buf, compartilhado: ehCompartilhamento(a.type) })
+    } catch { /* segue */ }
+  }
+  return out
+}
+
 /** `social.message.received` → Inbox + atendimento (igual ao WhatsApp). Idempotente por `externalId`. */
 export async function processarDmRecebida(input: SocialMessageReceived): Promise<void> {
   // Reentrega do Mind: o motor também ignora mensagem com o mesmo externalId, mas evitamos até baixar anexo.
@@ -66,10 +98,21 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
   }
 
   // 2) Atende pelo mesmo motor do WhatsApp.
-  const imagem = await baixarImagem(input.attachments)
+  const guardados = await guardarAnexos(input.attachments)
+  const principal = guardados[0]
+  // imagem → a IA lê (conta de luz); PDF → a IA também lê (bloco de documento)
+  const paraIA = principal && !principal.compartilhado ? principal : undefined
+  const soCompartilhou = (input.attachments ?? []).length > 0 && (input.attachments ?? []).every((a) => ehCompartilhamento(a.type))
+  const imagem = paraIA?.tipo === 'image' && paraIA.buf.length <= 8 * 1024 * 1024
+    ? { base64: paraIA.buf.toString('base64'), mime: paraIA.mime || 'image/jpeg' }
+    : (guardados.length || soCompartilhou ? null : await baixarImagem(input.attachments))
+  const pdf = paraIA?.mime === 'application/pdf' && paraIA.buf.length <= 8 * 1024 * 1024 ? paraIA.buf.toString('base64') : null
   const outrosAnexos = (input.attachments ?? []).filter((a) => !/image|photo|imagem/i.test(a.type))
+  const rotulo: Record<AnexoGuardado['tipo'], string> = { image: '📷 Foto enviada', video: '🎬 Vídeo enviado', audio: '🎤 Áudio enviado', document: '📎 Arquivo enviado' }
+  const COMPARTILHOU = '🔗 Compartilhou uma publicação do Instagram/Facebook (provavelmente o anúncio que viu)'
   const displayText = input.text.trim()
-    || (imagem ? '📷 Foto enviada' : outrosAnexos.length ? `📎 ${outrosAnexos[0].type} enviado` : '')
+    || (soCompartilhou ? COMPARTILHOU
+      : principal ? rotulo[principal.tipo] : imagem ? '📷 Foto enviada' : outrosAnexos.length ? `📎 ${outrosAnexos[0].type} enviado` : '')
   const inicio = new Date(Date.now() - 1000)
   const { ingestMessage } = await import('@/lib/crm/engine')
   const result = await ingestMessage({
@@ -81,16 +124,29 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
     externalMessageId: input.externalId,
     sentAt: Number.isNaN(Date.parse(input.sentAt)) ? null : new Date(input.sentAt),
     ...(imagem ? { imageBase64: imagem.base64, imageMediaType: imagem.mime } : {}),
+    ...(pdf ? { pdfBase64: pdf } : {}),
+    ...(principal ? { mediaUrl: principal.url, mediaType: principal.tipo } : {}),
   })
+  // anexos extras da mesma mensagem (ex.: 3 fotos) → um item cada no chat, para abrir no CRM
+  for (const extra of guardados.slice(1)) {
+    await prisma.message.create({ data: { conversationId: result.conversationId, direction: 'inbound', senderType: 'contact', content: extra.compartilhado ? COMPARTILHOU : rotulo[extra.tipo], mediaUrl: extra.url, mediaType: extra.tipo } }).catch(() => {})
+  }
 
   // 3) A resposta "final" do motor é gravada no banco mas NÃO enviada por ele (no WhatsApp quem envia é o
   //    webhook). Aqui mandamos pela ponte toda resposta desta rodada que ainda não saiu.
   const pendentes = await prisma.message.findMany({
     where: { conversationId: result.conversationId, direction: 'outbound', createdAt: { gte: inicio }, externalId: null, failedReason: null },
-    orderBy: { createdAt: 'asc' }, select: { id: true, content: true, mediaUrl: true },
+    orderBy: { createdAt: 'asc' }, select: { id: true, content: true, mediaUrl: true, mediaType: true },
   })
   for (const m of pendentes) {
-    if (m.content?.trim() && !m.mediaUrl) await enviarDmPelaPonte(result.conversationId, m.id, m.content, input.externalId)
+    if (m.mediaUrl && m.mediaType) {
+      // resposta com arquivo (ex.: ebook) → vai como ANEXO pela ponte (24/11/2026)
+      const tipo = (['image', 'video', 'audio', 'document'] as const).find((t) => t === m.mediaType) ?? 'document'
+      const legenda = /^\[.*\]$|^\[mídia\]$/.test(m.content?.trim() ?? '') ? '' : (m.content ?? '')
+      await enviarDmPelaPonte(result.conversationId, m.id, legenda, input.externalId, { url: m.mediaUrl, type: tipo })
+    } else if (m.content?.trim()) {
+      await enviarDmPelaPonte(result.conversationId, m.id, m.content, input.externalId)
+    }
   }
   // 2ª mensagem combinada pelo motor (ex.: fora do horário) — sai depois da resposta.
   if (result.followUp) {
@@ -122,7 +178,10 @@ export async function processarDmRecebida(input: SocialMessageReceived): Promise
  * Envia UMA mensagem do CRM (já gravada, id = `messageId`) pelo Marketing. Devolve `false` quando a conversa não
  * é da ponte (aí o chamador segue o caminho antigo). Nunca lança; falha fica visível no Inbox (`failedReason`).
  */
-export async function enviarDmPelaPonte(conversationId: string, messageId: string, text: string, replyToExternalId?: string): Promise<boolean> {
+export async function enviarDmPelaPonte(
+  conversationId: string, messageId: string, text: string, replyToExternalId?: string,
+  anexo?: { url: string; type: 'image' | 'video' | 'audio' | 'document'; name?: string },
+): Promise<boolean> {
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { channel: true, contact: { select: { customFields: true, facebookId: true, instagramId: true } } } })
   if (!conv || (conv.channel !== 'facebook' && conv.channel !== 'instagram')) return false
   const bridge = lerMetaBridge(conv.contact?.customFields)
@@ -139,10 +198,22 @@ export async function enviarDmPelaPonte(conversationId: string, messageId: strin
   const nervo = getCrmNervo()
   if (!nervo) { await falhar('Não entregue: o CRM não está conectado ao Mind (Nervo desligado).'); return true }
 
+  // 📎 Anexo: a Meta baixa o arquivo de uma URL PÚBLICA. Anexo guardado no CRM (/api/uploads, só com login) vira
+  //    link assinado (link-arquivo.ts); URL já pública (ex.: ebook no site) vai como está.
+  let attachment: { type: 'image' | 'video' | 'audio' | 'file'; url: string; name?: string } | undefined
+  if (anexo?.url) {
+    const { linkPublicoDoAnexo } = await import('@/lib/crm/link-arquivo')
+    const url = /\/api\/uploads\//.test(anexo.url) ? linkPublicoDoAnexo(anexo.url, anexo.name) : anexo.url
+    if (!url || !/^https:\/\//.test(url)) { await falhar('Não entregue: o arquivo não tem um endereço público para a Meta baixar.'); return true }
+    attachment = { type: anexo.type === 'document' ? 'file' : anexo.type, url, ...(anexo.name ? { name: anexo.name.slice(0, 200) } : {}) }
+  }
+  if (!text.trim() && !attachment) return true
+
   await prisma.message.update({ where: { id: messageId }, data: { externalId: `${PEDIDO_PENDENTE_PREFIX}${messageId}` } }).catch(() => {})
   const r = await nervo.publishSocialMessageSend({
     clientAccountId: bridge.clientAccountId, channel: bridge.channel, pageId: bridge.pageId, recipientId,
-    text, requestId: messageId, ...(replyToExternalId ? { replyToExternalId } : {}),
+    text: text.trim(), requestId: messageId, ...(replyToExternalId ? { replyToExternalId } : {}),
+    ...(attachment ? { attachment } : {}),
   })
   if (r === 'unpaired') await falhar('Não entregue: o CRM ainda não está conectado ao Mind (aceite o pareamento no painel do Mind).')
   else if (r === 'error') await falhar('Não entregue: falha ao enviar para o Mind Marketing (tentaremos de novo no próximo envio).')

@@ -306,8 +306,9 @@ export async function dispatchOutbound(
         console.warn('[flow dispatch] nenhuma conta Cloud API disponível — mensagem não enviada')
         await prisma.message.update({ where: { id: createdMsg.id }, data: { failedReason: 'sem_conta_cloud' } }).catch(() => {})
       }
-    } else if ((conv.channel === 'facebook' || conv.channel === 'instagram') && text && !media
-      && await (await import('@/lib/nervo/dmBridge')).enviarDmPelaPonte(conversationId, createdMsg.id, text)) {
+    } else if ((conv.channel === 'facebook' || conv.channel === 'instagram') && (text || media)
+      && await (await import('@/lib/nervo/dmBridge')).enviarDmPelaPonte(conversationId, createdMsg.id, media ? (text || '') : text, undefined,
+        media ? { url: media.url, type: media.type, name: decodeURIComponent(media.url.split('/').pop() || '').split('?')[0] } : undefined)) {
       // ✅ Enviada pelo Mind Marketing (ponte de DMs via Nervo — decisão do dono, 14/11/2026: uma conexão só com a Meta).
     } else if (conv.channel === 'facebook' || conv.channel === 'instagram') {
       const meta = await import('./meta')

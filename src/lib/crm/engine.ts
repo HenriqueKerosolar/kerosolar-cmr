@@ -136,6 +136,8 @@ export type IngestResult = {
   stage: string
   /** 2ª mensagem a enviar DEPOIS da resposta (ex.: "quer continuar agora ou amanhã?" fora do horário) */
   followUp?: string | null
+  /** Mensagens JÁ GRAVADAS no banco que o chamador deve ENVIAR depois da resposta, nesta ordem (ex.: vários orçamentos). */
+  followUps?: string[]
 }
 
 // 🔒 Lock por conversa (serviço com 1 réplica): serializa o processamento de mensagens do MESMO
@@ -559,9 +561,10 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     if (ultimaHumana && Date.now() - new Date(ultimaHumana.createdAt).getTime() < MS_INATIVIDADE) {
       // EXCEÇÃO: se o cliente mandou o que GERA ORÇAMENTO (consumo em kWh, valor da conta, ou
       //   foto da conta), a IA libera o orçamento mesmo na pausa. Conversa comum continua aguardando.
-      const { extrairConsumo } = await import('./solar-calc')
+      const { extrairConsumo, extrairVariosValores } = await import('./solar-calc')
       const c = extrairConsumo(text)
       const gatilhoOrcamento = !!input.imageBase64 || !!input.pdfBase64 || !!input.pdfText || c.kwh != null || c.reais != null
+        || !!extrairVariosValores(text)
       if (!gatilhoOrcamento) {
         console.log('[engine] operador ativo (<30min) → IA aguarda')
         return base
@@ -1696,6 +1699,7 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   //          nesse caso preservamos a reply da IA — ela já diz o certo pro cliente.
   // 🕒 nunca "Bom dia" às 17h: corrige o cumprimento da IA pelo horário de Brasília
   let outboundText = presentBudget && solar ? orcamentoTexto(solar) : corrigirCumprimento(result.reply)
+  let orcamentosExtras: string[] = []
   if (presentBudget && solar) {
     if (transformadorNovo) {
       outboundText = `Como o seu medidor é *monofásico*, o sistema precisa de um transformador (R$ ${TRANSFORMADOR_PRECO},00). Segue o orçamento atualizado:\n\n${outboundText}`
@@ -1705,6 +1709,23 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     if ((leadAgora?.customFields as Record<string, unknown> | null)?.querAVista || cf.querAVista) {
       merged.querAVista = true
       outboundText += `\n\n${linhaAVista(solar.valorSistema)}`
+    }
+    // 📊 VÁRIOS VALORES no mesmo pedido (regra do dono, 24/11/2026 — "500/600", "500 ou 600", "entre 500 e 700"):
+    //    um orçamento para CADA valor, o MENOR primeiro e depois crescendo (mensagens separadas, em ordem).
+    const { extrairVariosValores } = await import('./solar-calc')
+    const varios = extrairVariosValores(text)
+    if (varios && !transformadorNovo) {
+      const ajustar = (s: NonNullable<typeof solar>) => ajustarPorMedidor(solar!.hibrido ? aplicarHibrido(s) : s, medidor)
+      const sims = varios.valores
+        .map((v) => (varios.tipo === 'kwh' ? calcularSolarPorKwh(v) : calcularSolar(v)))
+        .filter((s): s is NonNullable<typeof s> => !!s)
+        .map(ajustar)
+      if (sims.length >= 2) {
+        const un = (v: number) => (varios.tipo === 'kwh' ? `${v} kWh` : `R$ ${v.toLocaleString('pt-BR')}`)
+        outboundText = `Fiz um orçamento para cada valor, do menor para o maior 😊\n\n*1) Para ${un(varios.valores[0])}:*\n\n${orcamentoTexto(sims[0])}`
+        orcamentosExtras = sims.slice(1).map((s, i) => `*${i + 2}) Para ${un(varios.valores[i + 1])}:*\n\n${orcamentoTexto(s)}`)
+        console.log('[engine] %d orçamentos (vários valores: %s)', sims.length, varios.valores.join(', '))
+      }
     }
   }
   let outboundSender: 'ai' | 'system' = 'ai'
@@ -1945,5 +1966,9 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     ? pipeline.stages.find((s) => s.id === movedToStageId)?.name ?? base.stage
     : pipeline.stages.find((s) => s.id === lead.stageId)?.name ?? base.stage
 
-  return { ...base, reply: outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage }
+  // orçamentos extras (vários valores) → gravados agora, enviados pelo chamador DEPOIS da resposta, em ordem
+  for (const extra of orcamentosExtras) {
+    await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: extra } })
+  }
+  return { ...base, reply: outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage, ...(orcamentosExtras.length ? { followUps: orcamentosExtras } : {}) }
 }

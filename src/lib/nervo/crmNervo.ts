@@ -42,6 +42,8 @@ export interface SocialMessageSendPayload {
   /** Id ÚNICO do pedido (usamos o id da Message do CRM): o Marketing deduplica por ele e devolve no `social.message.sent`. */
   requestId: string
   replyToExternalId?: string
+  /** 24/11/2026: anexo por URL PÚBLICA (link assinado do CRM — link-arquivo.ts). Com anexo, `text` (legenda) pode ser ''. */
+  attachment?: { type: 'image' | 'video' | 'audio' | 'file'; url: string; name?: string }
 }
 
 /** `social.comment.reply` v1 — o atendente responde um comentário pelo CRM; o Marketing responde na Meta. */

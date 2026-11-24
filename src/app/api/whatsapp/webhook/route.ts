@@ -319,6 +319,11 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
   if (result?.reply && account.cloudPhoneNumberId) {
     const { sendCloudText } = await import('@/lib/crm/cloud-api')
     await sendCloudText(account.cloudPhoneNumberId, from, result.reply).catch((e) => console.error('[wa cloud send reply]', e))
+    // vários orçamentos (um por valor, do menor para o maior) — já gravados pelo motor, saem em ordem
+    for (const extra of result.followUps ?? []) {
+      await new Promise((r) => setTimeout(r, 1500))
+      await sendCloudText(account.cloudPhoneNumberId, from, extra).catch((e) => console.error('[wa cloud send extra]', e))
+    }
   }
   // 2ª mensagem combinada pelo motor (ex.: fora do horário: responde a pergunta e DEPOIS pergunta
   // se o cliente quer continuar agora ou no próximo dia útil) — sai só depois da resposta.

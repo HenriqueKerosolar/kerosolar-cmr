@@ -527,6 +527,25 @@ function parseBrNumber(s: string): number {
 // 1 painel/placa/módulo ≈ 60 kWh/mês (regra comercial KeroSolar)
 const KWH_POR_PAINEL = 60
 
+/** VÁRIOS valores pedidos de uma vez (regra do dono, 24/11/2026 — Harry: "conta que gira entorno de 500/600,00"):
+ *  "500/600", "500 ou 600", "entre 500 e 600", "500 a 600", "500-600 kwh", "500, 600 e 700".
+ *  Devolve os valores em ORDEM CRESCENTE (o menor primeiro) e a unidade; menos de 2 valores → null. */
+export function extrairVariosValores(text: string): { tipo: 'kwh' | 'reais'; valores: number[] } | null {
+  const t = (text || '').toLowerCase().replace(/r\$\s*/g, '')
+  const NUM = String.raw`\d{2,3}(?:\.\d{3})*(?:,\d{1,2})?|\d{2,5}(?:,\d{1,2})?`
+  const SEP = String.raw`\s*(?:\/|\bou\b|\ba\b|\bate\b|\baté\b|\be\b|-|–|,)\s*`
+  const re = new RegExp(String.raw`(?:entre\s+)?(${NUM})((?:${SEP}(?:${NUM}))+)`, 'i')
+  const m = re.exec(t)
+  if (!m) return null
+  const todos = [m[1], ...(m[2].match(new RegExp(NUM, 'g')) ?? [])].map(parseBrNumber)
+  const depois = t.slice(m.index + m[0].length, m.index + m[0].length + 25)
+  const antes = t.slice(Math.max(0, m.index - 40), m.index)
+  const ehKwh = /^\s*(kwh|kw\s*\/?\s*h|kw|k)\b/.test(depois) || (/consumo|kwh|kw\b/.test(antes) && !/conta|fatura|reais|pago|pagar/.test(antes))
+  const valores = [...new Set(todos.filter((v) => (ehKwh ? consumoKwhValido(v) : contaReaisValida(v))))].sort((a, b) => a - b)
+  if (valores.length < 2 || valores.length > 4) return null
+  return { tipo: ehKwh ? 'kwh' : 'reais', valores }
+}
+
 export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
   const t = text.toLowerCase()
   // ⚠️ Comparação com CONCORRENTE ("recebi um orçamento R$ X mais barato", "outra empresa")
@@ -582,7 +601,9 @@ export function extrairConsumo(text: string): { reais?: number; kwh?: number } {
     t.match(/total\s+a\s+pagar[^0-9]{0,20}([\d.,]+)/) ||
     t.match(/r\$\s*([\d.,]+)/) ||
     t.match(/([\d.,]+)\s*reais/) ||
-    t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,15}?([\d.,]+)/) ||
+    // "conta que gira em torno de 500" (24/11/2026, Harry): até 40 letras entre a palavra e o número
+    t.match(/(?:conta|fatura|gasto|pago|vem|fica|paga)\D{0,40}?([\d.,]+)/) ||
+    t.match(/(?:gira|girando|em\s+torno|entorno|por\s+volta|cerca)\D{0,15}?([\d.,]+)/) ||
     // valor dito em frase: "deve ir para 1000", "vai pra 1000", "fica em 1000", "chega a 1000",
     // "deve dar uns 800" — verbo de projeção + (a/para/em/uns/R$) + número. A faixa R$30–100k filtra.
     t.match(/(?:ir|vai|vou|deve|dever[áa]|fica|ficou|ficar|chega|chegou|chegar|sobe|subiu|subir|d[áa]|dar)\s+(?:a |para |pra |pro |em |de |até |uns? |r\$\s*)*([\d.,]+)/) ||
