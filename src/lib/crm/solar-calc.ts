@@ -337,6 +337,45 @@ export function extrairEntrada(text: string): { intent: boolean; valor: number |
   return { intent, valor, remover }
 }
 
+/** 🏦 Simulação de FINANCIAMENTO de um valor (comando "simula financiamento valor X", 24/11/2026):
+ *  todos os prazos da tabela ativa. Chame carregarTabelaFinanciamento() antes. */
+export function simulacaoFinanciamentoTexto(valor: number): string {
+  const tabela = getTabelaFinanciamento()
+  const linhas = Object.keys(tabela).map(Number).sort((a, b) => a - b)
+    .map((p) => `• ${p}x de *${brl(parcelaFinanciamento(valor, p))}*`).join('\n')
+  return (
+`🏦 *SIMULAÇÃO DE FINANCIAMENTO*
+
+💰 Valor: *${brl(valor)}*
+
+💳 *Parcelas* (1ª só daqui a 120 dias):
+${linhas}
+
+_Simulação — valores podem variar conforme as taxas e a aprovação de crédito._`
+  )
+}
+
+/** 💳 Simulação no CARTÃO de um valor, de 2x até 24x (comando "simula cartão de R$ X", 24/11/2026). */
+export function simulacaoCartaoTexto(valor: number): string {
+  const linhas: string[] = []
+  for (let n = 2; n <= 24; n++) {
+    const s = simularCartao(valor, n)
+    if (!s) continue
+    linhas.push(s.semJuros
+      ? `• *${n}x de ${brl(s.parcela)}* _(sem juros)_ ✅`
+      : `• *${n}x de ${brl(s.parcela)}* — total ${brl(s.total)}`)
+  }
+  return (
+`💳 *SIMULAÇÃO NO CARTÃO DE CRÉDITO*
+
+💰 Valor: *${brl(valor)}*
+
+${linhas.join('\n')}
+
+_Simulação — as taxas e valores podem ser atualizados a qualquer momento._`
+  )
+}
+
 /** Mensagem de financiamento COM ENTRADA: financia (valorSistema − entrada) e mostra 3 prazos. */
 export function financiamentoEntradaTexto(valorSistema: number, entrada: number): string {
   const financiado = Math.max(0, valorSistema - entrada)

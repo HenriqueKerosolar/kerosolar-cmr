@@ -525,7 +525,20 @@ export async function iniciarSaudacaoManual(leadId: string, conversationId: stri
 export async function comandoIndicacaoKwh(leadId: string, conversationId: string, text: string, userId?: string): Promise<boolean> {
   // Só quando a mensagem INTEIRA é "faz XXXX" (comando-indicacao.ts, regra do dono 16/11/2026) — qualquer
   // outra frase com kWh vai como texto normal (incidente: orçamento enviado sem ninguém pedir).
-  const { lerComandoIndicacao } = await import('./comando-indicacao')
+  const { lerComandoIndicacao, lerComandoSimulacao } = await import('./comando-indicacao')
+  // 💳 "simula financiamento valor X" / "simula cartão de R$ X" (regra do dono, 24/11/2026): manda SÓ a
+  //    simulação, como mensagem do operador, sempre (sem travas). Não mexe no valor do lead.
+  const sim = lerComandoSimulacao(text)
+  if (sim) {
+    if ('erro' in sim) throw new Error(sim.erro)
+    const sc = await import('./solar-calc')
+    await sc.carregarTabelaFinanciamento()
+    const msg = sim.tipo === 'cartao' ? sc.simulacaoCartaoTexto(sim.valor) : sc.simulacaoFinanciamentoTexto(sim.valor)
+    await dispatchOutbound(conversationId, msg, undefined, 'human', userId, true)
+    await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } }).catch(() => {})
+    await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu simulação de ${sim.tipo === 'cartao' ? 'cartão (2x a 24x)' : 'financiamento'} de R$ ${sim.valor.toLocaleString('pt-BR')} → enviada.` } }).catch(() => {})
+    return true
+  }
   const cmd = lerComandoIndicacao(text)
   if (!cmd) return false
   // comando incompleto/fora da faixa → avisa o operador (a tela mostra o erro) e NÃO manda nada ao cliente

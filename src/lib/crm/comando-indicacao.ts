@@ -20,6 +20,30 @@ function numero(bruto: string): number {
   return Math.round(parseFloat(raw) || 0)
 }
 
+// 💳 Comandos de SIMULAÇÃO (regra do dono, 24/11/2026) — a mensagem inteira é o comando; o texto dele nunca
+// vai ao cliente, só a simulação:
+//   "simula financiamento valor 30.000" · "simula financiamento de R$ 30.000,00" · "simula financiamento 30 mil"
+//   "simula cartão de R$ 15.000" · "simula cartao 15000"   → cartão de 2x até 24x
+export type ComandoSimulacao =
+  | { tipo: 'financiamento' | 'cartao'; valor: number }
+  | { erro: string }
+
+export function lerComandoSimulacao(text: string): ComandoSimulacao | null {
+  const t = (text || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const m = /^simul[ae]r?\s+(?:o\s+|um\s+)?(financiamento|cartao|cartao de credito)\b\s*(.*)$/.exec(t)
+  if (!m) return null
+  const tipo = m[1].startsWith('cartao') ? 'cartao' as const : 'financiamento' as const
+  const resto = m[2].replace(/^(?:de\s+credito\s+)?(?:no\s+valor\s+de|valor\s+de|valor|de|para|pra|p\/)\s*/, '').trim()
+  const v = /^(?:r\$\s*)?([\d.,]+)\s*(mil|k)?\s*(?:reais|real)?\s*[.!]?$/.exec(resto)
+  if (!v) return { erro: `Faltou o valor: escreva "simula ${tipo === 'cartao' ? 'cartão de R$ 15.000' : 'financiamento valor 30.000'}". Nada foi enviado ao cliente.` }
+  const bruto = v[1]
+  const f = bruto.includes(',') ? parseFloat(bruto.replace(/\./g, '').replace(',', '.'))
+    : /^\d{1,3}(\.\d{3})+$/.test(bruto) ? parseFloat(bruto.replace(/\./g, '')) : parseFloat(bruto)
+  const valor = Math.round((f || 0) * (v[2] ? 1000 : 1) * 100) / 100
+  if (!(valor > 0)) return { erro: 'O valor precisa ser maior que zero. Nada foi enviado ao cliente.' }
+  return { tipo, valor }
+}
+
 export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
   // "faz para 600 reais" / "faz pra 800 kwh" = mesmo comando (o dono escreve assim)
   const t = (text || '').trim().replace(/^faz\s+(?:para|pra|p\/)\s+/i, 'faz ')
