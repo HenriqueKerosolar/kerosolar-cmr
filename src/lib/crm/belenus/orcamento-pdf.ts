@@ -19,7 +19,7 @@ export const CORES_KEROSOLAR = {
 export const EMPRESA_KEROSOLAR = {
   nome: 'KEROSOLAR ENERGIA & TECNOLOGIA',
   cnpj: '34.307.552/0001-69',
-  endereco: ['R A, 37 CASA 01 - VILA PROGRESSO', 'Niterói - RJ   CEP: 24320-480'],
+  endereco: ['RUA NOSSA SENHORA DE LOURDES, 32 CASA 4 - GRAJAÚ', 'Rio de Janeiro - RJ   CEP: 20540-370'],
   contatos: ['FONE / WHATSAPP: (21) 2027-6013', 'kerosolar@kerosolar.com.br · www.kerosolar.com.br'],
   marca: 'KeroSolar',
 }
