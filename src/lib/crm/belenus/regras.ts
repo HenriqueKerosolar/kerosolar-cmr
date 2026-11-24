@@ -384,10 +384,19 @@ export function aplicarRegrasComponentes(
   return { pecas, ajustes }
 }
 
-// ── Rotas: o robô só CONSULTA o catálogo (nunca compra, nunca gera pedido) ────
+// ── Rotas: o robô CONSULTA o catálogo e faz só a etapa 6 "Confirmação" (nunca compra, nunca gera pedido) ──
 export const BELENUS_BASE = 'https://belenus.com.br/'
 export const ROTA_LOGIN = 'api/autenticacao/Usuario/Login/PessoaJuridicaByEmail'
+// Fase 2 (dono autorizou, 24/11/2026): a etapa 6 "Confirmação" do Gerador Personalizado — a mesma que o dono
+// faz à mão e que gera a cotação "WEB-xxxxxxx" — só para LER o total. NÃO finaliza pedido (isso é ConfirmarCarrinho).
+export const ROTA_CONFIRMAR = 'api/carrinho/KitPersonalizado/Confirmar'
+// Leituras da tela de Confirmação: valor do seguro (getValorSeguro) e opções/valores de frete (getOpcoesFrete).
+export const ROTA_VALOR_SEGURO = 'api/carrinho/KitPersonalizado/ValorSeguro'
+export const ROTA_BUSCAR_FRETES = 'api/fretes/TipoFrete/BuscarFretes'
 export const ROTAS_PERMITIDAS: readonly string[] = [
+  ROTA_CONFIRMAR,
+  ROTA_VALOR_SEGURO,
+  ROTA_BUSCAR_FRETES,
   ROTA_LOGIN,
   'api/catalogo/KitPersonalizado/Modulos',
   'api/catalogo/KitPersonalizado/InversorFiltro',
@@ -399,14 +408,18 @@ export const ROTAS_PERMITIDAS: readonly string[] = [
   'api/catalogo/KitPersonalizado/Outros',
   'api/catalogo/KitPersonalizado/OutrosAC',
 ]
-/** Nunca: carrinho, pedido, pagamento, seguro, frete, cupom, upload (o dono proibiu — Fase 1 é só leitura). */
-export const ROTA_PROIBIDA = /api\/(carrinho|pedido|pagamento|planopagamento|fretes?)\/|ConfirmarCarrinho|EnviarHistoricoPedido|AlterarConfirmar|AlterarCarrinho|SalvarOrcamentoCliente|\/Confirmar\b|IncluirSeguro|AdicionarFrete|Cupom|Upload/i
+/**
+ * PROIBIDAS PARA SEMPRE (o dono): finalizar pedido, mexer no carrinho, pagamento, seguro, frete, cupom, upload.
+ * Atenção: `ConfirmarCarrinho` (finaliza o pedido) ≠ `Confirmar` (etapa 6, liberada por caminho EXATO acima).
+ */
+export const ROTA_PROIBIDA = /api\/(pedido|pagamento|planopagamento)\/|planopagamento|ConfirmarCarrinho|EnviarHistoricoPedido|AlterarConfirmar|AlterarCarrinho|SalvarOrcamentoCliente|IncluirSeguro|AdicionarFrete|Cupom|Upload|RecarregarCarrinho|AtualizarQuantidade|AlterarNegociacao|AlterarCliente|AlterarApenasCliente|AtualizaValorServico|CarregarFob/i
 
-/** true só para as rotas de consulta da lista (+ StringBox/{site}). Qualquer outra → false. */
+/** true só para os caminhos EXATOS da lista (+ StringBox/{site}). Qualquer outro (inclusive o resto de api/carrinho) → false. */
 export function rotaPermitida(url: string): boolean {
   let caminho = url
   if (url.startsWith(BELENUS_BASE)) caminho = url.slice(BELENUS_BASE.length)
   else if (/^https?:\/\//i.test(url)) return false
+  if (ROTA_PROIBIDA.test(caminho)) return false
   caminho = caminho.split('?')[0].replace(/^\/+/, '')
   if (ROTA_PROIBIDA.test(caminho)) return false
   if (/^api\/catalogo\/KitPersonalizado\/StringBox\/\d+$/.test(caminho)) return true
@@ -433,6 +446,105 @@ export function formaResposta(v: unknown, prof = 0): unknown {
   return typeof v
 }
 
+// ── Destino do frete (regra do dono: município do lead; sem ele → Rio de Janeiro - RJ) ─────────
+export const DESTINO_PADRAO = { cidade: 'Rio de Janeiro', uf: 'RJ' }
+const UFS = 'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' ')
+
+/** Cidade/UF do lead ("Niterói", "Niterói - RJ", "Niterói/RJ" + uf/estado separado). null se não houver. */
+export function lerDestino(cidade: unknown, uf?: unknown): { cidade: string; uf: string } | null {
+  let c = String(cidade ?? '').trim()
+  let u = String(uf ?? '').trim().toUpperCase()
+  const m = /^(.+?)\s*[-/,]\s*([A-Za-z]{2})$/.exec(c)
+  if (m) { c = m[1].trim(); if (!u) u = m[2].toUpperCase() }
+  if (!c) return null
+  if (!UFS.includes(u)) u = 'RJ' // a KeroSolar atende o Estado do RJ (agent.ts): cidade sem UF → RJ
+  return { cidade: c, uf: u }
+}
+
+// ── Leitura da resposta do Confirmar (etapa 6) ───────────────────────────────
+// Campos vistos no bundle (tela de Confirmação, `carrinhoCompleto = n.data`): pedidoWeb, carrinhoId, id,
+// totalProdutos, totalOriginalProdutos, valorTotalNF, minimoCompra, peso, frete{tipoFreteId,freteIncluso,…},
+// incluirSeguro, valorSeguro, metodoPagamentoID, descricaoPagamento, itens[0].componentes[{sku,descricaoProduto,
+// quantidade,precos{siteFaturamento,…}}]. Os nomes de imposto não aparecem no bundle → leitura tolerante.
+export type Confirmacao = {
+  numeroCotacao: string | null
+  totalProdutos: number
+  frete: number | null
+  freteDescricao: string | null
+  seguro: number | null
+  impostos: { nome: string; valor: number }[]
+  valorTotalNF: number | null
+  total: number
+  pagamento: string | null
+}
+
+const valorPositivo = (v: unknown): number | null => {
+  const n = num(v)
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null
+}
+
+/** "WEB-007268278" (como o dono vê na Belenus). Aceita número ou texto. */
+export function numeroCotacaoDe(dados: Obj): string | null {
+  const v = campo(dados, 'pedidoWeb', 'numeroPedidoWeb', 'numeroOrcamento', 'numeroCotacao', 'numeroPedido')
+  if (v == null) return null
+  const s = String(v).trim()
+  if (!s || /^0+$/.test(s)) return null
+  if (/^web/i.test(s)) return s.toUpperCase()
+  return /^\d+$/.test(s) ? `WEB-${s.padStart(9, '0')}` : s
+}
+
+/** Valor do frete "Belenus Entrega no Cliente" (CIF, tipoFreteId "06") nas opções de BuscarFretes. */
+export function freteEntregaNoCliente(resp: unknown): { valor: number; descricao: string } | null {
+  const raiz = ehObj(resp) && ehObj(resp.data) ? resp.data : resp
+  const opcoes = ehObj(raiz) && Array.isArray(raiz.opcoes) ? (raiz.opcoes as unknown[]).filter(ehObj) : listaDe(resp, 'opcoes')
+  const desc = (o: Obj) => String(campo(o, 'descricaoAmigavel', 'descricao') ?? '')
+  const op = opcoes.find((o) => /entrega no cliente/i.test(desc(o))) ?? opcoes.find((o) => String(o.tipoFreteId) === '06')
+  if (!op) return null
+  const valor = valorPositivo(campo(op, 'freteIncluso', 'taxa', 'valor', 'valorFrete'))
+  return valor == null ? null : { valor, descricao: desc(op) || 'Belenus Entrega no Cliente' }
+}
+
+/** Seguro: a rota ValorSeguro devolve `data` = valor (getValorSeguro) — aceita também { valorSeguro }. */
+export function valorSeguroDe(resp: unknown): number | null {
+  const d = ehObj(resp) && 'data' in resp ? resp.data : resp
+  return ehObj(d) ? valorPositivo(campo(d, 'valorSeguro', 'valor')) : valorPositivo(d)
+}
+
+const RE_IMPOSTO = /^(valor|total)?(icms(st)?|ipi|difal|st|pis|cofins|impostos?|tributos?)$/i
+
+/**
+ * Monta os números da cotação. TOTAL = produtos + frete + seguro (como a cotação de exemplo do dono:
+ * R$ 11.445,78 + R$ 600 + R$ 92,09 = R$ 12.137,87). Sem `totalProdutos` → erro claro (quem chama trata).
+ */
+export function lerConfirmacao(resp: unknown, extras: { frete?: { valor: number; descricao: string } | null; seguro?: number | null } = {}): Confirmacao {
+  const dados: Obj = ehObj(resp) && ehObj(resp.data) ? resp.data : ehObj(resp) ? resp : {}
+  // 24/11/2026: o 1º teste real deu produtos R$ 6.822,41 contra R$ 11.445,78 na cotação manual do dono (~1,68×):
+  // registra os campos de total/serviço/margem (só números do kit, nada pessoal) para achar onde entra a margem.
+  console.log(`[belenus] totais da confirmação: ${JSON.stringify(Object.fromEntries(
+    ['totalProdutos', 'totalOriginalProdutos', 'totalProdutosComValorServico', 'totalOriginalProdutosComGarantia', 'totalProdutosFrete',
+      'totalSemFrete', 'valorServico', 'valorLimiteServicoIntegrador', 'valorLimiteIntegrador', 'acrescimoPlanoDePagamento',
+      'descontoPlanoDePagamento', 'descontoGeral', 'valorTotalNF', 'valorTotalCalculoSeguro', 'totalGarantia']
+      .map((k) => [k, (dados as Obj)[k] ?? null])))}`)
+  const totalProdutos = valorPositivo(campo(dados, 'totalProdutos', 'valorTotalProdutos', 'subtotal'))
+  if (totalProdutos == null) throw new Error('A Belenus confirmou o kit mas não devolveu o total dos produtos (formato inesperado — veja o log [belenus] confirmação).')
+  const freteObj = ehObj(dados.frete) ? dados.frete : {}
+  const freteDaResposta = valorPositivo(freteObj.freteIncluso)
+  const frete = extras.frete?.valor ?? freteDaResposta
+  const seguroResp = dados.incluirSeguro ? valorPositivo(dados.valorSeguro) : null
+  const seguro = extras.seguro ?? seguroResp
+  const impostos = Object.entries(dados)
+    .filter(([k, v]) => RE_IMPOSTO.test(k) && valorPositivo(v) != null)
+    .map(([k, v]) => ({ nome: k, valor: valorPositivo(v)! }))
+  const total = Math.round((totalProdutos + (frete ?? 0) + (seguro ?? 0)) * 100) / 100
+  const pagamento = campo(dados, 'descricaoPagamento', 'metodoPagamentoID', 'planoDePagamentoId')
+  return {
+    numeroCotacao: numeroCotacaoDe(dados),
+    totalProdutos, frete, freteDescricao: extras.frete?.descricao ?? (freteDaResposta != null ? String(campo(freteObj, 'descricaoAmigavel', 'descricao') ?? 'frete') : null),
+    seguro, impostos, valorTotalNF: valorPositivo(dados.valorTotalNF), total,
+    pagamento: pagamento == null ? null : String(pagamento),
+  }
+}
+
 // ── Resultado ────────────────────────────────────────────────────────────────
 export type ResultadoCotacao = {
   potenciaPedidaKwp: number
@@ -445,6 +557,12 @@ export type ResultadoCotacao = {
   avisos: string[]
   ajustes: string[]
   totalProdutos: number | null
+  /** Etapa 6 (Confirmar): números da cotação WEB-xxxxxxx; null se não chegou a ler o total. */
+  confirmacao?: Confirmacao | null
+  /** Medidor monofásico → transformador somado ao valor do cliente (linha separada). */
+  transformador?: number
+  /** Valor ao cliente = TOTAL da Belenus como vem (já tem a margem de 60%) + transformador. NÃO aplica margem. */
+  valorCliente?: number | null
 }
 
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -461,9 +579,19 @@ export function totalSeTiverPreco(pecas: Peca[]): number | null {
   return Math.round(pecas.reduce((s, p) => s + (p.preco ?? 0) * p.qtde, 0) * 100) / 100
 }
 
+/**
+ * Valor ao cliente (dono, 24/11/2026): a API devolve o CUSTO (sem o "valor de serviço" que o dono põe à mão no site) →
+ * TOTAL (produtos + frete + seguro) × 1,6 (margem de 60% "de tudo") + transformador (medidor monofásico).
+ */
+export const MARGEM_KEROSOLAR = 1.6
+export function valorAoCliente(total: number, transformador = 0): number {
+  return Math.round((total * MARGEM_KEROSOLAR + transformador) * 100) / 100
+}
+
 export function textoNota(r: ResultadoCotacao): string {
   const l: string[] = []
-  l.push(`🤖 Cotação Belenus (Fase 1, só leitura — nada foi enviado ao cliente nem ao carrinho) para ${r.potenciaPedidaKwp.toLocaleString('pt-BR')} kWp`)
+  const c = r.confirmacao
+  l.push(`🤖 Cotação Belenus${c?.numeroCotacao ? ` ${c.numeroCotacao}` : ''} para ${r.potenciaPedidaKwp.toLocaleString('pt-BR')} kWp — nada foi enviado ao cliente; nenhum pedido foi finalizado.`)
   l.push('')
   l.push(`MÓDULO: ${r.modulo.qtde} × ${r.modulo.descricao} (cód. ${r.modulo.codigo}, ${r.modulo.potenciaW} W)` +
     (r.modulo.potenciaKitKwp ? ` → ${r.modulo.potenciaKitKwp.toLocaleString('pt-BR')} kWp` : '') +
@@ -475,9 +603,23 @@ export function textoNota(r: ResultadoCotacao): string {
   l.push('', 'COMPONENTES CC:', ...(r.componentesCC.length ? r.componentesCC.map(linhaPeca) : ['• (nenhum item devolvido)']))
   l.push('', 'COMPONENTES CA:', ...(r.componentesCA.length ? r.componentesCA.map(linhaPeca) : ['• (nenhum item devolvido)']))
   l.push('')
-  l.push(r.totalProdutos != null
-    ? `TOTAL DOS PRODUTOS (pela API): ${brl(r.totalProdutos)} — sem frete/seguro.`
-    : 'PREÇO/TOTAL: a Belenus só calcula o total ao criar o carrinho (rota Confirmar), que o robô NÃO chama na Fase 1.')
+  if (c) {
+    l.push(`VALORES DA BELENUS${c.numeroCotacao ? ` (cotação ${c.numeroCotacao})` : ''}:`)
+    l.push(`• Produtos: ${brl(c.totalProdutos)}`)
+    l.push(c.frete != null ? `• Frete (${c.freteDescricao ?? 'frete'}): ${brl(c.frete)}` : '• Frete: NÃO calculado — fica para o operador (ver avisos)')
+    l.push(c.seguro != null ? `• Seguro: ${brl(c.seguro)}` : '• Seguro: não veio')
+    for (const i of c.impostos) l.push(`• ${i.nome}: ${brl(i.valor)}`)
+    if (c.valorTotalNF != null && Math.abs(c.valorTotalNF - c.total) > 0.01) l.push(`• Valor total NF (informado pela Belenus): ${brl(c.valorTotalNF)}`)
+    l.push(`• TOTAL BELENUS: ${brl(c.total)}${c.frete == null ? ' (sem frete)' : ''}`)
+    if (c.pagamento) l.push(`• Condição de pagamento na cotação: ${c.pagamento}`)
+    l.push('')
+    if (r.transformador) l.push(`TRANSFORMADOR (medidor monofásico): ${brl(r.transformador)}`)
+    if (r.valorCliente != null) l.push(`VALOR AO CLIENTE: ${brl(r.valorCliente)} (total da Belenus × 1,6 de margem${r.transformador ? ' + transformador' : ''})`)
+  } else {
+    l.push(r.totalProdutos != null
+      ? `TOTAL DOS PRODUTOS (pela API): ${brl(r.totalProdutos)} — sem frete/seguro.`
+      : 'PREÇO/TOTAL: não consegui ler o total na Confirmação da Belenus (ver avisos).')
+  }
   if (r.ajustes.length) l.push('', 'AJUSTES PELA REGRA DO DONO:', ...r.ajustes.map((a) => `• ${a}`))
   if (r.avisos.length) l.push('', 'AVISOS:', ...r.avisos.map((a) => `⚠️ ${a}`))
   return l.join('\n')

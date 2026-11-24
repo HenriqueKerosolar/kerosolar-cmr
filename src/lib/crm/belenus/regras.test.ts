@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aplicarRegrasComponentes, calcularCabos, calcularDps, calcularStrings, escolherInversor, escolherModulo600,
-  formaResposta, kwpPorConsumo, lerComandoBelenus, lerLigacao, lerTelhado, rotaPermitida, type Peca,
+  formaResposta, kwpPorConsumo, lerComandoBelenus, lerConfirmacao, lerDestino, lerLigacao, lerTelhado, numeroCotacaoDe, rotaPermitida, type Peca,
 } from './regras'
 
 describe('lerComandoBelenus — "cota belenus <kWp>" (mensagem inteira)', () => {
@@ -120,14 +120,24 @@ describe('rotas: só consulta do catálogo', () => {
       expect(rotaPermitida(`https://belenus.com.br/api/catalogo/KitPersonalizado/${r}`)).toBe(true)
     expect(rotaPermitida('https://belenus.com.br/api/autenticacao/Usuario/Login/PessoaJuridicaByEmail')).toBe(true)
   })
-  it('bloqueia carrinho, pedido, pagamento, seguro, frete, cupom, upload e outros hosts', () => {
+  it('Fase 2: libera SÓ a etapa 6 (Confirmar) e as leituras de seguro e frete, por caminho exato', () => {
+    expect(rotaPermitida('https://belenus.com.br/api/carrinho/KitPersonalizado/Confirmar')).toBe(true)
+    expect(rotaPermitida('https://belenus.com.br/api/carrinho/KitPersonalizado/ValorSeguro')).toBe(true)
+    expect(rotaPermitida('https://belenus.com.br/api/fretes/TipoFrete/BuscarFretes?calcularValores=true')).toBe(true)
+    // variações que NÃO podem passar
+    for (const r of ['api/carrinho/KitPersonalizado/Confirmar/1', 'api/carrinho/KitPersonalizado/ConfirmarX', 'api/carrinho/Confirmar', 'api/fretes/TipoFrete/Outra'])
+      expect(rotaPermitida(`https://belenus.com.br/${r}`), r).toBe(false)
+  })
+  it('bloqueia para sempre: finalizar pedido, alterar carrinho, pagamento, seguro, frete, cupom, upload e outros hosts', () => {
     for (const r of [
       'api/carrinho/KitPersonalizado/ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/ConfirmarCarrinho ',
       'api/carrinho/KitPersonalizado/EnviarHistoricoPedido', 'api/carrinho/KitPersonalizado/AlterarConfirmar',
       'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente',
-      'api/carrinho/KitPersonalizado/Confirmar', 'api/carrinho/KitPersonalizado/IncluirSeguro',
-      'api/carrinho/KitPersonalizado/AdicionarFrete', 'api/carrinho/KitPersonalizado/Cupom',
+      'api/carrinho/KitPersonalizado/IncluirSeguro', 'api/carrinho/KitPersonalizado/RecarregarCarrinho?tudo=true',
+      'api/carrinho/KitPersonalizado/AdicionarFrete', 'api/carrinho/KitPersonalizado/Cupom', 'api/carrinho/KitPersonalizado/ValidarCupom',
+      'api/carrinho/KitPersonalizado/CarregarFob', 'api/carrinho/KitPersonalizado/AtualizarQuantidade',
       'api/carrinho/KitPersonalizado/UploadFinanciamento', 'api/pagamento/qualquer', 'api/pedido/qualquer',
+      'api/planopagamento/x', 'api/carrinho/KitPersonalizado/Confirmar?x=ConfirmarCarrinho',
       'api/catalogo/KitPersonalizado/BuscarModuloInvertido', 'api/catalogo/KitPersonalizado/Confirmar',
     ]) expect(rotaPermitida(`https://belenus.com.br/${r}`), r).toBe(false)
     expect(rotaPermitida('https://outro.com/api/catalogo/KitPersonalizado/Modulos')).toBe(false)
@@ -141,5 +151,28 @@ describe('formaResposta (log) nunca mostra dado sensível', () => {
     expect(f).not.toContain('x@y.z')
     expect(f).toContain('"lista":3')
     expect(f).toContain('"item":"M1"')
+  })
+})
+
+describe('Fase 2: leitura da Confirmação', () => {
+  it('número da cotação no formato WEB-xxxxxxxxx', () => {
+    expect(numeroCotacaoDe({ pedidoWeb: 7268278 })).toBe('WEB-007268278')
+    expect(numeroCotacaoDe({ pedidoWeb: 'WEB-007268278' })).toBe('WEB-007268278')
+    expect(numeroCotacaoDe({ pedidoWeb: 0 })).toBeNull()
+    expect(numeroCotacaoDe({})).toBeNull()
+  })
+  it('total = produtos + frete + seguro (exemplo do dono: R$ 12.137,87); impostos listados à parte', () => {
+    const c = lerConfirmacao({ isSucceed: true, data: { pedidoWeb: 7268278, totalProdutos: 11445.78, valorDifal: 10, status: 3 } }, { frete: { valor: 600, descricao: 'Belenus Entrega no Cliente' }, seguro: 92.09 })
+    expect(c).toMatchObject({ numeroCotacao: 'WEB-007268278', totalProdutos: 11445.78, frete: 600, seguro: 92.09, total: 12137.87 })
+    expect(c.impostos).toEqual([{ nome: 'valorDifal', valor: 10 }])
+  })
+  it('sem totalProdutos → erro claro', () => {
+    expect(() => lerConfirmacao({ isSucceed: true, data: {} })).toThrow(/não devolveu o total dos produtos/)
+  })
+  it('destino do frete: cidade do lead (com ou sem UF)', () => {
+    expect(lerDestino('Niterói - RJ')).toEqual({ cidade: 'Niterói', uf: 'RJ' })
+    expect(lerDestino('Belo Horizonte', 'mg')).toEqual({ cidade: 'Belo Horizonte', uf: 'MG' })
+    expect(lerDestino('Petrópolis')).toEqual({ cidade: 'Petrópolis', uf: 'RJ' })
+    expect(lerDestino('')).toBeNull()
   })
 })

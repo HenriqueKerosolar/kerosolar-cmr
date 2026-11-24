@@ -1,12 +1,17 @@
 import 'server-only'
-// 🤖 Orquestra a cotação na Belenus (Fase 1 — SÓ LEITURA), na mesma ordem do "Gerador Personalizado":
+// 🤖 Orquestra a cotação na Belenus, na mesma ordem do "Gerador Personalizado":
 //   login → Módulos → filtros do inversor → Inversor → ConferirPotenciaInversor → TipoEstrutura → Estrutura
-//   → Outros (CC) → OutrosAC (CA)
-// e PARA aí: o próximo passo do site é api/carrinho/KitPersonalizado/Confirmar (cria o carrinho e é onde
-// aparecem preço/frete/total) — PROIBIDO nesta fase.
+//   → Outros (CC) → OutrosAC (CA) → [Fase 2] etapa 6 "Confirmação" (Confirmar, UMA vez) → frete (BuscarFretes,
+//   só consulta) → seguro (ValorSeguro, só consulta)
+// e PARA aí. A Confirmação gera a cotação "WEB-xxxxxxx" (a mesma que o dono gera à mão) só para LER o total.
+// Nunca finaliza pedido (ConfirmarCarrinho), nunca grava frete/seguro/pagamento no carrinho (proibido).
 // Disparo: comando do operador "cota belenus <kWp>" na conversa do lead (ver comandoCotaBelenus).
 
 import { ErroBelenus, chamarBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
+import {
+  DESTINO_PADRAO, ROTA_BUSCAR_FRETES, ROTA_CONFIRMAR, ROTA_VALOR_SEGURO, codigoDe, freteEntregaNoCliente, lerConfirmacao,
+  lerDestino, valorAoCliente, valorSeguroDe, type Confirmacao, type Peca,
+} from './regras'
 import {
   LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, PALAVRAS_TELHADO, RE_NAO_ON_GRID, RE_ON_GRID, TRANSFORMADOR_PRECO,
   aplicarRegrasComponentes, calcularDps, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, LIMITE_MONOFASICO_220_KW, PLACAS_POR_MICRO,
@@ -21,6 +26,7 @@ export type EntradaCotacao = {
   tensao?: number | null     // V (do lead)
   telhado?: Telhado | null   // do lead
   micro?: boolean            // cliente pediu micro inversor → DEYE, 1 para cada 4 placas
+  destino?: { cidade: string; uf: string } | null   // município do lead (frete); sem ele → Rio de Janeiro - RJ
 }
 
 const P = 'api/catalogo/KitPersonalizado/'
@@ -179,7 +185,8 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const ccTodos = semRepetidos(listaDe(await post('Outros', corpoOutros(0), 'componentes CC (todos)'), 'outros'))
   // 5) COMPONENTES CA (OutrosAC)
   const caSug = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(1), 'componentes CA (sugeridos)'), 'outrosAC', 'outros')).filter((o) => qtdeDe(o) > 0)
-  // PARE: o próximo passo do site é api/carrinho/KitPersonalizado/Confirmar (cria carrinho) — proibido na Fase 1.
+  const objPorCodigo = new Map<string, Obj>()
+  for (const o of [...ccTodos, ...ccSug, ...caSug]) if (codigoDe(o)) objPorCodigo.set(codigoDe(o), o)
 
   // Regras do dono: strings, cabos e DPS
   const strings = calcularStrings(qtdModulos)
@@ -192,7 +199,9 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   // 24/11/2026 (teste real): a Belenus pode não sugerir DPS → busca na lista completa do CA (sugestao 0) e põe a
   // quantidade da regra do dono (2 mono/bifásico, 3 trifásico). Prefere DPS CA 275 V (rede 127/220 V).
   if (!temDpsCa && !cc.pecas.some((p) => ehDps(p.descricao))) {
-    const caTodos = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(0), 'componentes CA (todos)'), 'outrosAC', 'outros')).map(paraPeca)
+    const caTodosObjs = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(0), 'componentes CA (todos)'), 'outrosAC', 'outros'))
+    for (const o of caTodosObjs) if (codigoDe(o) && !objPorCodigo.has(codigoDe(o))) objPorCodigo.set(codigoDe(o), o)
+    const caTodos = caTodosObjs.map(paraPeca)
     const dpss = caTodos.filter((p) => ehDps(p.descricao))
     const dps = dpss.find((p) => /\bca\b/i.test(p.descricao) && /275\s*v/i.test(p.descricao)) ?? dpss.find((p) => /275\s*v/i.test(p.descricao)) ?? dpss[0]
     if (dps) {
@@ -215,12 +224,123 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   }
   const estrutura = estruturaObjs.map(paraPeca)
   const todas = [moduloPeca, inversorPeca, ...estrutura, ...cc.pecas, ...ca.pecas]
+
+  // 6) CONFIRMAÇÃO (Fase 2, autorizada pelo dono) — lê total, frete e seguro. Falha aqui NÃO derruba o kit.
+  let confirmacao: Confirmacao | null = null
+  try {
+    confirmacao = await confirmarParaLerTotal({
+      post: (rota, corpo, etapa, cab) => chamarBelenus(rota, corpo, { token: sessao.token, etapa, cabecalhos: cab }),
+      sessao, site, kit, kitKwp, qtdModulos, layout, inversorSel, qtdInversores,
+      estrutura: estruturaObjs, cc: cc.pecas, ca: ca.pecas, objPorCodigo,
+      destino: entrada.destino ?? null, avisos,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    avisos.push(`Total não lido na Confirmação da Belenus: ${msg} O kit acima continua válido; confira o valor no site.`)
+  }
+  const transformador = ligacaoLead === 'monofásico' ? TRANSFORMADOR_PRECO : 0
   return {
     potenciaPedidaKwp: entrada.kwp,
     modulo: moduloPeca, inversor: inversorPeca, estrutura, componentesCC: cc.pecas, componentesCA: ca.pecas,
     strings, avisos, ajustes: [...ajustesEstrutura, ...cc.ajustes, ...ca.ajustes, ...ajustesExtra],
-    totalProdutos: totalSeTiverPreco(todas),
+    totalProdutos: confirmacao?.totalProdutos ?? totalSeTiverPreco(todas),
+    confirmacao,
+    transformador: transformador || undefined,
+    valorCliente: confirmacao ? valorAoCliente(confirmacao.total, transformador) : null,
   }
+}
+
+// ── Etapa 6: Confirmação (api/carrinho/KitPersonalizado/Confirmar) ───────────
+// Corpo = `confirmacaoKit()` do bundle: { site, potenciaProjeto, semEstrutura, mesesInatividade,
+//   itens: [módulo, ...inversores, ...estrutura, ...stringBox, ...outros (CC), ...outrosCA], layout,
+//   origemCarrinho: 4, potenciaSistema, qtdModulos, qtdInversores, totalMaxPotenciaEntrada, totalMaxPotenciaSaida }
+// com cada item no formato de `montaFormatoEnvio()` + `tipoKitmontado`. Cabeçalho `X-CarrinhoId: ""` (carrinho novo).
+type CtxConfirmar = {
+  post: (rota: string, corpo: unknown, etapa: string, cab?: Record<string, string>) => Promise<unknown>
+  sessao: SessaoBelenus; site: string; kit: Obj; kitKwp: number; qtdModulos: number; layout: unknown[]
+  inversorSel: Obj; qtdInversores: number; estrutura: Obj[]; cc: Peca[]; ca: Peca[]; objPorCodigo: Map<string, Obj>
+  destino: { cidade: string; uf: string } | null; avisos: string[]
+}
+
+/** Item "outro"/"estrutura" no formato de montaFormatoEnvio (ramo `qtde`). */
+function itemOutro(o: Obj | undefined, codigo: string, qtde: number, tipo: string): Obj {
+  return {
+    item: codigo, qtde, fabricante: o?.fabricante, modelo: o?.modelo, numEntrada: o?.numEntrada, imagemMarca: o?.imagemMarca,
+    numSaida: o?.numSaida, dimensoes: o?.dimensoes, grauProtecao: o?.grauProtecao, correnteEntradaMax: o?.correnteEntradaMax,
+    tensaoMaxima: o?.tensaoMaxima, tipoKitmontado: tipo,
+  }
+}
+
+export function corpoConfirmar(c: Omit<CtxConfirmar, 'post' | 'avisos' | 'destino'>): Obj {
+  const k = c.kit, iv = c.inversorSel
+  const modulo = {
+    tipoKitmontado: 'modulo', item: k.item, qtde: c.qtdModulos, fabricante: k.fabricante, modelo: k.modelo,
+    imagemMarca: k.imagemMarca, eficiencia: k.eficiencia, potencia: k.potencia,
+  }
+  const inversor = {
+    item: iv.item ?? iv.sku, qtde: c.qtdInversores, fabricante: iv.fabricante, modelo: iv.modelo, imagemMarca: iv.imagemMarca,
+    maxPotenciaSaida: iv.maxPotenciaSaida, maxPotenciaEntrada: iv.maxPotenciaEntrada, tipoInversor: iv.tipoInversor,
+    tipoLigacao: iv.tipoLigacao, numMPPTs: iv.numMPPTs, numEntradaMPPT: iv.numEntradaMPPT,
+    potencia: iv.potenciaNominalSaida ?? iv.potencia, index: iv.index,
+    arranjoInversores: Array.isArray(iv.arranjoInversores) ? iv.arranjoInversores : [], tipoKitmontado: 'inversor',
+  }
+  const estrutura = c.estrutura.filter((e) => qtdeDe(e) > 0).map((e) => itemOutro(e, codigoDe(e), qtdeDe(e), 'estrutura'))
+  const outros = c.cc.filter((p) => p.qtde > 0 && p.codigo).map((p) => itemOutro(c.objPorCodigo.get(p.codigo), p.codigo, p.qtde, 'outro'))
+  const outrosCA = c.ca.filter((p) => p.qtde > 0 && p.codigo).map((p) => itemOutro(c.objPorCodigo.get(p.codigo), p.codigo, p.qtde, 'outroCA'))
+  const num0 = (v: unknown) => (Number.isFinite(num(v)) ? num(v) : 0)
+  const corpo: Obj = {
+    site: c.site, potenciaProjeto: c.kitKwp, semEstrutura: false, mesesInatividade: c.sessao.mesesInatividade ?? 0,
+    itens: [modulo, inversor, ...estrutura, ...outros, ...outrosCA], layout: c.layout, origemCarrinho: 4,
+    potenciaSistema: c.kitKwp, qtdModulos: c.qtdModulos, qtdInversores: c.qtdInversores,
+  }
+  // o site soma 1× por linha de inversor (não multiplica pela quantidade) e só manda se > 0
+  if (num0(iv.maxPotenciaEntrada) > 0) corpo.totalMaxPotenciaEntrada = num0(iv.maxPotenciaEntrada)
+  if (num0(iv.maxPotenciaSaida) > 0) corpo.totalMaxPotenciaSaida = num0(iv.maxPotenciaSaida)
+  return corpo
+}
+
+async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Confirmacao> {
+  // UMA chamada ao Confirmar por cotação (sem nova tentativa: cada chamada gera uma cotação WEB no site)
+  const r = await c.post(ROTA_CONFIRMAR, corpoConfirmar(c), 'confirmação (etapa 6)', { 'X-CarrinhoId': '' })
+  const dados: Obj = ehObj(r) && ehObj(r.data) ? r.data : {}
+
+  // Frete "Belenus Entrega no Cliente" para o município do lead (consulta BuscarFretes, como getOpcoesFrete).
+  // O site só GRAVA o frete com AdicionarFrete — proibido —, então o valor é lido das opções e somado aqui.
+  const destino = c.destino ?? DESTINO_PADRAO
+  if (!c.destino) c.avisos.push(`Município do lead não informado: frete calculado para ${DESTINO_PADRAO.cidade} - ${DESTINO_PADRAO.uf} (regra do dono).`)
+  let frete: { valor: number; descricao: string } | null = null
+  try {
+    const itens = Array.isArray(dados.itens) ? (dados.itens as unknown[]).filter(ehObj) : []
+    const precos = ehObj(itens[0]?.precos) ? (itens[0].precos as Obj) : {}
+    const documentoIntegrador = dados.documentoIntegrador ? dados.documentoIntegrador
+      : String(dados.grupoCliente ?? '').includes('INT') ? dados.clienteCnpjCpf : null
+    const corpoFrete = {
+      SiteID: precos.siteFaturamento ?? c.site, ValorPedido: dados.totalProdutos, Divisao: 'SOL',
+      Cidade: destino.cidade, Estado: destino.uf, eKit: 1, pesoTotal: dados.peso,
+      tipoUsuario: c.sessao.userType, liberarComprasMinimas: !!c.sessao.liberarComprasMinimas,
+      itens: itens.map((i) => ({
+        sku: i.sku, qtde: i.quantidade,
+        componentes: Array.isArray(i.componentes) ? (i.componentes as unknown[]).filter(ehObj).map((x) => ({ sku: x.sku, qtde: Number(x.quantidade) })) : undefined,
+      })),
+      IntegradorDocumento: documentoIntegrador, ClienteDocumento: null,
+    }
+    frete = freteEntregaNoCliente(await c.post(`${ROTA_BUSCAR_FRETES}?calcularValores=true`, corpoFrete, 'frete (opções)'))
+    if (!frete) c.avisos.push(`A Belenus não devolveu o valor de "Belenus Entrega no Cliente" para ${destino.cidade} - ${destino.uf}: o frete fica para o operador.`)
+  } catch (e) {
+    c.avisos.push(`Frete não calculado (${e instanceof Error ? e.message : 'erro'}): fica para o operador.`)
+  }
+
+  // Seguro (ValorSeguro: só calcula o valor; incluir no carrinho seria IncluirSeguro — proibido)
+  let seguro: number | null = null
+  try {
+    seguro = valorSeguroDe(await c.post(ROTA_VALOR_SEGURO, dados, 'seguro (valor)'))
+  } catch (e) {
+    c.avisos.push(`Seguro não calculado (${e instanceof Error ? e.message : 'erro'}).`)
+  }
+
+  const conf = lerConfirmacao(r, { frete, seguro })
+  c.avisos.push(`Pagamento: a cotação ficou na condição padrão do site${conf.pagamento ? ` (${conf.pagamento})` : ''}. O robô não troca para PIX (exigiria AlterarCarrinho, proibido) — se o PIX mudar o valor, ajuste no site.`)
+  return conf
 }
 
 // ── Comando na conversa do lead ──────────────────────────────────────────────
@@ -261,9 +381,11 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
   const ligacao = lerLigacao(cf.medidor)
   const tensao = lerTensao(cf.tensao ?? cf.tensaoAtendimento ?? cf.voltagem)
   const telhado = lerTelhado(cf.telhado ?? cf.tipoTelhado)
+  // frete: município do lead (customFields cidade/município + uf/estado); só CEP não basta (sem consulta externa)
+  const destino = lerDestino(cf.cidade ?? cf.municipio ?? cf.city, cf.uf ?? cf.estado)
   let resultado: ResultadoCotacao
   try {
-    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')) })
+    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')), destino })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha na cotação da Belenus.'
     console.error('[belenus] cotação falhou:', msg)

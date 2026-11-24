@@ -1,7 +1,8 @@
 import 'server-only'
 // 🤖 Cliente HTTP da Belenus (mesma API interna que o site belenus.com.br usa no "Gerador Personalizado").
-// Fase 1 = SÓ LEITURA: toda chamada passa por `rotaPermitida` (regras.ts). Qualquer rota fora da lista de
-// consulta — carrinho, pedido, pagamento, seguro, frete, cupom, upload — é BLOQUEADA antes de sair daqui.
+// Toda chamada passa por `rotaPermitida` (regras.ts): só consultas do catálogo + a etapa 6 "Confirmação"
+// (Confirmar, ValorSeguro, BuscarFretes). Finalizar pedido, mexer no carrinho, pagamento, seguro, frete,
+// cupom, upload — BLOQUEADO antes de sair daqui.
 //
 // Segurança: e-mail/senha vêm só de BELENUS_EMAIL / BELENUS_SENHA; o token fica só em memória durante a
 // cotação; nada disso é logado. O log ([belenus]) mostra só a "forma" das respostas (formaResposta).
@@ -24,11 +25,17 @@ export function credenciaisBelenus(): { email: string; senha: string } {
 /** Filial da conta (Belenus-SP = "0001", ver getSiteId/BELENUS_SITE_SELECTED no bundle). */
 export const siteBelenus = () => process.env.BELENUS_SITE?.trim() || '0001'
 
-export type SessaoBelenus = { token: string }
+/** Sessão em memória. Além do token, só campos não pessoais que o site usa nos corpos (Confirmar/BuscarFretes). */
+export type SessaoBelenus = {
+  token: string
+  mesesInatividade?: number
+  userType?: number
+  liberarComprasMinimas?: boolean
+}
 
 /** Única porta de saída para a Belenus: valida a rota, aplica tempo limite e trata o envelope de erro. */
 export async function chamarBelenus(
-  rota: string, corpo: unknown, opts: { token?: string; etapa: string; metodo?: 'GET' | 'POST'; logarForma?: boolean },
+  rota: string, corpo: unknown, opts: { token?: string; etapa: string; metodo?: 'GET' | 'POST'; logarForma?: boolean; cabecalhos?: Record<string, string> },
 ): Promise<unknown> {
   const url = BELENUS_BASE + rota.replace(/^\/+/, '')
   if (!rotaPermitida(url)) {
@@ -38,6 +45,7 @@ export async function chamarBelenus(
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json', 'x-plataforma': '1' }
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`
+  Object.assign(headers, opts.cabecalhos ?? {})
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TEMPO_LIMITE_MS)
   let res: Response
@@ -79,5 +87,13 @@ export async function loginBelenus(): Promise<SessaoBelenus> {
   console.log(`[belenus] login: campos=${JSON.stringify(ehObj(r) ? Object.keys(r) : typeof r)}${dados !== r && ehObj(dados) ? ` data=${JSON.stringify(Object.keys(dados))}` : ''}`)
   const token = [r, dados].map((o) => (ehObj(o) ? (o.token ?? o.accessToken ?? o.access_token) : undefined)).find((t) => typeof t === 'string' && t.length > 10)
   if (typeof token !== 'string') throw new ErroBelenus('Login na Belenus não devolveu o token (formato inesperado). Veja o log [belenus] login.')
-  return { token }
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const d = ehObj(dados) ? dados : {}
+  return {
+    token,
+    mesesInatividade: n(d.mesesInatividade),
+    userType: n(d.userType),
+    // site: liberarComprasMinimas = bloqueioFinanciamento || liberarCincoCompras (getOpcoesFrete)
+    liberarComprasMinimas: !!d.bloqueioFinanciamento || !!d.liberarCincoCompras,
+  }
 }

@@ -11,11 +11,13 @@ const EMAIL_TESTE = 'robo-teste@exemplo.invalid'
 const SENHA_TESTE = 'senha-falsa-de-teste'
 const TOKEN_TESTE = 'token-falso-de-teste-123456'
 
-type Cenario = { inversoresMono: unknown[]; inversoresTri?: unknown[] }
+type Cenario = { inversoresMono: unknown[]; inversoresTri?: unknown[]; confirmarSemTotal?: boolean; semFrete?: boolean }
 
 /** Servidor falso da Belenus: responde como o site espera (envelope { isSucceed, data }). */
 function belenusFalsa(c: Cenario) {
   const urls: string[] = []
+  const confirmarCorpos: Record<string, unknown>[] = []
+  const fretesCorpos: Record<string, unknown>[] = []
   const ok = (data: unknown) => new Response(JSON.stringify({ isSucceed: true, data, messages: [] }), { status: 200 })
   const fn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
@@ -27,6 +29,26 @@ function belenusFalsa(c: Cenario) {
       return new Response(JSON.stringify({ token: TOKEN_TESTE, userType: 1 }), { status: 200 })
     }
     expect((init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN_TESTE}`)
+    // etapa 6 (Fase 2): Confirmação + leituras de frete e seguro
+    if (rota === 'api/carrinho/KitPersonalizado/Confirmar') {
+      expect((init?.headers as Record<string, string>)['X-CarrinhoId']).toBe('')
+      confirmarCorpos.push(corpo)
+      return ok(c.confirmarSemTotal ? { pedidoWeb: 7268278 } : {
+        pedidoWeb: 7268278, carrinhoId: 'carrinho-teste', totalProdutos: 11445.78, valorTotalNF: 11445.78, peso: 250,
+        metodoPagamentoID: 'BOLETO', clienteCnpjCpf: '00000000000000', nomeCliente: 'Cliente Teste',
+        frete: { tipoFreteId: null, freteIncluso: 0 },
+        itens: [{ sku: 'KIT', quantidade: 1, precos: { siteFaturamento: '0001' }, componentes: [{ sku: 'M620', quantidade: 7 }] }],
+      })
+    }
+    if (rota.startsWith('api/fretes/TipoFrete/BuscarFretes')) {
+      expect(rota).toContain('calcularValores=true')
+      fretesCorpos.push(corpo)
+      return new Response(JSON.stringify({ opcoes: c.semFrete ? [] : [
+        { tipoFreteId: '01', descricao: 'Cliente Retira', freteIncluso: 0 },
+        { tipoFreteId: '06', descricaoAmigavel: 'Belenus Entrega no Cliente', freteIncluso: 600 },
+      ] }), { status: 200 })
+    }
+    if (rota === 'api/carrinho/KitPersonalizado/ValorSeguro') return ok(92.09)
     const fim = rota.replace('api/catalogo/KitPersonalizado/', '')
     switch (fim) {
       case 'Modulos':
@@ -71,7 +93,7 @@ function belenusFalsa(c: Cenario) {
     }
     throw new Error(`rota inesperada no teste: ${rota}`)
   })
-  return { fn, urls }
+  return { fn, urls, confirmarCorpos, fretesCorpos }
 }
 
 const auxsol3k = { item: 'INV3K', descricaoItem: 'INVERSOR AUXSOL 3KW MONO 220V', fabricante: 'AUXSOL', potenciaNominalSaida: 3000, numInversores: 1, index: 2, tipoLigacao: 'Monofásico', tensaoSaida: '220V' }
@@ -105,8 +127,23 @@ describe('montarKitBelenus (fetch simulado)', () => {
     expect(cc).toEqual({ MC4: 2, C6P: 25, C6V: 25, CVD: 25 })
     const ca = Object.fromEntries(r.componentesCA.map((p) => [p.codigo, p.qtde]))
     expect(ca).toEqual({ DPS1: 2, DJ: 1 })
-    expect(r.totalProdutos).toBeNull()
-    expect(textoNota(r)).toMatch(/só calcula o total ao criar o carrinho/)
+    // etapa 6: Confirmar chamado UMA vez, com o kit ajustado pela regra do dono
+    expect(b.urls.filter((u) => u.endsWith('KitPersonalizado/Confirmar'))).toHaveLength(1)
+    const corpoConf = b.confirmarCorpos[0] as { itens: { item: string; qtde: number; tipoKitmontado: string }[]; origemCarrinho: number; site: string }
+    const itens = Object.fromEntries(corpoConf.itens.map((i) => [i.item, [i.tipoKitmontado, i.qtde]]))
+    expect(itens).toMatchObject({ M620: ['modulo', 7], INV3K: ['inversor', 1], E1: ['estrutura', 6], C6P: ['outro', 25], CVD: ['outro', 25], DPS1: ['outroCA', 2] })
+    expect(itens.C4P).toBeUndefined()
+    expect(corpoConf).toMatchObject({ origemCarrinho: 4, site: '0001' })
+    // frete para o município padrão (Rio de Janeiro - RJ) e total lido
+    expect(b.fretesCorpos[0]).toMatchObject({ Cidade: 'Rio de Janeiro', Estado: 'RJ', Divisao: 'SOL', ValorPedido: 11445.78 })
+    expect(r.confirmacao).toMatchObject({ numeroCotacao: 'WEB-007268278', totalProdutos: 11445.78, frete: 600, seguro: 92.09, total: 12137.87 })
+    expect(r.transformador).toBe(600)
+    expect(r.valorCliente).toBe(Math.round((12137.87 * 1.6 + 600) * 100) / 100)
+    const nota = textoNota(r)
+    expect(nota).toMatch(/WEB-007268278/)
+    expect(nota).toMatch(/TOTAL BELENUS: R\$\s?12\.137,87/)
+    expect(nota).toMatch(/VALOR AO CLIENTE: R\$\s?20\.020,59/)
+    expect(nota).toMatch(/TRANSFORMADOR/)
 
     // 🔒 nenhuma rota proibida, todas na lista de consulta
     expect(b.urls.length).toBeGreaterThan(5)
@@ -167,11 +204,47 @@ describe('montarKitBelenus (fetch simulado)', () => {
   })
 })
 
+describe('etapa 6 (Confirmação): total ausente e frete', () => {
+  it('total ausente → aviso claro, kit devolvido, Confirmar só 1 vez', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k], confirmarSemTotal: true })
+    vi.stubGlobal('fetch', b.fn)
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial' })
+    expect(r.modulo.codigo).toBe('M620')
+    expect(r.confirmacao).toBeNull()
+    expect(r.valorCliente).toBeNull()
+    expect(r.avisos.join(' ')).toMatch(/não devolveu o total dos produtos/)
+    expect(textoNota(r)).toMatch(/não consegui ler o total/)
+    expect(b.urls.filter((u) => u.endsWith('KitPersonalizado/Confirmar'))).toHaveLength(1)
+    for (const u of b.urls) expect(rotaPermitida(u), u).toBe(true)
+  })
+
+  it('sem opção "Belenus Entrega no Cliente" → total sem frete e aviso; município do lead é usado', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k], semFrete: true })
+    vi.stubGlobal('fetch', b.fn)
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial', destino: { cidade: 'Niterói', uf: 'RJ' } })
+    expect(b.fretesCorpos[0]).toMatchObject({ Cidade: 'Niterói', Estado: 'RJ' })
+    expect(r.confirmacao).toMatchObject({ frete: null, total: 11537.87 })
+    expect(r.transformador).toBeUndefined()
+    expect(r.valorCliente).toBe(Math.round(11537.87 * 1.6 * 100) / 100)
+    expect(r.avisos.join(' ')).toMatch(/frete fica para o operador/)
+    expect(textoNota(r)).toMatch(/\(sem frete\)/)
+  })
+})
+
 describe('chamarBelenus: rota proibida nunca sai', () => {
   it('bloqueia carrinho/pedido/pagamento antes do fetch', async () => {
     const f = vi.fn()
     vi.stubGlobal('fetch', f)
-    for (const r of ['api/carrinho/KitPersonalizado/ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/Confirmar', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente', 'api/pedido/x', 'api/pagamento/x', 'api/carrinho/KitPersonalizado/IncluirSeguro'])
+    for (const r of [
+      'api/carrinho/KitPersonalizado/ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/ConfirmarCarrinho ',
+      'api/carrinho/KitPersonalizado/EnviarHistoricoPedido', 'api/carrinho/KitPersonalizado/AlterarConfirmar',
+      'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente',
+      'api/carrinho/KitPersonalizado/AdicionarFrete', 'api/carrinho/KitPersonalizado/IncluirSeguro',
+      'api/carrinho/KitPersonalizado/Cupom', 'api/carrinho/KitPersonalizado/ValidarCupom',
+      'api/carrinho/KitPersonalizado/UploadAprovacao', 'api/carrinho/KitPersonalizado/RecarregarCarrinho?tudo=true',
+      'api/carrinho/KitPersonalizado/Confirmar/../ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/CarregarFob',
+      'api/pedido/x', 'api/pagamento/x', 'https://belenus.com.br/api/planopagamento/x', 'api/fretes/TipoFrete/Outra',
+    ])
       await expect(chamarBelenus(r, {}, { token: 't', etapa: 'teste' })).rejects.toThrow(/bloqueada/)
     expect(f).not.toHaveBeenCalled()
   })
