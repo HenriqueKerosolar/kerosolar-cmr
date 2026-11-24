@@ -9,7 +9,7 @@ import 'server-only'
 import { ErroBelenus, chamarBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
 import {
   LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, PALAVRAS_TELHADO, RE_NAO_ON_GRID, RE_ON_GRID, TRANSFORMADOR_PRECO,
-  aplicarRegrasComponentes, calcularDps, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor,
+  aplicarRegrasComponentes, calcularDps, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, LIMITE_MONOFASICO_220_KW, PLACAS_POR_MICRO,
   escolherModulo600, escolherOpcao, kwpPorConsumo, lerComandoBelenus, lerLigacao, lerTelhado, lerTensao, listaDe, num,
   opcaoTexto, paraPeca, potenciaKw, potenciaW, qtdeDe, reLigacao, reTensao, semRepetidos, textoNota,
   totalSeTiverPreco, type Ligacao, type Obj, type ResultadoCotacao, type Telhado,
@@ -20,6 +20,7 @@ export type EntradaCotacao = {
   ligacao?: Ligacao | null   // medidor do lead
   tensao?: number | null     // V (do lead)
   telhado?: Telhado | null   // do lead
+  micro?: boolean            // cliente pediu micro inversor → DEYE, 1 para cada 4 placas
 }
 
 const P = 'api/catalogo/KitPersonalizado/'
@@ -73,7 +74,9 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const dadosFiltro = (r: unknown): Obj => (ehObj(r) && ehObj(r.data) ? r.data : {})
   const rTipos = await post('InversorFiltro', filtroBase({}), 'filtro inversor (tipo)')
   const listaTipos = (dadosFiltro(rTipos).listTipoInversor as unknown[]) ?? []
-  const tipoInversorAchado = escolherOpcao(listaTipos, 'tipoInversor', RE_ON_GRID, RE_NAO_ON_GRID)
+  const tipoInversorAchado = entrada.micro
+    ? escolherOpcao(listaTipos, 'tipoInversor', /micro/)
+    : escolherOpcao(listaTipos, 'tipoInversor', RE_ON_GRID, RE_NAO_ON_GRID)
   if (!tipoInversorAchado) throw new ErroBelenus(`Não achei o tipo de inversor ON-GRID nos filtros da Belenus (opções: ${listaTipos.map((o) => opcaoTexto(o, 'tipoInversor')).join(', ') || 'nenhuma'}).`)
   const tipoInversor: string = tipoInversorAchado
 
@@ -88,21 +91,24 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     if (!tensaoNominal) throw new ErroBelenus(`Não achei a tensão ${v} V nos filtros da Belenus (opções: ${listaTen.map((o) => opcaoTexto(o, 'tensaoNominal')).join(', ') || 'nenhuma'}).`)
     const rFab = await post('InversorFiltro', filtroBase({ tipoInversor, tipoLigacao, tensaoNominal }), 'filtro inversor (fabricante)')
     const listaFab = (dadosFiltro(rFab).listFabricante as unknown[]) ?? []
-    const auxsol = listaFab.map((o) => opcaoTexto(o, 'fabricante')).find((f) => f.toUpperCase().includes(MARCA_PREFERIDA))
+    const auxsol = listaFab.map((o) => opcaoTexto(o, 'fabricante')).find((f) => f.toUpperCase().includes(entrada.micro ? 'DEYE' : MARCA_PREFERIDA))
     const corpo = (fab: string) => ({
       site, modulo: kit.item, inversor: '', potenciaProjeto: kitKwp, tipoLigacao, tipoInversor, tensaoNominal,
       qtdeModulo: qtdModulos, qtde: 0, fabricantes: [{ fabricante: fab }],
     })
     let r = await post('Inversor', corpo(auxsol ?? ''), `inversores${auxsol ? ' (AUXSOL)' : ''}`)
     let lista = listaDe(r, 'inversores')
-    const optsEsc = { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : LIMITE_MONOFASICO_KW, kwpKit: kitKwp }
+    // Dono (24/11/2026): MEDIDOR MONOFÁSICO da concessionária → inversor até 5 kW (qualquer tensão). Bifásico/trifásico:
+    // regra normal (inversor mono 220 V até 10 kW quando couber, 50% de overload).
+    const limiteMono = LIMITE_MONOFASICO_KW
+    const optsEsc = { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : limiteMono, kwpKit: kitKwp }
     // 1º só AUXSOL na faixa (overload 100%); sem AUXSOL na faixa → todas as marcas na faixa; por último o menor que atende
-    let escolha = escolherInversor(lista, { ...optsEsc, somenteFaixa: !!auxsol })
+    let escolha = entrada.micro ? escolherMicro(lista) : escolherInversor(lista, { ...optsEsc, somenteFaixa: !!auxsol })
     if (auxsol && !('inversor' in escolha)) {
       // AUXSOL não serviu: tenta com todas as marcas
       r = await post('Inversor', corpo(''), 'inversores (todas as marcas)')
       lista = listaDe(r, 'inversores')
-      escolha = escolherInversor(lista, optsEsc)
+      escolha = entrada.micro ? escolherMicro(lista) : escolherInversor(lista, optsEsc)
     }
     console.log(`[belenus] inversores disponíveis: ${lista.map((i) => `${String(i.item)}=${String(i.potenciaNominalSaida)}kW`).join(', ')}`)
     const parametros = ehObj(r) && ehObj(r.data) ? r.data.parametros : undefined
@@ -111,20 +117,24 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
 
   let ligacaoSistema: Ligacao = ligacaoLead
   let inv = await buscarInversores(ligacaoSistema, tensao)
-  if (!('inversor' in inv.escolha) && ligacaoSistema !== 'trifásico') {
+  if (!entrada.micro && !('inversor' in inv.escolha) && ligacaoSistema !== 'trifásico') {
     const motivo = inv.escolha.motivo
     // regra do dono: mais de 1 inversor → 1 inversor TRIFÁSICO; medidor monofásico acima de 5 kW → transformador
     ligacaoSistema = 'trifásico'
-    if (ligacaoLead === 'monofásico') avisos.push(`Medidor monofásico e o sistema precisa de inversor acima de ${LIMITE_MONOFASICO_KW} kW: precisa do TRANSFORMADOR (+R$ ${TRANSFORMADOR_PRECO}). Usei 1 inversor trifásico.`)
+    if (ligacaoLead === 'monofásico') avisos.push(`O kit passa do que o medidor MONOFÁSICO aguenta (inversor de ${LIMITE_MONOFASICO_KW} kW com até 85% de overload = ${(LIMITE_MONOFASICO_KW * 1.85).toFixed(2).replace('.', ',')} kWp). Usei 1 inversor trifásico: confira com o cliente a troca do padrão.`)
     else avisos.push(motivo === 'mais-de-um' ? 'A Belenus sugeriu mais de 1 inversor: troquei por 1 inversor TRIFÁSICO (regra do dono).' : 'Nenhum inversor monofásico único atende: usei 1 inversor TRIFÁSICO.')
     inv =await buscarInversores('trifásico', ligacaoLead === 'trifásico' ? tensao : 220)
   }
   if (!('inversor' in inv.escolha)) throw new ErroBelenus('Não achei 1 inversor on-grid que atenda este kit na Belenus. Cote manualmente.')
   const inversorObj = inv.escolha.inversor
-  if (inv.escolha.qtdeSugeridaBelenus > 1) avisos.push(`A Belenus sugeriu ${inv.escolha.qtdeSugeridaBelenus} unidades deste inversor; usei 1.`)
-  if (!ehMarcaPreferida(inversorObj)) avisos.push(inv.temAuxsol ? 'Nenhum AUXSOL serviu para este kit: usei outra marca.' : 'AUXSOL não aparece nos filtros da Belenus para este kit: usei outra marca.')
+  // Dono (24/11/2026): medidor monofásico → SEMPRE transformador.
+  if (ligacaoLead === 'monofásico') avisos.push(`Medidor MONOFÁSICO: sempre com TRANSFORMADOR (+R$ ${TRANSFORMADOR_PRECO}) — regra do dono.`)
+  const qtdInversores = entrada.micro ? Math.ceil(qtdModulos / PLACAS_POR_MICRO) : 1
+  if (entrada.micro) avisos.push(`Micro inversor DEYE: ${qtdInversores} unidade(s) (1 para cada ${PLACAS_POR_MICRO} placas — regra do dono). Confira os cabos: no micro a ligação é em CA.`)
+  else if (inv.escolha.qtdeSugeridaBelenus > 1) avisos.push(`A Belenus sugeriu ${inv.escolha.qtdeSugeridaBelenus} unidades deste inversor; usei 1.`)
+  if (!entrada.micro && !ehMarcaPreferida(inversorObj)) avisos.push(inv.temAuxsol ? 'Nenhum AUXSOL serviu para este kit: usei outra marca.' : 'AUXSOL não aparece nos filtros da Belenus para este kit: usei outra marca.')
   // INVERSORES_SELECIONADOS do site (+ inversor/inversorQtde, getFromStorageInversor)
-  const inversorSel: Obj = { ...inversorObj, numInversores: 1, inversor: inversorObj.item, inversorQtde: 1 }
+  const inversorSel: Obj = { ...inversorObj, numInversores: qtdInversores, inversor: inversorObj.item, inversorQtde: qtdInversores }
 
   // 2b) ConferirPotenciaInversor (validação do site antes de ir para a estrutura) — só consulta
   await post('ConferirPotenciaInversor', { listInversores: [inversorSel], potenciaProjeto: kitKwp, parametros: inv.parametros }, 'conferir potência do inversor')
@@ -199,7 +209,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     potenciaW: potenciaW(campo(modulo, 'potencia')), potenciaKitKwp: Number.isFinite(potenciaKit) && potenciaKit > 0 ? potenciaKit : null,
   }
   const inversorPeca = {
-    ...paraPeca(inversorObj), qtde: 1,
+    ...paraPeca(inversorObj), qtde: qtdInversores,
     potenciaKw: potenciaKw(campo(inversorObj, 'potenciaNominalSaida', 'potencia', 'maxPotenciaSaida')),
     ligacao: String(campo(inversorObj, 'tipoLigacao') ?? inv.tipoLigacao), tensao: String(campo(inversorObj, 'tensaoSaida', 'tensaoNominal') ?? inv.tensaoNominal),
   }
@@ -253,7 +263,7 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
   const telhado = lerTelhado(cf.telhado ?? cf.tipoTelhado)
   let resultado: ResultadoCotacao
   try {
-    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado })
+    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')) })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha na cotação da Belenus.'
     console.error('[belenus] cotação falhou:', msg)

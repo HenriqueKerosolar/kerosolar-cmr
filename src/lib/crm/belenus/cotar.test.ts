@@ -131,11 +131,12 @@ describe('montarKitBelenus (fetch simulado)', () => {
     expect(r.componentesCA.find((p) => p.codigo === 'DPS1')?.qtde).toBe(3)
   })
 
-  it('medidor monofásico e inversor acima de 5 kW → avisa o transformador (R$ 600)', async () => {
+  it('medidor monofásico 127 V e inversor acima de 5 kW → avisa o transformador (R$ 600)', async () => {
+    // regra do dono: o limite de 5 kW é do monofásico 127 V ("110 V"); em 220 V vai até 10 kW
     const tri = { item: 'INV6T', descricaoItem: 'INVERSOR 6KW TRI', fabricante: 'AUXSOL', potenciaNominalSaida: 6000, numInversores: 1, index: 1 }
     const b = belenusFalsa({ inversoresMono: [{ ...auxsol3k, item: 'INV6M', potenciaNominalSaida: 6000 }], inversoresTri: [tri] })
     vi.stubGlobal('fetch', b.fn)
-    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'monofásico', tensao: 220, telhado: 'colonial' })
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'monofásico', tensao: 127, telhado: 'colonial' })
     expect(r.inversor.codigo).toBe('INV6T')
     expect(r.avisos.join(' ')).toMatch(/TRANSFORMADOR \(\+R\$ 600\)/)
   })

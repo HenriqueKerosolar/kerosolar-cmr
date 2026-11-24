@@ -7,19 +7,21 @@
 // ── Comando do operador ──────────────────────────────────────────────────────
 //   "cota belenus 4,34 kWp" · "cota belenus 4.34kwp" · "cota belenus 4,34" → potência informada
 //   "cota belenus"                                                     → usa o consumo do lead → kWp
-export type ComandoBelenus = { kwp: number | null } | { erro: string }
+export type ComandoBelenus = { kwp: number | null; micro?: boolean } | { erro: string }
 
 export function lerComandoBelenus(text: string): ComandoBelenus | null {
   const t = (text || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
   const m = /^cot[ae]r?\s+(?:na\s+)?belenus\b\s*(.*)$/.exec(t)
   if (!m) return null
-  const resto = m[1].replace(/[.!]+$/, '').trim()
-  if (!resto) return { kwp: null }
+  // 24/11/2026: 'micro' no comando → micro inversor Deye (1 para cada 4 placas)
+  const micro = /\bmicro/.test(m[1])
+  const resto = m[1].replace(/[.!]+$/, '').replace(/\bmicro\s*(?:inversor(?:es)?)?\b/g, '').replace(/\s+/g, ' ').trim()
+  if (!resto) return { kwp: null, ...(micro ? { micro } : {}) }
   const v = /^(?:de\s+|com\s+|para\s+|pra\s+)?(\d+(?:[.,]\d+)?)\s*(?:kwp|kw)?$/.exec(resto)
   if (!v) return { erro: 'Não entendi a potência: escreva "cota belenus 4,34 kWp" (ou só "cota belenus" para usar o consumo do lead). Nada foi enviado ao cliente.' }
   const kwp = parseFloat(v[1].replace(',', '.'))
   if (!(kwp > 0) || kwp > 300) return { erro: 'A potência precisa ser maior que zero (em kWp, ex.: "cota belenus 4,34 kWp"). Nada foi enviado ao cliente.' }
-  return { kwp: Math.round(kwp * 100) / 100 }
+  return { kwp: Math.round(kwp * 100) / 100, ...(micro ? { micro } : {}) }
 }
 
 // ── Consumo do lead → kWp (quando o operador escreve só "cota belenus") ─────────
@@ -161,6 +163,10 @@ export function escolherModulo600(modulos: Obj[]): Obj | null {
 // ── Inversor ─────────────────────────────────────────────────────────────────
 export const MARCA_PREFERIDA = 'AUXSOL'
 export const LIMITE_MONOFASICO_KW = 5
+/** Medidor monofásico 220 V: inversor monofásico 220 V até 10 kW (dono, 24/11/2026). 127 V (o "110 V"): até 5 kW. */
+export const LIMITE_MONOFASICO_220_KW = 10
+/** Micro inversor (quando o cliente pede): DEYE, 1 micro para cada 4 placas (dono, 24/11/2026). */
+export const PLACAS_POR_MICRO = 4
 export const TRANSFORMADOR_PRECO = 600
 
 /** Opção de um filtro da Belenus ({ tipoLigacao: "..." } ou string) → texto. */
@@ -185,6 +191,10 @@ export function reTensao(v: number): RegExp {
   return new RegExp(`\\b${v}\\b`)
 }
 
+export function ehMarca(inv: unknown, marca: string): boolean {
+  return semAcento(campo(inv, 'fabricante', 'marca', 'descricaoItem', 'descricao')).includes(marca.toLowerCase())
+}
+
 export function ehMarcaPreferida(inv: unknown): boolean {
   return semAcento(campo(inv, 'fabricante', 'marca', 'descricaoItem', 'descricao')).includes(MARCA_PREFERIDA.toLowerCase())
 }
@@ -199,6 +209,17 @@ export type EscolhaInversor = { inversor: Obj; qtdeSugeridaBelenus: number } | {
 export const OVERLOAD_MAX = 1.3
 /** AUXSOL aceita 100% de overload, mas o dono usa 50% (24/11/2026): kit até 1,5× a potência do inversor. */
 export const OVERLOAD_AUXSOL = 1.5
+/** Só no MONOFÁSICO (inversor limitado a 5 kW): AUXSOL pode ir até 85% de overload (dono, 24/11/2026). */
+export const OVERLOAD_MONOFASICO_LIMITE = 1.85
+
+/** Micro inversor (dono, 24/11/2026): DEYE, o modelo de 4 entradas (o de maior potência da lista de micros da Deye). */
+export function escolherMicro(inversores: Obj[]): EscolhaInversor {
+  const kw = (i: Obj) => potenciaKw(campo(i, 'potenciaNominalSaida', 'potencia', 'maxPotenciaSaida'))
+  const micros = inversores.filter((i) => /micro/i.test(String(campo(i, 'descricaoItem', 'descricao', 'tipoInversor') ?? '')))
+  const deye = micros.filter((i) => ehMarca(i, 'DEYE'))
+  const lista = (deye.length ? deye : micros).sort((a, b) => (kw(b) || 0) - (kw(a) || 0))
+  return lista[0] ? { inversor: lista[0], qtdeSugeridaBelenus: 1 } : { motivo: 'nenhum' }
+}
 
 export function escolherInversor(inversores: Obj[], opts: { limiteKw?: number; kwpKit?: number; somenteFaixa?: boolean } = {}): EscolhaInversor {
   if (!inversores.length) return { motivo: 'nenhum' }
@@ -214,7 +235,8 @@ export function escolherInversor(inversores: Obj[], opts: { limiteKw?: number; k
   // Regra do dono (24/11/2026): o inversor fica UM POUCO ABAIXO da potência das placas, respeitando o overload
   // (até 30%): kWp/1,3 ≤ inversor ≤ kWp → o MAIOR dessa faixa, AUXSOL primeiro. Se nada cair na faixa, o menor acima.
   // AUXSOL aceita 100% de overload (placas até 2× o inversor) — dono, 24/11/2026; outras marcas, 30%.
-  const overload = (i: Obj) => (ehMarcaPreferida(i) ? OVERLOAD_AUXSOL : OVERLOAD_MAX)
+  // Dono (24/11/2026): 50% de overload vale para TODAS as marcas (sem Auxsol, outra marca na mesma faixa).
+  const overload = (_i: Obj) => OVERLOAD_AUXSOL
   const naFaixa = (i: Obj) => !!opts.kwpKit && Number.isFinite(kw(i)) && kw(i) <= opts.kwpKit + 1e-9 && kw(i) * overload(i) + 1e-9 >= opts.kwpKit
   const atende = (i: Obj) => !opts.kwpKit || !Number.isFinite(kw(i)) || kw(i) * OVERLOAD_MAX + 1e-9 >= opts.kwpKit
   const porTamanho = (lista: Obj[]) => [...lista].sort((a, b) => (kw(a) || 1e9) - (kw(b) || 1e9))
@@ -222,8 +244,18 @@ export function escolherInversor(inversores: Obj[], opts: { limiteKw?: number; k
   const faixa = base.filter(naFaixa)
   // Dono (24/11/2026): o MENOR inversor da faixa (potência × overload ≥ kWp do kit), AUXSOL primeiro.
   // Ex.: 8 kWp → 6 kW (6 × 1,5 = 9); 4,34 kWp → 3 kW (3 × 1,5 = 4,5) — bate com a cotação do dono.
-  const escolhidoFaixa = porTamanho(faixa.filter(ehMarcaPreferida))[0] ?? porTamanho(faixa)[0]
+  // marca: AUXSOL → DEYE → SOLIS → qualquer outra (dono, 24/11/2026), sempre o menor da faixa
+  const escolhidoFaixa = porTamanho(faixa.filter(ehMarcaPreferida))[0] ?? porTamanho(faixa.filter((i) => ehMarca(i, 'DEYE')))[0]
+    ?? porTamanho(faixa.filter((i) => ehMarca(i, 'SOLIS')))[0] ?? porTamanho(faixa)[0]
   if (escolhidoFaixa) return { inversor: escolhidoFaixa, qtdeSugeridaBelenus: qtdSug(escolhidoFaixa) }
+  // Regra do dono (24/11/2026): MONOFÁSICO (limite 5 kW) é a ÚNICA situação em que o inversor AUXSOL pode ir até
+  // 85% de overload — o maior inversor dentro do limite cobre kits até 5 × 1,85 = 9,25 kWp. Acima disso: transformador.
+  if (opts.limiteKw && opts.limiteKw <= LIMITE_MONOFASICO_KW && opts.kwpKit) {
+    const ate85 = base.filter((i) => Number.isFinite(kw(i)) && kw(i) * OVERLOAD_MONOFASICO_LIMITE + 1e-9 >= opts.kwpKit!)
+    const maior = porTamanho(ate85.filter(ehMarcaPreferida)).pop() ?? porTamanho(ate85.filter((i) => ehMarca(i, 'DEYE'))).pop() ?? porTamanho(ate85.filter((i) => ehMarca(i, 'SOLIS'))).pop() ?? porTamanho(ate85).pop()
+    if (maior) return { inversor: maior, qtdeSugeridaBelenus: qtdSug(maior) }
+    return { motivo: 'acima-limite' }
+  }
   if (opts.somenteFaixa) return { motivo: 'fora-da-faixa' }
   const candidatos = base.filter(atende)
   const melhor = porTamanho(candidatos.filter(ehMarcaPreferida))[0] ?? porTamanho(candidatos)[0]
