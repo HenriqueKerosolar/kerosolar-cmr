@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { sendManualMessage, moveLeadStage, encerrarConversa, updateLeadValue } from '@/app/actions/lead'
 import { lerValorBRL } from '@/lib/crm/valor-brl'
 import { QuickReplies } from '@/components/quick-replies'
+import { ehVersaoVelha, recarregarPorVersaoVelha, pegarRascunho } from '@/lib/versao-velha'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string }
 type Stage = { id: string; name: string; color: string | null; isWon?: boolean }
@@ -126,9 +127,18 @@ export default function ChatPage() {
       const r = await sendManualMessage(leadId, t)
       if (r && 'erro' in r) { alert(r.erro); setTexto(t) }
       await carregar()
-    } catch { setTexto(t) }
+    } catch (e) {
+      setTexto(t)
+      setEnviando(false)
+      if (ehVersaoVelha(e)) { recarregarPorVersaoVelha({ onde: `app:${leadId}`, texto: t }); return }
+      alert('A mensagem NÃO foi enviada (erro de conexão). Ela voltou para o campo — tente de novo.')
+      await carregar().catch(() => {})
+    }
     setEnviando(false)
   }
+
+  // volta o texto que não saiu porque o CRM tinha sido atualizado (versao-velha.ts)
+  useEffect(() => { if (leadId) { const r = pegarRascunho(`app:${leadId}`); if (r) setTexto(r) } }, [leadId])
 
   async function trocarEtapa(novoId: string) {
     if (!leadId || novoId === stageId) { setVerEtapas(false); return }

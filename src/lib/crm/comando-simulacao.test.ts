@@ -9,6 +9,9 @@ describe('comandos "simula financiamento" e "simula cartão" (24/11/2026)', () =
     expect(lerComandoSimulacao('Simula financiamento de R$ 30.000,50')).toEqual({ tipo: 'financiamento', valor: 30000.5 })
     expect(lerComandoSimulacao('simula financiamento 25 mil')).toEqual({ tipo: 'financiamento', valor: 25000 })
     expect(lerComandoSimulacao('simula financiamento valor de 1,5 mil')).toEqual({ tipo: 'financiamento', valor: 1500 })
+    expect(lerComandoSimulacao('Simula financiamento de R$  14.579,54')).toEqual({ tipo: 'financiamento', valor: 14579.54 })
+    expect(lerComandoSimulacao('simula financiamento valor R$ 14.579,54')).toEqual({ tipo: 'financiamento', valor: 14579.54 })
+    expect(lerComandoSimulacao('Simula financiamento valor 14579,54')).toEqual({ tipo: 'financiamento', valor: 14579.54 })
   })
   it('lê cartão', () => {
     expect(lerComandoSimulacao('Simula cartão de R$ 15.000')).toEqual({ tipo: 'cartao', valor: 15000 })

@@ -10,6 +10,7 @@ import {
 import { summarizeLeadOrigin } from '@/lib/crm/lead-origin'
 import { lerValorBRL } from '@/lib/crm/valor-brl'
 import { QuickReplies } from '@/components/quick-replies'
+import { ehVersaoVelha, recarregarPorVersaoVelha, pegarRascunho } from '@/lib/versao-velha'
 
 type Msg = { id: string; direction: string; senderType: string; content: string; mediaUrl: string | null; mediaType: string | null; createdAt: string; externalId?: string | null; deliveredAt?: string | null; readAt?: string | null; failedReason?: string | null }
 
@@ -76,6 +77,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [messages, setMessages] = useState<Msg[]>(lead.messages)
   const [aiEnabled, setAiEnabled] = useState(lead.aiEnabled)
   const [text, setText] = useState('')
+  // volta o texto que não saiu porque o CRM tinha sido atualizado (versao-velha.ts)
+  useEffect(() => { const r = pegarRascunho(`lead:${lead.id}`); if (r) setText(r) }, [lead.id])
   const [sending, setSending] = useState(false)
   const [tab, setTab] = useState<'chat' | 'timeline'>('chat')
   const [deleting, setDeleting] = useState(false)
@@ -194,6 +197,12 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         const r = await sendManualMessage(lead.id, t, undefined, sendAccountId || undefined)
         if (r && 'erro' in r) { alert(r.erro); setText(t) }
         await poll()
+      } catch (e) {
+        // nada foi enviado: devolve o texto ao campo (antes ele sumia sem aviso)
+        setText(t)
+        if (ehVersaoVelha(e)) { recarregarPorVersaoVelha({ onde: `lead:${lead.id}`, texto: t }); return }
+        alert('A mensagem NÃO foi enviada (erro de conexão). Ela voltou para o campo — tente de novo.')
+        await poll().catch(() => {})
       } finally { setSending(false) }
     }
   }
