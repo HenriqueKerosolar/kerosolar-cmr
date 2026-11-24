@@ -1802,9 +1802,37 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   //    preparar o projeto considerando os ares (um humano revisa o cálculo com o AC incluído).
   if (acIntent && !result.handoff) {
     const completo = !!(acData?.btu && acData?.hoursPerDay != null)
-    if (completo) {
-      const qtd = (acData?.units ?? 1)
-      outboundText = `Perfeito! 😊 Vou preparar um projeto já considerando ${qtd > 1 ? `os ${qtd} ar-condicionados` : 'o ar-condicionado'}${acData?.btu ? ` de ${acData.btu.toLocaleString('pt-BR')} BTU` : ''} — assim o sistema cobre o consumo de hoje + o dos ares. Já te retorno com os números certinhos!`
+    // 24/11/2026 (Jonni): com BTU + horas e o consumo de hoje, CALCULA e manda o orçamento na hora (antes só
+    // prometia "vou preparar… já te retorno" — proibido — e a trava de repetição desligava a IA).
+    const consumoHoje = Number((merged as Record<string, unknown>).consumoKwh ?? cf.consumoKwh) || solar?.consumoKwh || 0
+    if (completo && consumoHoje > 0) {
+      const { extrairBtus, consumoAcKwhMes } = await import('./ac-calc')
+      const qtd = Math.max(1, acData?.units ?? 1)
+      const horas = acData!.hoursPerDay!
+      const lidos = extrairBtus(text)
+      const btus = lidos.btus.length ? lidos.btus : [acData!.btu!]
+      // "7500 ou 9000" → um cenário por opção (todos os aparelhos iguais); "7500 e 9000" → um aparelho de cada
+      const cenarios: number[][] = lidos.alternativas
+        ? [...btus].sort((a, b) => a - b).map((b) => Array(qtd).fill(b))
+        : [btus.length >= qtd ? btus.slice(0, qtd) : Array(qtd).fill(btus[0])]
+      const textos = cenarios.map((aps) => {
+        const kwhAc = aps.reduce((s, b) => s + consumoAcKwhMes(b, horas, 1), 0)
+        const total = consumoHoje + kwhAc
+        const sim = ajustarPorMedidor(calcularSolarPorKwh(total), medidor)
+        const desc = aps.length > 1 && new Set(aps).size === 1
+          ? `${aps.length} ar-condicionados de ${aps[0].toLocaleString('pt-BR')} BTU`
+          : aps.map((b) => `1 ar de ${b.toLocaleString('pt-BR')} BTU`).join(' + ')
+        return { sim, txt: `❄️ *Com ${desc}, ${horas}h por dia*\nConsumo de hoje ${consumoHoje} kWh + ares ~${kwhAc} kWh = *${total} kWh por mês*\n\n${orcamentoTexto(sim)}` }
+      })
+      outboundText = textos.length > 1
+        ? `Fiz um orçamento para cada opção, do menor para o maior 😊\n\n*1)* ${textos[0].txt}`
+        : textos[0].txt
+      orcamentosExtras = textos.slice(1).map((t, i) => `*${i + 2})* ${t.txt}`)
+      leadUpdate.value = textos[0].sim.valorSistema
+      merged.solar = textos[0].sim as unknown as Prisma.InputJsonValue
+      leadUpdate.customFields = merged as Prisma.InputJsonValue
+    } else if (completo) {
+      outboundText = 'Perfeito! 😊 Pra eu calcular o sistema já com os ares, me manda a *foto da sua conta de luz* (ou o consumo médio em kWh).'
     } else {
       const faltaBtu = !acData?.btu
       const faltaHoras = acData?.hoursPerDay == null

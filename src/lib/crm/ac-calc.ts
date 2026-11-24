@@ -33,6 +33,20 @@ export function consumoAcPorHora(btu: number): number {
 
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
+/** Todos os BTUs citados ("7500 e 9000", "7.500 ou 9.000 btus", "9 mil e 12 mil") e se são ALTERNATIVAS ("ou")
+ *  ou aparelhos DIFERENTES ("e"). 24/11/2026 (Jonni: "2 ar condicionados de 7500 ou 9000 btus"). */
+export function extrairBtus(text: string): { btus: number[]; alternativas: boolean } {
+  const t = norm(text)
+  const btus: number[] = []
+  for (const m of t.matchAll(/(\d{1,2})\s*mil\b/g)) btus.push(parseInt(m[1]) * 1000)
+  for (const m of t.matchAll(/\b(\d{1,2}[.\s]\d{3}|\d{4,5})\b/g)) {
+    const v = parseInt(m[1].replace(/[.\s]/g, ''))
+    if (v >= 5000 && v <= 60000 && v % 500 === 0) btus.push(v)
+  }
+  const unicos = [...new Set(btus)]
+  return { btus: unicos, alternativas: unicos.length > 1 && /\d\s*(btus?\s*)?\s+ou\s+\d/.test(t) }
+}
+
 /** Detecta pedido de ar-condicionado na mensagem do cliente (determinístico). */
 export function extrairAc(text: string): { units: number; btu: number | null; hoursPerDay: number | null } | null {
   const t = norm(text)
