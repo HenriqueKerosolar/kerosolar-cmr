@@ -7,6 +7,17 @@ const UPLOADS_DIR = fs.existsSync('/data')
   ? '/data/uploads'
   : path.join(process.cwd(), 'uploads')
 
+/** Lê de volta um arquivo guardado por salvarMidiaRecebida (a partir da URL /api/uploads/<nome>). null se não existir. */
+export function lerMidiaSalva(url: string): Buffer | null {
+  const nome = path.basename((url || '').split('?')[0])
+  if (!/^[\w.-]+$/.test(nome)) return null
+  try {
+    return fs.readFileSync(path.join(UPLOADS_DIR, nome))
+  } catch {
+    return null
+  }
+}
+
 /** Salva um anexo recebido do cliente e devolve a URL pública (servida por /api/uploads/[name]). */
 export function salvarMidiaRecebida(buffer: Buffer, ext: string): string | null {
   try {

@@ -139,6 +139,21 @@ export async function sendManualMessage(leadId: string, text: string, media?: { 
         return { erro: e instanceof Error ? e.message : 'Não consegui cotar na Belenus. Nada foi enviado ao cliente.' }
       }
     }
+    // 📄 "envia orçamento" (só isso na mensagem) → manda ao cliente o PDF gerado pelo "cota belenus" (como documento,
+    // pelo canal da conversa). O texto do comando nunca vai ao cliente.
+    const { lerComandoEnviaOrcamento } = await import('@/lib/crm/belenus/orcamento')
+    if (lerComandoEnviaOrcamento(text)) {
+      try {
+        const { comandoEnviaOrcamento } = await import('@/lib/crm/belenus/orcamento-cmd')
+        const r = await comandoEnviaOrcamento(leadId, text, session.userId)
+        if (r.tratado) {
+          revalidatePath(`/leads/${leadId}`)
+          return { belenus: r.texto }
+        }
+      } catch (e) {
+        return { erro: e instanceof Error ? e.message : 'Não consegui enviar o orçamento. Nada foi enviado ao cliente.' }
+      }
+    }
   }
 
   if (!conv) {

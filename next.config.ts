@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
     remotePatterns: [{ protocol: 'https', hostname: '**.supabase.co' }],
   },
   // Baileys e libs nativas rodam no servidor sem serem empacotadas pelo bundler
-  serverExternalPackages: ['@whiskeysockets/baileys', 'pino', 'qrcode'],
+  serverExternalPackages: ['@whiskeysockets/baileys', 'pino', 'qrcode', 'pdfkit'],
 }
 
 export default nextConfig

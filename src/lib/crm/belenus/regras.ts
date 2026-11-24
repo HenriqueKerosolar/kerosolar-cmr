@@ -304,10 +304,19 @@ export function bitolaMm(desc: string): number | null {
 }
 export const ehDps = (desc: string) => /\bdps\b|protetor de surto|supressor/.test(semAcento(desc))
 
-export type Peca = { codigo: string; descricao: string; qtde: number; preco: number | null; ajuste?: string }
+export type Peca = {
+  codigo: string; descricao: string; qtde: number; preco: number | null; ajuste?: string
+  /** para o PDF do orçamento (Fase 3) */
+  fabricante?: string; unidade?: string
+}
 
 export function paraPeca(o: Obj): Peca {
-  return { codigo: codigoDe(o), descricao: descricaoDe(o), qtde: qtdeDe(o), preco: precoDe(o) }
+  const fab = campo(o, 'fabricante', 'marca')
+  const un = campo(o, 'unidade', 'unidadeMedida', 'unidadeVenda', 'um')
+  return {
+    codigo: codigoDe(o), descricao: descricaoDe(o), qtde: qtdeDe(o), preco: precoDe(o),
+    ...(fab ? { fabricante: String(fab) } : {}), ...(un ? { unidade: String(un) } : {}),
+  }
 }
 
 /** Junta itens repetidos (a Belenus manda o mesmo item mais de uma vez; o site também tira repetidos). */
@@ -393,10 +402,16 @@ export const ROTA_CONFIRMAR = 'api/carrinho/KitPersonalizado/Confirmar'
 // Leituras da tela de Confirmação: valor do seguro (getValorSeguro) e opções/valores de frete (getOpcoesFrete).
 export const ROTA_VALOR_SEGURO = 'api/carrinho/KitPersonalizado/ValorSeguro'
 export const ROTA_BUSCAR_FRETES = 'api/fretes/TipoFrete/BuscarFretes'
+// Fase 4 (dono autorizou, 24/11/2026): SALVAR a cotação na conta dele (aparece em "Meus orçamentos" com número WEB e
+// "Orçamento ativo"; garante o preço por 3 dias). É o botão "Salvar" da tela de Confirmação (`salvar()` →
+// monteSeuKitService.salvarOrcamento → SalvarOrcamentoCliente → navega para "listar/orcamentos"). NÃO é pedido:
+// pedido só nasce em ConfirmarCarrinho (numeroPedido/pagamentoAntecipado → /carrinho/sucesso), que segue proibido.
+export const ROTA_SALVAR_ORCAMENTO = 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente'
 export const ROTAS_PERMITIDAS: readonly string[] = [
   ROTA_CONFIRMAR,
   ROTA_VALOR_SEGURO,
   ROTA_BUSCAR_FRETES,
+  ROTA_SALVAR_ORCAMENTO,
   ROTA_LOGIN,
   'api/catalogo/KitPersonalizado/Modulos',
   'api/catalogo/KitPersonalizado/InversorFiltro',
@@ -412,7 +427,7 @@ export const ROTAS_PERMITIDAS: readonly string[] = [
  * PROIBIDAS PARA SEMPRE (o dono): finalizar pedido, mexer no carrinho, pagamento, seguro, frete, cupom, upload.
  * Atenção: `ConfirmarCarrinho` (finaliza o pedido) ≠ `Confirmar` (etapa 6, liberada por caminho EXATO acima).
  */
-export const ROTA_PROIBIDA = /api\/(pedido|pagamento|planopagamento)\/|planopagamento|ConfirmarCarrinho|EnviarHistoricoPedido|AlterarConfirmar|AlterarCarrinho|SalvarOrcamentoCliente|IncluirSeguro|AdicionarFrete|Cupom|Upload|RecarregarCarrinho|AtualizarQuantidade|AlterarNegociacao|AlterarCliente|AlterarApenasCliente|AtualizaValorServico|CarregarFob/i
+export const ROTA_PROIBIDA = /api\/(pedido|pagamento|planopagamento)\/|planopagamento|ConfirmarCarrinho|EnviarHistoricoPedido|AlterarConfirmar|AlterarCarrinho|IncluirSeguro|AdicionarFrete|Cupom|Upload|RecarregarCarrinho|AtualizarQuantidade|AlterarNegociacao|AlterarCliente|AlterarApenasCliente|AtualizaValorServico|CarregarFob/i
 
 /** true só para os caminhos EXATOS da lista (+ StringBox/{site}). Qualquer outro (inclusive o resto de api/carrinho) → false. */
 export function rotaPermitida(url: string): boolean {
@@ -461,6 +476,68 @@ export function lerDestino(cidade: unknown, uf?: unknown): { cidade: string; uf:
   return { cidade: c, uf: u }
 }
 
+// ── Dados do cliente (contato + customFields do lead/contato) ─────────────────
+// Chaves REAIS gravadas hoje no projeto: contact.name/phone/email (engine.ts grava e-mail e nome digitado) e
+// lead.customFields.city/state (IA, engine.ts) + roofType/medidor. Endereço/CEP/nome completo ainda não são gravados
+// em campo próprio (a coleta do financiamento fica só na conversa) — o leitor aceita as chaves prováveis para quando
+// existirem (cep, endereco/logradouro/rua, numero, bairro, complemento, nomeCompleto, email). Ausente = não usa.
+export type DadosCliente = {
+  nome: string | null
+  telefone: string | null
+  email: string | null
+  cidade: string | null
+  uf: string | null
+  endereco: { rua?: string; numero?: string; bairro?: string; complemento?: string } | null
+  cep: string | null
+}
+
+const txtCampo = (...vs: unknown[]): string | null => {
+  for (const v of vs) {
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  }
+  return null
+}
+
+export function formatarCep(v: unknown): string | null {
+  const d = String(v ?? '').replace(/\D/g, '')
+  return d.length === 8 ? `${d.slice(0, 5)}-${d.slice(5)}` : null
+}
+
+export function lerDadosCliente(
+  contato: { name?: string | null; phone?: string | null; whatsappId?: string | null; email?: string | null; customFields?: unknown } | null | undefined,
+  leadCf: Record<string, unknown> | null | undefined,
+): DadosCliente {
+  const cc = ehObj(contato?.customFields) ? (contato!.customFields as Obj) : {}
+  const lf = leadCf ?? {}
+  const v = (...ks: string[]) => txtCampo(...ks.map((k) => lf[k]), ...ks.map((k) => cc[k]))
+  const emailBruto = txtCampo(contato?.email) ?? v('email', 'eMail', 'emailCliente')
+  const email = emailBruto && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailBruto) ? emailBruto : null
+  const rua = v('logradouro', 'rua', 'endereco', 'address')
+  const numero = v('numero', 'numeroEndereco')
+  const bairro = v('bairro')
+  const complemento = v('complemento')
+  const endereco = rua || bairro ? {
+    ...(rua ? { rua } : {}), ...(numero ? { numero } : {}), ...(bairro ? { bairro } : {}), ...(complemento ? { complemento } : {}),
+  } : null
+  return {
+    nome: v('nomeCompleto', 'nome_completo') ?? txtCampo(contato?.name),
+    telefone: txtCampo(contato?.phone, contato?.whatsappId) ?? v('telefone', 'celular'),
+    email,
+    cidade: v('cidade', 'municipio', 'city'),
+    uf: v('uf', 'estado', 'state'),
+    endereco,
+    cep: formatarCep(v('cep', 'CEP', 'zip')),
+  }
+}
+
+/** "Rua X, 37 - Centro" (só o que existir). */
+export function linhaEndereco(e: DadosCliente['endereco']): string | null {
+  if (!e) return null
+  const ruaNum = [e.rua, e.numero].filter(Boolean).join(', ')
+  return [ruaNum, e.complemento, e.bairro].filter(Boolean).join(' - ') || null
+}
+
 // ── Leitura da resposta do Confirmar (etapa 6) ───────────────────────────────
 // Campos vistos no bundle (tela de Confirmação, `carrinhoCompleto = n.data`): pedidoWeb, carrinhoId, id,
 // totalProdutos, totalOriginalProdutos, valorTotalNF, minimoCompra, peso, frete{tipoFreteId,freteIncluso,…},
@@ -494,14 +571,59 @@ export function numeroCotacaoDe(dados: Obj): string | null {
 }
 
 /** Valor do frete "Belenus Entrega no Cliente" (CIF, tipoFreteId "06") nas opções de BuscarFretes. */
-export function freteEntregaNoCliente(resp: unknown): { valor: number; descricao: string } | null {
+export function freteEntregaNoCliente(resp: unknown): { valor: number; descricao: string; opcao?: Obj } | null {
   const raiz = ehObj(resp) && ehObj(resp.data) ? resp.data : resp
   const opcoes = ehObj(raiz) && Array.isArray(raiz.opcoes) ? (raiz.opcoes as unknown[]).filter(ehObj) : listaDe(resp, 'opcoes')
   const desc = (o: Obj) => String(campo(o, 'descricaoAmigavel', 'descricao') ?? '')
   const op = opcoes.find((o) => /entrega no cliente/i.test(desc(o))) ?? opcoes.find((o) => String(o.tipoFreteId) === '06')
   if (!op) return null
   const valor = valorPositivo(campo(op, 'freteIncluso', 'taxa', 'valor', 'valorFrete'))
-  return valor == null ? null : { valor, descricao: desc(op) || 'Belenus Entrega no Cliente' }
+  return valor == null ? null : { valor, descricao: desc(op) || 'Belenus Entrega no Cliente', opcao: op }
+}
+
+/**
+ * Corpo do SalvarOrcamentoCliente (Fase 4) = `salvar()` da tela de Confirmação:
+ *   { carrinhoJson: carrinhoCompleto, informacoesItens: [{ sku: itens[0].precos.skuProduto, tamanho, tamanhoQty,
+ *     pedidoCliente, numeroLinhaCliente, codigoProdutoCliente }] }
+ * O carrinho é o devolvido pelo Confirmar, com o que o operador preencheria na tela: nome do orçamento (nome do
+ * contato do lead), cidade/UF de entrega (preencherCidadeEstadoDoCarrinho) e a opção de frete "Belenus Entrega no
+ * Cliente" (os mesmos campos que `selected()` copia da opção). Nada de CPF/CNPJ do cliente.
+ */
+export function corpoSalvarOrcamento(carrinho: Obj, o: {
+  nome: string; destino: { cidade: string; uf: string }; freteOpcao?: Obj | null
+  /** endereço de entrega do lead (só o que existir) — vai em frete.enderecoClienteEntrega, como o site faz no setFrete */
+  entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
+}): Obj {
+  const c: Obj = { ...carrinho }
+  c.nomeOrcamento = o.nome
+  c.nomeCidadeSelecionada = o.destino.cidade
+  c.ufEstadoSelecionado = o.destino.uf
+  if (o.freteOpcao) {
+    const f: Obj = ehObj(c.frete) ? { ...c.frete } : {}
+    for (const k of ['descricao', 'descricaoAmigavel', 'descricaoValor', 'freteIncluso', 'tipoFreteId', 'valorMinimo']) {
+      if (o.freteOpcao[k] !== undefined) f[k] = o.freteOpcao[k]
+    }
+    c.frete = f
+  }
+  if (o.entrega && (o.entrega.rua || o.entrega.cep || o.entrega.bairro)) {
+    const f: Obj = ehObj(c.frete) ? { ...c.frete } : {}
+    const e = o.entrega
+    f.enderecoClienteEntrega = {
+      ...(e.rua ? { rua: e.rua, logradouro: e.rua } : {}), ...(e.numero ? { numero: e.numero } : {}),
+      ...(e.bairro ? { bairro: e.bairro } : {}), ...(e.complemento ? { complemento: e.complemento } : {}),
+      ...(e.cep ? { cep: e.cep } : {}), cidade: o.destino.cidade, estado: o.destino.uf,
+    }
+    c.frete = f
+  }
+  const itens = Array.isArray(c.itens) ? (c.itens as unknown[]).filter(ehObj) : []
+  const precos = ehObj(itens[0]?.precos) ? (itens[0].precos as Obj) : {}
+  return {
+    carrinhoJson: c,
+    informacoesItens: [{
+      sku: precos.skuProduto, tamanho: c.tamanho, tamanhoQty: c.tamanhoQty, pedidoCliente: c.pedidoCliente,
+      numeroLinhaCliente: c.numeroLinhaCliente, codigoProdutoCliente: c.codigoProdutoCliente,
+    }],
+  }
 }
 
 /** Seguro: a rota ValorSeguro devolve `data` = valor (getValorSeguro) — aceita também { valorSeguro }. */
@@ -563,6 +685,10 @@ export type ResultadoCotacao = {
   transformador?: number
   /** Valor ao cliente = TOTAL da Belenus como vem (já tem a margem de 60%) + transformador. NÃO aplica margem. */
   valorCliente?: number | null
+  /** Fase 4: cotação salva em "Meus orçamentos" da Belenus (garante o preço por 3 dias). null = não salvou. */
+  cotacaoSalva?: { numeroWeb: string | null; validaAte: string } | null
+  /** Estrutura escolhida (para o PDF do orçamento). */
+  layoutEstrutura?: { telhado: string; grupo: string; subGrupo: string; linhas: number; modulosPorLinha: number; orientacao: string }
 }
 
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -620,6 +746,8 @@ export function textoNota(r: ResultadoCotacao): string {
       ? `TOTAL DOS PRODUTOS (pela API): ${brl(r.totalProdutos)} — sem frete/seguro.`
       : 'PREÇO/TOTAL: não consegui ler o total na Confirmação da Belenus (ver avisos).')
   }
+  if (r.cotacaoSalva) l.push('', `✅ Cotação salva na Belenus: ${r.cotacaoSalva.numeroWeb ?? '(número não veio)'} — preço garantido por 3 dias, até ${r.cotacaoSalva.validaAte}.`)
+  else if (r.cotacaoSalva === null) l.push('', '⚠️ Não consegui salvar na Belenus — preço não garantido; gere à mão.')
   if (r.ajustes.length) l.push('', 'AJUSTES PELA REGRA DO DONO:', ...r.ajustes.map((a) => `• ${a}`))
   if (r.avisos.length) l.push('', 'AVISOS:', ...r.avisos.map((a) => `⚠️ ${a}`))
   return l.join('\n')

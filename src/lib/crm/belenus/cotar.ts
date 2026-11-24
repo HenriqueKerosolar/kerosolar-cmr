@@ -9,8 +9,8 @@ import 'server-only'
 
 import { ErroBelenus, chamarBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
 import {
-  DESTINO_PADRAO, ROTA_BUSCAR_FRETES, ROTA_CONFIRMAR, ROTA_VALOR_SEGURO, codigoDe, freteEntregaNoCliente, lerConfirmacao,
-  lerDestino, valorAoCliente, valorSeguroDe, type Confirmacao, type Peca,
+  DESTINO_PADRAO, ROTA_BUSCAR_FRETES, ROTA_CONFIRMAR, ROTA_SALVAR_ORCAMENTO, ROTA_VALOR_SEGURO, corpoSalvarOrcamento, numeroCotacaoDe, codigoDe, freteEntregaNoCliente, lerConfirmacao,
+  lerDadosCliente, lerDestino, valorAoCliente, valorSeguroDe, type Confirmacao, type Peca,
 } from './regras'
 import {
   LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, PALAVRAS_TELHADO, RE_NAO_ON_GRID, RE_ON_GRID, TRANSFORMADOR_PRECO,
@@ -27,6 +27,8 @@ export type EntradaCotacao = {
   telhado?: Telhado | null   // do lead
   micro?: boolean            // cliente pediu micro inversor → DEYE, 1 para cada 4 placas
   destino?: { cidade: string; uf: string } | null   // município do lead (frete); sem ele → Rio de Janeiro - RJ
+  nomeCliente?: string | null                         // nome do contato do lead (nome do orçamento salvo na Belenus)
+  entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
 }
 
 const P = 'api/catalogo/KitPersonalizado/'
@@ -47,8 +49,8 @@ export async function montarKitBelenus(entrada: EntradaCotacao): Promise<Resulta
 async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const avisos: string[] = []
   const site = siteBelenus()
-  const ligacaoLead: Ligacao = entrada.ligacao ?? 'monofásico'
-  if (!entrada.ligacao) avisos.push('Medidor do lead não informado: supus MONOFÁSICO 220 V. Confirme com o cliente.')
+  const ligacaoLead: Ligacao = entrada.ligacao ?? 'bifásico'
+  if (!entrada.ligacao) avisos.push('Medidor do lead não informado: supus BIFÁSICO 220 V. Confirme com o cliente.')
   const tensao = entrada.tensao ?? 220
   if (!entrada.tensao && entrada.ligacao) avisos.push(`Tensão do lead não informada: supus ${tensao} V.`)
   const telhado: Telhado = entrada.telhado ?? 'colonial'
@@ -227,16 +229,40 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
 
   // 6) CONFIRMAÇÃO (Fase 2, autorizada pelo dono) — lê total, frete e seguro. Falha aqui NÃO derruba o kit.
   let confirmacao: Confirmacao | null = null
+  let etapa6: Etapa6 | null = null
   try {
-    confirmacao = await confirmarParaLerTotal({
+    etapa6 = await confirmarParaLerTotal({
       post: (rota, corpo, etapa, cab) => chamarBelenus(rota, corpo, { token: sessao.token, etapa, cabecalhos: cab }),
       sessao, site, kit, kitKwp, qtdModulos, layout, inversorSel, qtdInversores,
       estrutura: estruturaObjs, cc: cc.pecas, ca: ca.pecas, objPorCodigo,
       destino: entrada.destino ?? null, avisos,
     })
+    confirmacao = etapa6.conf
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     avisos.push(`Total não lido na Confirmação da Belenus: ${msg} O kit acima continua válido; confira o valor no site.`)
+  }
+
+  // 7) SALVAR A COTAÇÃO (Fase 4, autorizada pelo dono) — UMA vez, só se a Confirmação deu certo. Falha não derruba nada.
+  let cotacaoSalva: ResultadoCotacao['cotacaoSalva'] = undefined
+  if (etapa6 && confirmacao) {
+    try {
+      const corpo = corpoSalvarOrcamento(etapa6.carrinho, {
+        nome: (entrada.nomeCliente ?? '').trim() || 'Cliente KeroSolar',
+        destino: entrada.destino ?? DESTINO_PADRAO, freteOpcao: etapa6.freteOpcao, entrega: entrada.entrega ?? null,
+      })
+      const r = await chamarBelenus(ROTA_SALVAR_ORCAMENTO, corpo, { token: sessao.token, etapa: 'salvar cotação' })
+      const dados: Obj = ehObj(r) && ehObj(r.data) ? r.data : {}
+      const validade = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+      cotacaoSalva = {
+        numeroWeb: numeroCotacaoDe(dados),
+        validaAte: validade.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' }),
+      }
+      if (!cotacaoSalva.numeroWeb) avisos.push('A Belenus salvou a cotação mas não devolveu o número WEB: confira em "Meus orçamentos".')
+    } catch (e) {
+      cotacaoSalva = null
+      avisos.push(`Não consegui salvar na Belenus (${e instanceof Error ? e.message : 'erro'}) — preço não garantido; gere à mão.`)
+    }
   }
   const transformador = ligacaoLead === 'monofásico' ? TRANSFORMADOR_PRECO : 0
   return {
@@ -245,8 +271,13 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     strings, avisos, ajustes: [...ajustesEstrutura, ...cc.ajustes, ...ca.ajustes, ...ajustesExtra],
     totalProdutos: confirmacao?.totalProdutos ?? totalSeTiverPreco(todas),
     confirmacao,
+    cotacaoSalva,
     transformador: transformador || undefined,
     valorCliente: confirmacao ? valorAoCliente(confirmacao.total, transformador) : null,
+    layoutEstrutura: {
+      telhado, grupo: String(grupo.grupo ?? ''), subGrupo: String(sub.subGrupo ?? sub.tipo ?? ''),
+      linhas: 1, modulosPorLinha: qtdEstrutura, orientacao,
+    },
   }
 }
 
@@ -299,7 +330,9 @@ export function corpoConfirmar(c: Omit<CtxConfirmar, 'post' | 'avisos' | 'destin
   return corpo
 }
 
-async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Confirmacao> {
+type Etapa6 = { conf: Confirmacao; carrinho: Obj; freteOpcao: Obj | null }
+
+async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Etapa6> {
   // UMA chamada ao Confirmar por cotação (sem nova tentativa: cada chamada gera uma cotação WEB no site)
   const r = await c.post(ROTA_CONFIRMAR, corpoConfirmar(c), 'confirmação (etapa 6)', { 'X-CarrinhoId': '' })
   const dados: Obj = ehObj(r) && ehObj(r.data) ? r.data : {}
@@ -308,7 +341,7 @@ async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Confirmacao> {
   // O site só GRAVA o frete com AdicionarFrete — proibido —, então o valor é lido das opções e somado aqui.
   const destino = c.destino ?? DESTINO_PADRAO
   if (!c.destino) c.avisos.push(`Município do lead não informado: frete calculado para ${DESTINO_PADRAO.cidade} - ${DESTINO_PADRAO.uf} (regra do dono).`)
-  let frete: { valor: number; descricao: string } | null = null
+  let frete: { valor: number; descricao: string; opcao?: Obj } | null = null
   try {
     const itens = Array.isArray(dados.itens) ? (dados.itens as unknown[]).filter(ehObj) : []
     const precos = ehObj(itens[0]?.precos) ? (itens[0].precos as Obj) : {}
@@ -340,7 +373,7 @@ async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Confirmacao> {
 
   const conf = lerConfirmacao(r, { frete, seguro })
   c.avisos.push(`Pagamento: a cotação ficou na condição padrão do site${conf.pagamento ? ` (${conf.pagamento})` : ''}. O robô não troca para PIX (exigiria AlterarCarrinho, proibido) — se o PIX mudar o valor, ajuste no site.`)
-  return conf
+  return { conf, carrinho: dados, freteOpcao: frete?.opcao ?? null }
 }
 
 // ── Comando na conversa do lead ──────────────────────────────────────────────
@@ -355,7 +388,7 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
   if (!cmd) return { tratado: false }
   if ('erro' in cmd) throw new Error(cmd.erro)
   const { prisma } = await import('@/lib/prisma')
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true, contact: { select: { name: true, phone: true, whatsappId: true, email: true, customFields: true } } } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
   // 🔋 híbrido/bateria não é automático (regra do dono)
   const { leadQuerHibrido } = await import('../hibrido')
@@ -380,12 +413,15 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
 
   const ligacao = lerLigacao(cf.medidor)
   const tensao = lerTensao(cf.tensao ?? cf.tensaoAtendimento ?? cf.voltagem)
-  const telhado = lerTelhado(cf.telhado ?? cf.tipoTelhado)
+  const telhado = lerTelhado(cf.telhado ?? cf.tipoTelhado ?? cf.roofType)
   // frete: município do lead (customFields cidade/município + uf/estado); só CEP não basta (sem consulta externa)
-  const destino = lerDestino(cf.cidade ?? cf.municipio ?? cf.city, cf.uf ?? cf.estado)
+  // dados do cliente (contato + customFields): cidade/UF (chaves reais: city/state), nome completo e endereço se houver
+  const cli = lerDadosCliente(lead?.contact, cf)
+  const destino = lerDestino(cli.cidade, cli.uf)
+  const entrega = cli.endereco || cli.cep ? { ...(cli.endereco ?? {}), cep: cli.cep } : null
   let resultado: ResultadoCotacao
   try {
-    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')), destino })
+    resultado = await montarKitBelenus({ kwp, ligacao, tensao, telhado, micro: !!cmd.micro || /micro/i.test(String(cf.inversorTipo ?? cf.microInversor ?? '')), destino, nomeCliente: cli.nome, entrega })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha na cotação da Belenus.'
     console.error('[belenus] cotação falhou:', msg)
@@ -393,7 +429,19 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
     throw new Error(`${msg} Nada foi enviado ao cliente.`)
   }
   if (estimado) resultado.avisos.unshift(`Potência estimada pelo consumo do lead (1 painel = 60 kWh, painel de 620 W): ${kwp.toLocaleString('pt-BR')} kWp. Confira.`)
-  const texto = textoNota(resultado)
+  let texto = textoNota(resultado)
+  // 📄 Fase 3: PDF do orçamento KeroSolar — fica SÓ para o operador (nota com link); vai ao cliente só com "envia orçamento"
+  if (resultado.valorCliente != null && resultado.valorCliente > 0) {
+    try {
+      const { gerarOrcamentoDoLead, textoNotaPdf } = await import('./orcamento-cmd')
+      texto += textoNotaPdf(await gerarOrcamentoDoLead(leadId, resultado))
+    } catch (e) {
+      console.error('[belenus] PDF do orçamento falhou:', e instanceof Error ? e.message : e)
+      texto += `\n\n⚠️ PDF do orçamento não gerado: ${e instanceof Error ? e.message : 'erro'}`
+    }
+  } else {
+    texto += '\n\n⚠️ PDF do orçamento não gerado: sem o total da Belenus.'
+  }
   await prisma.note.create({ data: { leadId, type: 'system', content: texto } })
   return { tratado: true, texto, resultado }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aplicarRegrasComponentes, calcularCabos, calcularDps, calcularStrings, escolherInversor, escolherModulo600,
-  formaResposta, kwpPorConsumo, lerComandoBelenus, lerConfirmacao, lerDestino, lerLigacao, lerTelhado, numeroCotacaoDe, rotaPermitida, type Peca,
+  corpoSalvarOrcamento, formaResposta, kwpPorConsumo, lerComandoBelenus, lerConfirmacao, lerDadosCliente, lerDestino, linhaEndereco, lerLigacao, lerTelhado, numeroCotacaoDe, rotaPermitida, type Peca,
 } from './regras'
 
 describe('lerComandoBelenus — "cota belenus <kWp>" (mensagem inteira)', () => {
@@ -124,6 +124,9 @@ describe('rotas: só consulta do catálogo', () => {
     expect(rotaPermitida('https://belenus.com.br/api/carrinho/KitPersonalizado/Confirmar')).toBe(true)
     expect(rotaPermitida('https://belenus.com.br/api/carrinho/KitPersonalizado/ValorSeguro')).toBe(true)
     expect(rotaPermitida('https://belenus.com.br/api/fretes/TipoFrete/BuscarFretes?calcularValores=true')).toBe(true)
+    // Fase 4: salvar a cotação (botão "Salvar" da Confirmação) — caminho exato
+    expect(rotaPermitida('https://belenus.com.br/api/carrinho/KitPersonalizado/SalvarOrcamentoCliente')).toBe(true)
+    expect(rotaPermitida('https://belenus.com.br/api/carrinho/SalvarOrcamentoCliente')).toBe(false)
     // variações que NÃO podem passar
     for (const r of ['api/carrinho/KitPersonalizado/Confirmar/1', 'api/carrinho/KitPersonalizado/ConfirmarX', 'api/carrinho/Confirmar', 'api/fretes/TipoFrete/Outra'])
       expect(rotaPermitida(`https://belenus.com.br/${r}`), r).toBe(false)
@@ -132,7 +135,7 @@ describe('rotas: só consulta do catálogo', () => {
     for (const r of [
       'api/carrinho/KitPersonalizado/ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/ConfirmarCarrinho ',
       'api/carrinho/KitPersonalizado/EnviarHistoricoPedido', 'api/carrinho/KitPersonalizado/AlterarConfirmar',
-      'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente',
+      'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente/x',
       'api/carrinho/KitPersonalizado/IncluirSeguro', 'api/carrinho/KitPersonalizado/RecarregarCarrinho?tudo=true',
       'api/carrinho/KitPersonalizado/AdicionarFrete', 'api/carrinho/KitPersonalizado/Cupom', 'api/carrinho/KitPersonalizado/ValidarCupom',
       'api/carrinho/KitPersonalizado/CarregarFob', 'api/carrinho/KitPersonalizado/AtualizarQuantidade',
@@ -174,5 +177,31 @@ describe('Fase 2: leitura da Confirmação', () => {
     expect(lerDestino('Belo Horizonte', 'mg')).toEqual({ cidade: 'Belo Horizonte', uf: 'MG' })
     expect(lerDestino('Petrópolis')).toEqual({ cidade: 'Petrópolis', uf: 'RJ' })
     expect(lerDestino('')).toBeNull()
+  })
+})
+
+describe('dados do cliente para o orçamento (só o que existir)', () => {
+  it('com dados: contato + customFields (chaves reais city/state e chaves de endereço)', () => {
+    const d = lerDadosCliente(
+      { name: 'Rafa', phone: '5522999233907', email: 'rafa@exemplo.com', customFields: { cep: '28860000' } },
+      { city: 'Casimiro de Abreu', state: 'RJ', nomeCompleto: 'Rafael Dias da Silva', logradouro: 'Rua das Flores', numero: '37', bairro: 'Centro', cpf: '12345678900' },
+    )
+    expect(d).toMatchObject({ nome: 'Rafael Dias da Silva', telefone: '5522999233907', email: 'rafa@exemplo.com', cidade: 'Casimiro de Abreu', uf: 'RJ', cep: '28860-000' })
+    expect(linhaEndereco(d.endereco)).toBe('Rua das Flores, 37 - Centro')
+    expect(JSON.stringify(d)).not.toContain('12345678900') // CPF nunca entra nos dados do orçamento
+  })
+  it('sem dados: nada inventado', () => {
+    const d = lerDadosCliente({ name: null, phone: null, email: 'invalido' }, {})
+    expect(d).toEqual({ nome: null, telefone: null, email: null, cidade: null, uf: null, endereco: null, cep: null })
+    expect(linhaEndereco(null)).toBeNull()
+  })
+  it('cotação salva: endereço de entrega só quando existe', () => {
+    const base = { itens: [{ precos: { skuProduto: 'K' } }], frete: { tipoFreteId: null } }
+    const com = corpoSalvarOrcamento(base, { nome: 'Rafael', destino: { cidade: 'Niterói', uf: 'RJ' }, entrega: { rua: 'Rua A', numero: '10', bairro: 'Centro', cep: '24320-480' } })
+    expect((com.carrinhoJson as { frete: Record<string, unknown> }).frete.enderecoClienteEntrega).toEqual({ rua: 'Rua A', logradouro: 'Rua A', numero: '10', bairro: 'Centro', cep: '24320-480', cidade: 'Niterói', estado: 'RJ' })
+    const sem = corpoSalvarOrcamento(base, { nome: 'Rafael', destino: { cidade: 'Niterói', uf: 'RJ' } })
+    expect((sem.carrinhoJson as { frete: Record<string, unknown> }).frete.enderecoClienteEntrega).toBeUndefined()
+    // nunca troca o cliente (faturamento) do carrinho
+    expect(com.carrinhoJson).not.toHaveProperty('clienteCnpjCpf')
   })
 })

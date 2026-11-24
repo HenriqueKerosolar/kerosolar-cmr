@@ -11,13 +11,14 @@ const EMAIL_TESTE = 'robo-teste@exemplo.invalid'
 const SENHA_TESTE = 'senha-falsa-de-teste'
 const TOKEN_TESTE = 'token-falso-de-teste-123456'
 
-type Cenario = { inversoresMono: unknown[]; inversoresTri?: unknown[]; confirmarSemTotal?: boolean; semFrete?: boolean }
+type Cenario = { inversoresMono: unknown[]; inversoresTri?: unknown[]; confirmarSemTotal?: boolean; semFrete?: boolean; salvarFalha?: boolean }
 
 /** Servidor falso da Belenus: responde como o site espera (envelope { isSucceed, data }). */
 function belenusFalsa(c: Cenario) {
   const urls: string[] = []
   const confirmarCorpos: Record<string, unknown>[] = []
   const fretesCorpos: Record<string, unknown>[] = []
+  const salvarCorpos: Record<string, unknown>[] = []
   const ok = (data: unknown) => new Response(JSON.stringify({ isSucceed: true, data, messages: [] }), { status: 200 })
   const fn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
@@ -37,7 +38,7 @@ function belenusFalsa(c: Cenario) {
         pedidoWeb: 7268278, carrinhoId: 'carrinho-teste', totalProdutos: 11445.78, valorTotalNF: 11445.78, peso: 250,
         metodoPagamentoID: 'BOLETO', clienteCnpjCpf: '00000000000000', nomeCliente: 'Cliente Teste',
         frete: { tipoFreteId: null, freteIncluso: 0 },
-        itens: [{ sku: 'KIT', quantidade: 1, precos: { siteFaturamento: '0001' }, componentes: [{ sku: 'M620', quantidade: 7 }] }],
+        itens: [{ sku: 'KIT', quantidade: 1, precos: { siteFaturamento: '0001', skuProduto: 'KIT-SKU' }, componentes: [{ sku: 'M620', quantidade: 7 }] }],
       })
     }
     if (rota.startsWith('api/fretes/TipoFrete/BuscarFretes')) {
@@ -49,6 +50,12 @@ function belenusFalsa(c: Cenario) {
       ] }), { status: 200 })
     }
     if (rota === 'api/carrinho/KitPersonalizado/ValorSeguro') return ok(92.09)
+    // Fase 4: salvar a cotação em "Meus orçamentos" (botão "Salvar" da Confirmação)
+    if (rota === 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente') {
+      salvarCorpos.push(corpo)
+      if (c.salvarFalha) return new Response(JSON.stringify({ isSucceed: false, messages: [{ description: 'Erro ao salvar' }] }), { status: 400 })
+      return ok({ ...corpo.carrinhoJson, pedidoWeb: 7300123 })
+    }
     const fim = rota.replace('api/catalogo/KitPersonalizado/', '')
     switch (fim) {
       case 'Modulos':
@@ -93,7 +100,7 @@ function belenusFalsa(c: Cenario) {
     }
     throw new Error(`rota inesperada no teste: ${rota}`)
   })
-  return { fn, urls, confirmarCorpos, fretesCorpos }
+  return { fn, urls, confirmarCorpos, fretesCorpos, salvarCorpos }
 }
 
 const auxsol3k = { item: 'INV3K', descricaoItem: 'INVERSOR AUXSOL 3KW MONO 220V', fabricante: 'AUXSOL', potenciaNominalSaida: 3000, numInversores: 1, index: 2, tipoLigacao: 'Monofásico', tensaoSaida: '220V' }
@@ -178,11 +185,13 @@ describe('montarKitBelenus (fetch simulado)', () => {
     expect(r.avisos.join(' ')).toMatch(/TRANSFORMADOR \(\+R\$ 600\)/)
   })
 
-  it('sem medidor/telhado no lead → supõe monofásico 220 V e colonial e AVISA', async () => {
+  it('sem medidor/telhado no lead → supõe BIFÁSICO 220 V (sem transformador) e colonial e AVISA', async () => {
     const b = belenusFalsa({ inversoresMono: [auxsol3k] })
     vi.stubGlobal('fetch', b.fn)
     const r = await montarKitBelenus({ kwp: 4.34 })
-    expect(r.avisos.join(' ')).toMatch(/MONOFÁSICO 220 V/)
+    expect(r.avisos.join(' ')).toMatch(/BIFÁSICO 220 V/)
+    expect(r.transformador).toBeUndefined()
+    expect(r.avisos.join(' ')).not.toMatch(/TRANSFORMADOR/)
     expect(r.avisos.join(' ')).toMatch(/COLONIAL/)
   })
 
@@ -238,7 +247,7 @@ describe('chamarBelenus: rota proibida nunca sai', () => {
     for (const r of [
       'api/carrinho/KitPersonalizado/ConfirmarCarrinho', 'api/carrinho/KitPersonalizado/ConfirmarCarrinho ',
       'api/carrinho/KitPersonalizado/EnviarHistoricoPedido', 'api/carrinho/KitPersonalizado/AlterarConfirmar',
-      'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente',
+      'api/carrinho/KitPersonalizado/AlterarCarrinho/false', 'api/carrinho/KitPersonalizado/SalvarOrcamentoCliente/1',
       'api/carrinho/KitPersonalizado/AdicionarFrete', 'api/carrinho/KitPersonalizado/IncluirSeguro',
       'api/carrinho/KitPersonalizado/Cupom', 'api/carrinho/KitPersonalizado/ValidarCupom',
       'api/carrinho/KitPersonalizado/UploadAprovacao', 'api/carrinho/KitPersonalizado/RecarregarCarrinho?tudo=true',
@@ -247,5 +256,65 @@ describe('chamarBelenus: rota proibida nunca sai', () => {
     ])
       await expect(chamarBelenus(r, {}, { token: 't', etapa: 'teste' })).rejects.toThrow(/bloqueada/)
     expect(f).not.toHaveBeenCalled()
+  })
+})
+
+describe('Fase 4: salvar a cotação na Belenus (Meus orçamentos)', () => {
+  it('salva UMA vez depois do Confirmar, com o nome do contato e a cidade do lead, e lê o número WEB', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k] })
+    vi.stubGlobal('fetch', b.fn)
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial', destino: { cidade: 'Niterói', uf: 'RJ' }, nomeCliente: 'Rafael Dias' })
+    const iConf = b.urls.findIndex((u) => u.endsWith('KitPersonalizado/Confirmar'))
+    const iSalvar = b.urls.findIndex((u) => u.endsWith('KitPersonalizado/SalvarOrcamentoCliente'))
+    expect(b.urls.filter((u) => u.endsWith('KitPersonalizado/SalvarOrcamentoCliente'))).toHaveLength(1)
+    expect(iSalvar).toBeGreaterThan(iConf)
+    const corpo = b.salvarCorpos[0] as { carrinhoJson: Record<string, unknown>; informacoesItens: Record<string, unknown>[] }
+    expect(corpo.carrinhoJson).toMatchObject({ nomeOrcamento: 'Rafael Dias', nomeCidadeSelecionada: 'Niterói', ufEstadoSelecionado: 'RJ' })
+    expect(corpo.carrinhoJson.frete).toMatchObject({ tipoFreteId: '06', freteIncluso: 600 })
+    expect(corpo.informacoesItens[0]).toMatchObject({ sku: 'KIT-SKU' })
+    expect(r.cotacaoSalva?.numeroWeb).toBe('WEB-007300123')
+    expect(textoNota(r)).toMatch(/Cotação salva na Belenus: WEB-007300123 — preço garantido por 3 dias, até \d{2}\/\d{2}/)
+    // 🔒 nada de finalizar pedido, pagamento etc.
+    for (const u of b.urls) {
+      expect(rotaPermitida(u), u).toBe(true)
+      expect(ROTA_PROIBIDA.test(u), u).toBe(false)
+      expect(u).not.toMatch(/ConfirmarCarrinho|EnviarHistoricoPedido|AlterarCarrinho|AdicionarFrete|IncluirSeguro|api\/pedido|api\/pagamento|planopagamento/i)
+    }
+  })
+
+  it('se salvar falhar, a cotação continua e a nota avisa (preço não garantido)', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k], salvarFalha: true })
+    vi.stubGlobal('fetch', b.fn)
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial' })
+    expect(r.confirmacao?.total).toBe(12137.87)
+    expect(r.valorCliente).not.toBeNull()
+    expect(r.cotacaoSalva).toBeNull()
+    expect(textoNota(r)).toMatch(/Não consegui salvar na Belenus — preço não garantido; gere à mão/)
+    expect(b.urls.filter((u) => u.endsWith('SalvarOrcamentoCliente'))).toHaveLength(1)
+  })
+
+  it('sem total na Confirmação não tenta salvar', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k], confirmarSemTotal: true })
+    vi.stubGlobal('fetch', b.fn)
+    const r = await montarKitBelenus({ kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial' })
+    expect(b.salvarCorpos).toHaveLength(0)
+    expect(r.cotacaoSalva).toBeUndefined()
+  })
+})
+
+describe('Fase 4: dados do cliente na cotação salva', () => {
+  it('leva nome e endereço de entrega quando existem; não mexe no cliente de faturamento; nada pessoal no log', async () => {
+    const b = belenusFalsa({ inversoresMono: [auxsol3k] })
+    vi.stubGlobal('fetch', b.fn)
+    await montarKitBelenus({
+      kwp: 4.34, ligacao: 'bifásico', tensao: 220, telhado: 'colonial', destino: { cidade: 'Niterói', uf: 'RJ' },
+      nomeCliente: 'Rafael Dias da Silva', entrega: { rua: 'Rua das Flores', numero: '37', bairro: 'Centro', cep: '24320-480' },
+    })
+    const cj = (b.salvarCorpos[0] as { carrinhoJson: Record<string, unknown> }).carrinhoJson
+    expect(cj.nomeOrcamento).toBe('Rafael Dias da Silva')
+    expect((cj.frete as Record<string, unknown>).enderecoClienteEntrega).toMatchObject({ rua: 'Rua das Flores', numero: '37', bairro: 'Centro', cep: '24320-480', cidade: 'Niterói', estado: 'RJ' })
+    expect(cj.clienteCnpjCpf).toBe('00000000000000') // o do carrinho da Belenus (conta do dono), intocado
+    const tudo = logs.join('\n')
+    for (const pessoal of ['Rafael Dias da Silva', 'Rua das Flores', '24320-480']) expect(tudo).not.toContain(pessoal)
   })
 })
