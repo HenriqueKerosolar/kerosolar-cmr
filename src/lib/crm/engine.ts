@@ -636,6 +636,30 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     }
   }
 
+  // 🔋 HÍBRIDO / OFF-GRID / BATERIA (regra do dono, 24/11/2026 — Dora): na PRIMEIRA vez que o cliente pede, a IA
+  //    responde com o teor da mensagem do dono (quais aparelhos manter funcionando na falta de energia + conta de
+  //    luz). NÃO passa para o humano. Se ele já mandou a conta/consumo junto, segue para o orçamento (híbrido).
+  //    Cria tarefa para o consultor olhar os aparelhos quando o cliente responder.
+  if (aiOn && !isSimulator) {
+    const cfBat = (lead.customFields as Record<string, unknown> | null) ?? {}
+    const { pedeSistemaComBateria, textoBateria } = await import('./bateria-pedido')
+    if (!cfBat.bateriaPerguntada && pedeSistemaComBateria(text)) {
+      const { extrairConsumo } = await import('./solar-calc')
+      const cb = extrairConsumo(text)
+      const jaMandouDados = !!input.imageBase64 || !!input.pdfBase64 || !!input.pdfText || cb.kwh != null || cb.reais != null
+      if (!jaMandouDados) {
+        const msgBat = textoBateria(saudacaoAgora(), contact.name)
+        const { dispatchOutbound } = await import('./flow')
+        await simularDigitacao(msgBat)
+        await dispatchOutbound(conversation.id, msgBat, undefined, 'ai')
+        await prisma.lead.update({ where: { id: lead.id }, data: { customFields: { ...cfBat, bateriaPerguntada: new Date().toISOString(), hibrido: true } as object } })
+        await prisma.task.create({ data: { leadId: lead.id, title: '🔋 Sistema com bateria: ver os aparelhos que o cliente quer manter na falta de energia', type: 'message', dueAt: now } })
+        await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: '🔋 Cliente pediu sistema com bateria (híbrido/off-grid) — IA perguntou os aparelhos que quer manter funcionando e pediu a conta de luz.' } })
+        return { ...base, reply: null, aiHandled: true }
+      }
+    }
+  }
+
   // A etapa tem alguma automação configurada? (chamada, palavra-chave ou inatividade)
   const stageAuto = stageHasAutomation(currentStage?.flow)
 
