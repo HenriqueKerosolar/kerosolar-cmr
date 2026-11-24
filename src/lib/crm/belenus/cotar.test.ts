@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
 
-import { chamarBelenus } from './api'
+import { DEPS_BELENUS, TEMPO_LIMITE_MS, chamarBelenus } from './api'
 import { montarKitBelenus } from './cotar'
 import { ROTA_PROIBIDA, rotaPermitida, textoNota } from './regras'
 
@@ -316,5 +316,27 @@ describe('Fase 4: dados do cliente na cotação salva', () => {
     expect(cj.clienteCnpjCpf).toBe('00000000000000') // o do carrinho da Belenus (conta do dono), intocado
     const tudo = logs.join('\n')
     for (const pessoal of ['Rafael Dias da Silva', 'Rua das Flores', '24320-480']) expect(tudo).not.toContain(pessoal)
+  })
+})
+
+describe('tempo limite e novas tentativas (dono, 24/11/2026: Belenus lenta)', () => {
+  it('45 s e 1 nova tentativa só nas consultas do catálogo', () => {
+    expect(TEMPO_LIMITE_MS).toBe(45_000)
+    expect(DEPS_BELENUS).toMatchObject({ tempoLimiteMs: 45_000, novasTentativasConsulta: 1 })
+  })
+  it('consulta que falha por rede é repetida 1 vez; Confirmar NUNCA é repetido', async () => {
+    const f = vi.fn(async () => { throw new TypeError('rede') })
+    vi.stubGlobal('fetch', f)
+    await expect(chamarBelenus('api/catalogo/KitPersonalizado/Inversor', {}, { token: 't', etapa: 'inversores' })).rejects.toThrow(/Não consegui falar com a Belenus \(etapa: inversores\)/)
+    expect(f).toHaveBeenCalledTimes(2)
+    f.mockClear()
+    await expect(chamarBelenus('api/carrinho/KitPersonalizado/Confirmar', {}, { token: 't', etapa: 'confirmação' })).rejects.toThrow()
+    await expect(chamarBelenus('api/carrinho/KitPersonalizado/SalvarOrcamentoCliente', {}, { token: 't', etapa: 'salvar' })).rejects.toThrow()
+    expect(f).toHaveBeenCalledTimes(2)
+  })
+  it('acesso negado mantém a dica do Railway', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })))
+    await expect(chamarBelenus('api/catalogo/KitPersonalizado/Modulos', {}, { token: 't', etapa: 'módulos' }))
+      .rejects.toThrow('A Belenus recusou o acesso (HTTP 401, etapa: módulos). Confira BELENUS_EMAIL/BELENUS_SENHA no Railway.')
   })
 })

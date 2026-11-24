@@ -17,8 +17,11 @@
   },
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",
+    "@lib/conector-belenus": "file:vendor/lib-conector-belenus-0.1.0.tgz",
+    "@lib/dimensionamento-solar": "file:vendor/lib-dimensionamento-solar-0.1.0.tgz",
     "@lib/email-smtp": "file:vendor/lib-email-smtp-0.1.0.tgz",
     "@lib/nervo": "file:vendor/lib-nervo-0.4.2.tgz",
+    "@lib/proposta-pdf": "file:vendor/lib-proposta-pdf-0.1.0.tgz",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@supabase/ssr": "^0.10.3",

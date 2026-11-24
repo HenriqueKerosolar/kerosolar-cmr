@@ -5,7 +5,7 @@
 
 import { getTabelaFinanciamento, parcelaFinanciamento, calcularSolarPorKwh, ajustarValorVenda, valorAVista } from '../solar-calc'
 import { simularCartao, MAX_PARCELAS_CARTAO } from '../card-calc'
-import { KWH_POR_PAINEL, corDoCabo, ehDps, type Peca, type ResultadoCotacao } from './regras'
+import { corDoCabo, ehDps, geracaoKeroSolar, type Peca, type ResultadoCotacao } from './regras'
 
 export const VALIDADE_DIAS = 3
 const FUSO = 'America/Sao_Paulo'
@@ -115,7 +115,8 @@ export function montarDadosOrcamento(r: ResultadoCotacao, lead: LeadOrcamento, a
   if (valorTotal == null || !(valorTotal > 0)) throw new Error('Sem o valor da Belenus não dá para gerar o PDF do orçamento.')
   const placas = r.modulo.qtde
   const kwp = Math.round((placas * r.modulo.potenciaW) / 10) / 100
-  const geracaoMes = placas * KWH_POR_PAINEL
+  // fórmula do dono (24/11/2026) com a potência REAL do kit: kWp × HSP 4,5 × 30 × (1 − 20%)
+  const geracao = geracaoKeroSolar(kwp)
   const monofasico = !!r.transformador
 
   const produtos: ProdutoOrcamento[] = []
@@ -161,7 +162,7 @@ export function montarDadosOrcamento(r: ResultadoCotacao, lead: LeadOrcamento, a
       ...(lead.endereco?.trim() ? { endereco: lead.endereco.trim() } : {}),
       ...(lead.cep?.trim() ? { cep: lead.cep.trim() } : {}),
     },
-    kwp, geracaoMes, geracaoAno: geracaoMes * 12,
+    kwp, geracaoMes: geracao.mensal, geracaoAno: geracao.anual,
     estrutura: { tipo: rot.tipo, detalhes: rot.detalhes, linhas: tel?.linhas ?? 1, modulosPorLinha: tel?.modulosPorLinha ?? placas, orientacao: tel?.orientacao || 'Retrato' },
     produtos,
     valorTotal, valorPix: valorAVista(valorTotal),

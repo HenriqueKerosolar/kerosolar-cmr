@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aplicarRegrasComponentes, calcularCabos, calcularDps, calcularStrings, escolherInversor, escolherModulo600,
-  corpoSalvarOrcamento, formaResposta, kwpPorConsumo, lerComandoBelenus, lerConfirmacao, lerDadosCliente, lerDestino, linhaEndereco, lerLigacao, lerTelhado, numeroCotacaoDe, rotaPermitida, type Peca,
+  corpoSalvarOrcamento, dimensionarConsumoKeroSolar, formaResposta, geracaoKeroSolar, kwpPorConsumo, lerComandoBelenus, lerConfirmacao, lerDadosCliente, lerDestino, linhaEndereco, lerLigacao, lerTelhado, numeroCotacaoDe, rotaPermitida, type Peca,
 } from './regras'
 
 describe('lerComandoBelenus — "cota belenus <kWp>" (mensagem inteira)', () => {
@@ -26,9 +26,11 @@ describe('lerComandoBelenus — "cota belenus <kWp>" (mensagem inteira)', () => 
 })
 
 describe('dados do lead', () => {
-  it('consumo → kWp (1 painel = 60 kWh, painel de 620 W)', () => {
-    expect(kwpPorConsumo(420)).toBe(4.34)
-    expect(kwpPorConsumo(421)).toBe(4.96)
+  it('consumo → kWp pela fórmula do dono (HSP 4,5; perdas 20%; placa de referência 620 W)', () => {
+    // exemplo obrigatório: 500 kWh → 4,63 kWp → 8 placas de 620 W → 4,96 kWp → ~535,7 kWh/mês
+    expect(kwpPorConsumo(500)).toBe(4.63)
+    expect(dimensionarConsumoKeroSolar(500)).toEqual({ kwp: 4.63, placas: 8, kwpKit: 4.96, geracaoMensal: 535.7, geracaoAnual: 6428.2 })
+    expect(geracaoKeroSolar(4.96).mensal).toBeCloseTo(4.96 * 4.5 * 30 * 0.8, 1)
     expect(kwpPorConsumo(0)).toBe(0)
   })
   it('medidor e telhado', () => {
@@ -77,6 +79,24 @@ describe('inversor: AUXSOL, 1 só, monofásico até 5 kW', () => {
     expect(escolherInversor([{ item: 'A', potenciaNominalSaida: 6000, numInversores: 1 }], { limiteKw: 5 })).toEqual({ motivo: 'acima-limite' })
     const ok = escolherInversor([{ item: 'A', potenciaNominalSaida: 6, numInversores: 1 }, { item: 'B', potenciaNominalSaida: 5, numInversores: 1 }], { limiteKw: 5 })
     expect('inversor' in ok && ok.inversor.item).toBe('B')
+  })
+})
+
+describe('inversor: AUXSOL 50% → AUXSOL 100% → outras marcas (dono, 24/11/2026)', () => {
+  const auxsol = [3, 5, 6, 7.5, 10].map((kw) => ({ item: `A${kw}`, fabricante: 'AUXSOL', potenciaNominalSaida: kw * 1000, numInversores: 1, tipoLigacao: 'Monofásico', tensaoSaida: '220V' }))
+  const solis4 = { item: 'S4', fabricante: 'SOLIS', potenciaNominalSaida: 4000, numInversores: 1 }
+  const escolhido = (kwp: number) => { const r = escolherInversor([...auxsol, solis4], { kwpKit: kwp }); return 'inversor' in r ? r.inversor.item : r.motivo }
+  it('caso real: kit 4,96 kWp bifásico → AUXSOL 3 kW (não SOLIS 4 kW)', () => expect(escolhido(4.96)).toBe('A3'))
+  it('mantém: 8 kWp → 6 kW; 4,34 → 3 kW; 9,9 → 7,5 kW', () => {
+    expect(escolhido(8)).toBe('A6')
+    expect(escolhido(4.34)).toBe('A3')
+    expect(escolhido(9.9)).toBe('A7.5')
+  })
+  it('medidor monofásico continua: limite 5 kW e exceção de 85% (o 100% não vale)', () => {
+    const r = escolherInversor(auxsol, { limiteKw: 5, kwpKit: 9.5 })
+    expect(r).toEqual({ motivo: 'acima-limite' })
+    const ok = escolherInversor(auxsol, { limiteKw: 5, kwpKit: 9 })
+    expect('inversor' in ok && ok.inversor.item).toBe('A5')
   })
 })
 

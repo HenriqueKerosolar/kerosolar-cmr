@@ -7,17 +7,17 @@ import 'server-only'
 // Nunca finaliza pedido (ConfirmarCarrinho), nunca grava frete/seguro/pagamento no carrinho (proibido).
 // Disparo: comando do operador "cota belenus <kWp>" na conversa do lead (ver comandoCotaBelenus).
 
-import { ErroBelenus, chamarBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
+import { arredondarEstrutura, limiteInversorKw, quantidadeMicros, transformadorPara } from '@lib/dimensionamento-solar'
+import { corpoBuscarFretes, corpoConfirmar as corpoConfirmarLib, dadosDe, type DadosConfirmar } from '@lib/conector-belenus'
+import { ErroBelenus, clienteBelenus, loginBelenus, siteBelenus, type SessaoBelenus } from './api'
 import {
-  DESTINO_PADRAO, ROTA_BUSCAR_FRETES, ROTA_CONFIRMAR, ROTA_SALVAR_ORCAMENTO, ROTA_VALOR_SEGURO, corpoSalvarOrcamento, numeroCotacaoDe, codigoDe, freteEntregaNoCliente, lerConfirmacao,
-  lerDadosCliente, lerDestino, valorAoCliente, valorSeguroDe, type Confirmacao, type Peca,
-} from './regras'
-import {
-  LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, PALAVRAS_TELHADO, RE_NAO_ON_GRID, RE_ON_GRID, TRANSFORMADOR_PRECO,
-  aplicarRegrasComponentes, calcularDps, calcularStrings, campo, descricaoDe, ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, LIMITE_MONOFASICO_220_KW, PLACAS_POR_MICRO,
-  escolherModulo600, escolherOpcao, kwpPorConsumo, lerComandoBelenus, lerLigacao, lerTelhado, lerTensao, listaDe, num,
-  opcaoTexto, paraPeca, potenciaKw, potenciaW, qtdeDe, reLigacao, reTensao, semRepetidos, textoNota,
-  totalSeTiverPreco, type Ligacao, type Obj, type ResultadoCotacao, type Telhado,
+  DESTINO_PADRAO, ESTRUTURA_DE_N_PAINEIS, LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, MICRO_KEROSOLAR, OVERLOAD_MONOFASICO_LIMITE, PALAVRAS_TELHADO,
+  PLACAS_POR_MICRO, PRECO_KEROSOLAR, RE_NAO_ON_GRID, RE_ON_GRID, REGRAS_INVERSOR_KEROSOLAR, TRANSFORMADOR_PRECO,
+  aplicarRegrasComponentes, calcularDps, calcularStrings, campo, codigoDe, corpoSalvarOrcamento, descricaoDe, dimensionarConsumoKeroSolar,
+  ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, escolherModulo600, escolherOpcao, freteEntregaNoCliente, lerComandoBelenus,
+  lerConfirmacao, lerDadosCliente, lerDestino, lerLigacao, lerTelhado, lerTensao, listaDe, num, numeroCotacaoDe, opcaoTexto, paraPeca,
+  potenciaKw, potenciaW, qtdeDe, reLigacao, reTensao, semRepetidos, textoNota, totalSeTiverPreco, valorAoCliente, valorSeguroDe,
+  type Confirmacao, type Ligacao, type Obj, type Peca, type ResultadoCotacao, type Telhado,
 } from './regras'
 
 export type EntradaCotacao = {
@@ -30,8 +30,6 @@ export type EntradaCotacao = {
   nomeCliente?: string | null                         // nome do contato do lead (nome do orçamento salvo na Belenus)
   entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
 }
-
-const P = 'api/catalogo/KitPersonalizado/'
 
 // ── trava: no máximo 1 cotação por vez ───────────────────────────────────────
 let emAndamento = false
@@ -58,10 +56,10 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   if (!entrada.telhado) avisos.push('Tipo de telhado do lead não informado: usei estrutura CERÂMICO/COLONIAL (regra do dono). Confirme com o cliente.')
 
   const sessao: SessaoBelenus = await loginBelenus()
-  const post = (rota: string, corpo: unknown, etapa: string) => chamarBelenus(P + rota, corpo, { token: sessao.token, etapa })
+  const api = clienteBelenus(sessao)
 
   // 1) MÓDULOS — corpo capturado do site real: { site, potenciaProjeto, modulo:"", qtde:0, fabricantes:[{fabricante:""}] }
-  const rMod = await post('Modulos', { site, potenciaProjeto: entrada.kwp, modulo: '', qtde: 0, fabricantes: [{ fabricante: '' }] }, 'módulos')
+  const rMod = await api.modulos( { site, potenciaProjeto: entrada.kwp, modulo: '', qtde: 0, fabricantes: [{ fabricante: '' }] }, 'módulos')
   const modulos = listaDe(rMod, 'modulos')
   if (!modulos.length) throw new ErroBelenus(`A Belenus não devolveu módulos para ${entrada.kwp} kWp.`)
   const modulo = escolherModulo600(modulos)
@@ -80,7 +78,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     qtdeModulo: qtdModulos, fabricantes: [{ fabricante: '' }],
   })
   const dadosFiltro = (r: unknown): Obj => (ehObj(r) && ehObj(r.data) ? r.data : {})
-  const rTipos = await post('InversorFiltro', filtroBase({}), 'filtro inversor (tipo)')
+  const rTipos = await api.inversorFiltro( filtroBase({}), 'filtro inversor (tipo)')
   const listaTipos = (dadosFiltro(rTipos).listTipoInversor as unknown[]) ?? []
   const tipoInversorAchado = entrada.micro
     ? escolherOpcao(listaTipos, 'tipoInversor', /micro/)
@@ -89,32 +87,31 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const tipoInversor: string = tipoInversorAchado
 
   async function buscarInversores(lig: Ligacao, v: number) {
-    const rLig = await post('InversorFiltro', filtroBase({ tipoInversor }), 'filtro inversor (ligação)')
+    const rLig = await api.inversorFiltro( filtroBase({ tipoInversor }), 'filtro inversor (ligação)')
     const listaLig = (dadosFiltro(rLig).listTipoLigacao as unknown[]) ?? []
     const tipoLigacao = escolherOpcao(listaLig, 'tipoLigacao', reLigacao(lig))
     if (!tipoLigacao) throw new ErroBelenus(`Não achei inversor ${lig === 'trifásico' ? 'trifásico' : 'monofásico'} nos filtros da Belenus (opções: ${listaLig.map((o) => opcaoTexto(o, 'tipoLigacao')).join(', ') || 'nenhuma'}).`)
-    const rTen = await post('InversorFiltro', filtroBase({ tipoInversor, tipoLigacao }), 'filtro inversor (tensão)')
+    const rTen = await api.inversorFiltro( filtroBase({ tipoInversor, tipoLigacao }), 'filtro inversor (tensão)')
     const listaTen = (dadosFiltro(rTen).listTensaoNominal as unknown[]) ?? []
     const tensaoNominal = escolherOpcao(listaTen, 'tensaoNominal', reTensao(v)) ?? escolherOpcao(listaTen, 'tensaoNominal', /220/)
     if (!tensaoNominal) throw new ErroBelenus(`Não achei a tensão ${v} V nos filtros da Belenus (opções: ${listaTen.map((o) => opcaoTexto(o, 'tensaoNominal')).join(', ') || 'nenhuma'}).`)
-    const rFab = await post('InversorFiltro', filtroBase({ tipoInversor, tipoLigacao, tensaoNominal }), 'filtro inversor (fabricante)')
+    const rFab = await api.inversorFiltro( filtroBase({ tipoInversor, tipoLigacao, tensaoNominal }), 'filtro inversor (fabricante)')
     const listaFab = (dadosFiltro(rFab).listFabricante as unknown[]) ?? []
     const auxsol = listaFab.map((o) => opcaoTexto(o, 'fabricante')).find((f) => f.toUpperCase().includes(entrada.micro ? 'DEYE' : MARCA_PREFERIDA))
     const corpo = (fab: string) => ({
       site, modulo: kit.item, inversor: '', potenciaProjeto: kitKwp, tipoLigacao, tipoInversor, tensaoNominal,
       qtdeModulo: qtdModulos, qtde: 0, fabricantes: [{ fabricante: fab }],
     })
-    let r = await post('Inversor', corpo(auxsol ?? ''), `inversores${auxsol ? ' (AUXSOL)' : ''}`)
+    let r = await api.inversores( corpo(auxsol ?? ''), `inversores${auxsol ? ' (AUXSOL)' : ''}`)
     let lista = listaDe(r, 'inversores')
     // Dono (24/11/2026): MEDIDOR MONOFÁSICO da concessionária → inversor até 5 kW (qualquer tensão). Bifásico/trifásico:
     // regra normal (inversor mono 220 V até 10 kW quando couber, 50% de overload).
-    const limiteMono = LIMITE_MONOFASICO_KW
-    const optsEsc = { limiteKw: lig === 'trifásico' || ligacaoLead !== 'monofásico' ? undefined : limiteMono, kwpKit: kitKwp }
-    // 1º só AUXSOL na faixa (overload 100%); sem AUXSOL na faixa → todas as marcas na faixa; por último o menor que atende
+    const optsEsc = { limiteKw: limiteInversorKw(ligacaoLead, lig, REGRAS_INVERSOR_KEROSOLAR), kwpKit: kitKwp }
+    // 1º só AUXSOL na faixa (50%; depois até 100%); sem AUXSOL na faixa → todas as marcas na faixa; por último o menor que atende
     let escolha = entrada.micro ? escolherMicro(lista) : escolherInversor(lista, { ...optsEsc, somenteFaixa: !!auxsol })
     if (auxsol && !('inversor' in escolha)) {
       // AUXSOL não serviu: tenta com todas as marcas
-      r = await post('Inversor', corpo(''), 'inversores (todas as marcas)')
+      r = await api.inversores( corpo(''), 'inversores (todas as marcas)')
       lista = listaDe(r, 'inversores')
       escolha = entrada.micro ? escolherMicro(lista) : escolherInversor(lista, optsEsc)
     }
@@ -124,12 +121,21 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   }
 
   let ligacaoSistema: Ligacao = ligacaoLead
-  let inv = await buscarInversores(ligacaoSistema, tensao)
+  // Regra do dono (24/11/2026): kit a partir de 15 kWp → SEMPRE inversor TRIFÁSICO.
+  const KIT_MINIMO_TRIFASICO_KWP = 15
+  // Abaixo de 15 kWp, cliente TRIFÁSICO segue a regra normal com inversor MONO 220 V (fase-fase), como o bifásico:
+  // a Belenus só tem inversor trifásico 220 V a partir de 15 kW (24/11/2026, conta da Keila: 4,34 kWp trifásico).
+  if (kitKwp < KIT_MINIMO_TRIFASICO_KWP - 1e-9 && ligacaoSistema === 'trifásico') ligacaoSistema = 'bifásico'
+  if (kitKwp >= KIT_MINIMO_TRIFASICO_KWP - 1e-9 && ligacaoSistema !== 'trifásico') {
+    ligacaoSistema = 'trifásico'
+    avisos.push(`Kit de ${kitKwp.toLocaleString('pt-BR')} kWp (a partir de ${KIT_MINIMO_TRIFASICO_KWP} kWp): inversor TRIFÁSICO (regra do dono). Confirme com o cliente a ligação/padrão trifásico.`)
+  }
+  let inv = await buscarInversores(ligacaoSistema, ligacaoSistema === 'trifásico' && ligacaoLead !== 'trifásico' ? 220 : tensao)
   if (!entrada.micro && !('inversor' in inv.escolha) && ligacaoSistema !== 'trifásico') {
     const motivo = inv.escolha.motivo
     // regra do dono: mais de 1 inversor → 1 inversor TRIFÁSICO; medidor monofásico acima de 5 kW → transformador
     ligacaoSistema = 'trifásico'
-    if (ligacaoLead === 'monofásico') avisos.push(`O kit passa do que o medidor MONOFÁSICO aguenta (inversor de ${LIMITE_MONOFASICO_KW} kW com até 85% de overload = ${(LIMITE_MONOFASICO_KW * 1.85).toFixed(2).replace('.', ',')} kWp). Usei 1 inversor trifásico: confira com o cliente a troca do padrão.`)
+    if (ligacaoLead === 'monofásico') avisos.push(`O kit passa do que o medidor MONOFÁSICO aguenta (inversor de ${LIMITE_MONOFASICO_KW} kW com até 85% de overload = ${(LIMITE_MONOFASICO_KW * OVERLOAD_MONOFASICO_LIMITE).toFixed(2).replace('.', ',')} kWp). Usei 1 inversor trifásico: confira com o cliente a troca do padrão.`)
     else avisos.push(motivo === 'mais-de-um' ? 'A Belenus sugeriu mais de 1 inversor: troquei por 1 inversor TRIFÁSICO (regra do dono).' : 'Nenhum inversor monofásico único atende: usei 1 inversor TRIFÁSICO.')
     inv =await buscarInversores('trifásico', ligacaoLead === 'trifásico' ? tensao : 220)
   }
@@ -137,7 +143,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const inversorObj = inv.escolha.inversor
   // Dono (24/11/2026): medidor monofásico → SEMPRE transformador.
   if (ligacaoLead === 'monofásico') avisos.push(`Medidor MONOFÁSICO: sempre com TRANSFORMADOR (+R$ ${TRANSFORMADOR_PRECO}) — regra do dono.`)
-  const qtdInversores = entrada.micro ? Math.ceil(qtdModulos / PLACAS_POR_MICRO) : 1
+  const qtdInversores = entrada.micro ? quantidadeMicros(qtdModulos, MICRO_KEROSOLAR) : 1
   if (entrada.micro) avisos.push(`Micro inversor DEYE: ${qtdInversores} unidade(s) (1 para cada ${PLACAS_POR_MICRO} placas — regra do dono). Confira os cabos: no micro a ligação é em CA.`)
   else if (inv.escolha.qtdeSugeridaBelenus > 1) avisos.push(`A Belenus sugeriu ${inv.escolha.qtdeSugeridaBelenus} unidades deste inversor; usei 1.`)
   if (!entrada.micro && !ehMarcaPreferida(inversorObj)) avisos.push(inv.temAuxsol ? 'Nenhum AUXSOL serviu para este kit: usei outra marca.' : 'AUXSOL não aparece nos filtros da Belenus para este kit: usei outra marca.')
@@ -145,13 +151,13 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const inversorSel: Obj = { ...inversorObj, numInversores: qtdInversores, inversor: inversorObj.item, inversorQtde: qtdInversores }
 
   // 2b) ConferirPotenciaInversor (validação do site antes de ir para a estrutura) — só consulta
-  await post('ConferirPotenciaInversor', { listInversores: [inversorSel], potenciaProjeto: kitKwp, parametros: inv.parametros }, 'conferir potência do inversor')
+  await api.conferirPotenciaInversor( { listInversores: [inversorSel], potenciaProjeto: kitKwp, parametros: inv.parametros }, 'conferir potência do inversor')
 
   // 3) ESTRUTURA — TipoEstrutura { modulo } → escolhe pelo telhado; Estrutura com o layout (1 linha × N módulos)
   // Regra do dono (24/11/2026): estrutura cotada de 4 em 4 painéis, arredondando para cima (38 → 40).
-  const qtdEstrutura = Math.ceil(qtdModulos / 4) * 4
+  const qtdEstrutura = arredondarEstrutura(qtdModulos, ESTRUTURA_DE_N_PAINEIS)
   if (qtdEstrutura !== qtdModulos) ajustesEstrutura.push(`Estrutura cotada para ${qtdEstrutura} painéis (${qtdModulos} arredondado de 4 em 4 — regra do dono).`)
-  const rTipoEst = await post('TipoEstrutura', { modulo: kit.item }, 'tipos de estrutura')
+  const rTipoEst = await api.tiposEstrutura( { modulo: kit.item }, 'tipos de estrutura')
   const grupos = listaDe(rTipoEst, 'listTipos')
   const re = PALAVRAS_TELHADO[telhado]
   const txt = (o: unknown) => String(o ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -168,7 +174,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     arranjo: 1, linhas: 1, moduloLinha: qtdEstrutura, orientacao,
     tipoEstrutura: sub.tipo, grupo: grupo.grupo, subGrupo: sub.subGrupo, observation: sub.observation,
   }]
-  const rEst = await post('Estrutura', {
+  const rEst = await api.estrutura( {
     semEstrutura: false, site, potenciaProjeto: kitKwp, sugestao: 1, modulo: kit.item, moduloQtde: qtdEstrutura,
     layout, listInversores: [inversorSel],
   }, 'estrutura')
@@ -183,10 +189,10 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     listInversores: [inversorSel], semEstrutura: false, layout,
     ...(listStructure.length ? { ListStructure: listStructure } : {}),
   })
-  const ccSug = semRepetidos(listaDe(await post('Outros', corpoOutros(1), 'componentes CC (sugeridos)'), 'outros')).filter((o) => qtdeDe(o) > 0)
-  const ccTodos = semRepetidos(listaDe(await post('Outros', corpoOutros(0), 'componentes CC (todos)'), 'outros'))
+  const ccSug = semRepetidos(listaDe(await api.componentesCC( corpoOutros(1), 'componentes CC (sugeridos)'), 'outros')).filter((o) => qtdeDe(o) > 0)
+  const ccTodos = semRepetidos(listaDe(await api.componentesCC( corpoOutros(0), 'componentes CC (todos)'), 'outros'))
   // 5) COMPONENTES CA (OutrosAC)
-  const caSug = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(1), 'componentes CA (sugeridos)'), 'outrosAC', 'outros')).filter((o) => qtdeDe(o) > 0)
+  const caSug = semRepetidos(listaDe(await api.componentesCA( corpoOutros(1), 'componentes CA (sugeridos)'), 'outrosAC', 'outros')).filter((o) => qtdeDe(o) > 0)
   const objPorCodigo = new Map<string, Obj>()
   for (const o of [...ccTodos, ...ccSug, ...caSug]) if (codigoDe(o)) objPorCodigo.set(codigoDe(o), o)
 
@@ -201,7 +207,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   // 24/11/2026 (teste real): a Belenus pode não sugerir DPS → busca na lista completa do CA (sugestao 0) e põe a
   // quantidade da regra do dono (2 mono/bifásico, 3 trifásico). Prefere DPS CA 275 V (rede 127/220 V).
   if (!temDpsCa && !cc.pecas.some((p) => ehDps(p.descricao))) {
-    const caTodosObjs = semRepetidos(listaDe(await post('OutrosAC', corpoOutros(0), 'componentes CA (todos)'), 'outrosAC', 'outros'))
+    const caTodosObjs = semRepetidos(listaDe(await api.componentesCA( corpoOutros(0), 'componentes CA (todos)'), 'outrosAC', 'outros'))
     for (const o of caTodosObjs) if (codigoDe(o) && !objPorCodigo.has(codigoDe(o))) objPorCodigo.set(codigoDe(o), o)
     const caTodos = caTodosObjs.map(paraPeca)
     const dpss = caTodos.filter((p) => ehDps(p.descricao))
@@ -232,8 +238,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   let etapa6: Etapa6 | null = null
   try {
     etapa6 = await confirmarParaLerTotal({
-      post: (rota, corpo, etapa, cab) => chamarBelenus(rota, corpo, { token: sessao.token, etapa, cabecalhos: cab }),
-      sessao, site, kit, kitKwp, qtdModulos, layout, inversorSel, qtdInversores,
+      api, sessao, site, kit, kitKwp, qtdModulos, layout, inversorSel, qtdInversores,
       estrutura: estruturaObjs, cc: cc.pecas, ca: ca.pecas, objPorCodigo,
       destino: entrada.destino ?? null, avisos,
     })
@@ -251,7 +256,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
         nome: (entrada.nomeCliente ?? '').trim() || 'Cliente KeroSolar',
         destino: entrada.destino ?? DESTINO_PADRAO, freteOpcao: etapa6.freteOpcao, entrega: entrada.entrega ?? null,
       })
-      const r = await chamarBelenus(ROTA_SALVAR_ORCAMENTO, corpo, { token: sessao.token, etapa: 'salvar cotação' })
+      const r = await api.salvarCotacao(corpo, 'salvar cotação')
       const dados: Obj = ehObj(r) && ehObj(r.data) ? r.data : {}
       const validade = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
       cotacaoSalva = {
@@ -264,7 +269,7 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
       avisos.push(`Não consegui salvar na Belenus (${e instanceof Error ? e.message : 'erro'}) — preço não garantido; gere à mão.`)
     }
   }
-  const transformador = ligacaoLead === 'monofásico' ? TRANSFORMADOR_PRECO : 0
+  const transformador = transformadorPara(ligacaoLead, PRECO_KEROSOLAR)
   return {
     potenciaPedidaKwp: entrada.kwp,
     modulo: moduloPeca, inversor: inversorPeca, estrutura, componentesCC: cc.pecas, componentesCA: ca.pecas,
@@ -286,56 +291,23 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
 //   itens: [módulo, ...inversores, ...estrutura, ...stringBox, ...outros (CC), ...outrosCA], layout,
 //   origemCarrinho: 4, potenciaSistema, qtdModulos, qtdInversores, totalMaxPotenciaEntrada, totalMaxPotenciaSaida }
 // com cada item no formato de `montaFormatoEnvio()` + `tipoKitmontado`. Cabeçalho `X-CarrinhoId: ""` (carrinho novo).
-type CtxConfirmar = {
-  post: (rota: string, corpo: unknown, etapa: string, cab?: Record<string, string>) => Promise<unknown>
-  sessao: SessaoBelenus; site: string; kit: Obj; kitKwp: number; qtdModulos: number; layout: unknown[]
-  inversorSel: Obj; qtdInversores: number; estrutura: Obj[]; cc: Peca[]; ca: Peca[]; objPorCodigo: Map<string, Obj>
+type CtxConfirmar = Omit<DadosConfirmar, 'cc' | 'ca'> & {
+  api: ReturnType<typeof clienteBelenus>
+  sessao: SessaoBelenus; cc: Peca[]; ca: Peca[]
   destino: { cidade: string; uf: string } | null; avisos: string[]
 }
 
-/** Item "outro"/"estrutura" no formato de montaFormatoEnvio (ramo `qtde`). */
-function itemOutro(o: Obj | undefined, codigo: string, qtde: number, tipo: string): Obj {
-  return {
-    item: codigo, qtde, fabricante: o?.fabricante, modelo: o?.modelo, numEntrada: o?.numEntrada, imagemMarca: o?.imagemMarca,
-    numSaida: o?.numSaida, dimensoes: o?.dimensoes, grauProtecao: o?.grauProtecao, correnteEntradaMax: o?.correnteEntradaMax,
-    tensaoMaxima: o?.tensaoMaxima, tipoKitmontado: tipo,
-  }
-}
-
-export function corpoConfirmar(c: Omit<CtxConfirmar, 'post' | 'avisos' | 'destino'>): Obj {
-  const k = c.kit, iv = c.inversorSel
-  const modulo = {
-    tipoKitmontado: 'modulo', item: k.item, qtde: c.qtdModulos, fabricante: k.fabricante, modelo: k.modelo,
-    imagemMarca: k.imagemMarca, eficiencia: k.eficiencia, potencia: k.potencia,
-  }
-  const inversor = {
-    item: iv.item ?? iv.sku, qtde: c.qtdInversores, fabricante: iv.fabricante, modelo: iv.modelo, imagemMarca: iv.imagemMarca,
-    maxPotenciaSaida: iv.maxPotenciaSaida, maxPotenciaEntrada: iv.maxPotenciaEntrada, tipoInversor: iv.tipoInversor,
-    tipoLigacao: iv.tipoLigacao, numMPPTs: iv.numMPPTs, numEntradaMPPT: iv.numEntradaMPPT,
-    potencia: iv.potenciaNominalSaida ?? iv.potencia, index: iv.index,
-    arranjoInversores: Array.isArray(iv.arranjoInversores) ? iv.arranjoInversores : [], tipoKitmontado: 'inversor',
-  }
-  const estrutura = c.estrutura.filter((e) => qtdeDe(e) > 0).map((e) => itemOutro(e, codigoDe(e), qtdeDe(e), 'estrutura'))
-  const outros = c.cc.filter((p) => p.qtde > 0 && p.codigo).map((p) => itemOutro(c.objPorCodigo.get(p.codigo), p.codigo, p.qtde, 'outro'))
-  const outrosCA = c.ca.filter((p) => p.qtde > 0 && p.codigo).map((p) => itemOutro(c.objPorCodigo.get(p.codigo), p.codigo, p.qtde, 'outroCA'))
-  const num0 = (v: unknown) => (Number.isFinite(num(v)) ? num(v) : 0)
-  const corpo: Obj = {
-    site: c.site, potenciaProjeto: c.kitKwp, semEstrutura: false, mesesInatividade: c.sessao.mesesInatividade ?? 0,
-    itens: [modulo, inversor, ...estrutura, ...outros, ...outrosCA], layout: c.layout, origemCarrinho: 4,
-    potenciaSistema: c.kitKwp, qtdModulos: c.qtdModulos, qtdInversores: c.qtdInversores,
-  }
-  // o site soma 1× por linha de inversor (não multiplica pela quantidade) e só manda se > 0
-  if (num0(iv.maxPotenciaEntrada) > 0) corpo.totalMaxPotenciaEntrada = num0(iv.maxPotenciaEntrada)
-  if (num0(iv.maxPotenciaSaida) > 0) corpo.totalMaxPotenciaSaida = num0(iv.maxPotenciaSaida)
-  return corpo
+/** Corpo do Confirmar no formato do site (peça @lib/conector-belenus). */
+export function corpoConfirmar(c: DadosConfirmar): Obj {
+  return corpoConfirmarLib(c)
 }
 
 type Etapa6 = { conf: Confirmacao; carrinho: Obj; freteOpcao: Obj | null }
 
 async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Etapa6> {
   // UMA chamada ao Confirmar por cotação (sem nova tentativa: cada chamada gera uma cotação WEB no site)
-  const r = await c.post(ROTA_CONFIRMAR, corpoConfirmar(c), 'confirmação (etapa 6)', { 'X-CarrinhoId': '' })
-  const dados: Obj = ehObj(r) && ehObj(r.data) ? r.data : {}
+  const r = await c.api.confirmar(corpoConfirmar(c), 'confirmação (etapa 6)')
+  const dados: Obj = dadosDe(r)
 
   // Frete "Belenus Entrega no Cliente" para o município do lead (consulta BuscarFretes, como getOpcoesFrete).
   // O site só GRAVA o frete com AdicionarFrete — proibido —, então o valor é lido das opções e somado aqui.
@@ -343,21 +315,8 @@ async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Etapa6> {
   if (!c.destino) c.avisos.push(`Município do lead não informado: frete calculado para ${DESTINO_PADRAO.cidade} - ${DESTINO_PADRAO.uf} (regra do dono).`)
   let frete: { valor: number; descricao: string; opcao?: Obj } | null = null
   try {
-    const itens = Array.isArray(dados.itens) ? (dados.itens as unknown[]).filter(ehObj) : []
-    const precos = ehObj(itens[0]?.precos) ? (itens[0].precos as Obj) : {}
-    const documentoIntegrador = dados.documentoIntegrador ? dados.documentoIntegrador
-      : String(dados.grupoCliente ?? '').includes('INT') ? dados.clienteCnpjCpf : null
-    const corpoFrete = {
-      SiteID: precos.siteFaturamento ?? c.site, ValorPedido: dados.totalProdutos, Divisao: 'SOL',
-      Cidade: destino.cidade, Estado: destino.uf, eKit: 1, pesoTotal: dados.peso,
-      tipoUsuario: c.sessao.userType, liberarComprasMinimas: !!c.sessao.liberarComprasMinimas,
-      itens: itens.map((i) => ({
-        sku: i.sku, qtde: i.quantidade,
-        componentes: Array.isArray(i.componentes) ? (i.componentes as unknown[]).filter(ehObj).map((x) => ({ sku: x.sku, qtde: Number(x.quantidade) })) : undefined,
-      })),
-      IntegradorDocumento: documentoIntegrador, ClienteDocumento: null,
-    }
-    frete = freteEntregaNoCliente(await c.post(`${ROTA_BUSCAR_FRETES}?calcularValores=true`, corpoFrete, 'frete (opções)'))
+    const corpoFrete = corpoBuscarFretes(dados, { site: c.site, destino, sessao: c.sessao })
+    frete = freteEntregaNoCliente(await c.api.buscarFretes(corpoFrete, 'frete (opções)'))
     if (!frete) c.avisos.push(`A Belenus não devolveu o valor de "Belenus Entrega no Cliente" para ${destino.cidade} - ${destino.uf}: o frete fica para o operador.`)
   } catch (e) {
     c.avisos.push(`Frete não calculado (${e instanceof Error ? e.message : 'erro'}): fica para o operador.`)
@@ -366,7 +325,7 @@ async function confirmarParaLerTotal(c: CtxConfirmar): Promise<Etapa6> {
   // Seguro (ValorSeguro: só calcula o valor; incluir no carrinho seria IncluirSeguro — proibido)
   let seguro: number | null = null
   try {
-    seguro = valorSeguroDe(await c.post(ROTA_VALOR_SEGURO, dados, 'seguro (valor)'))
+    seguro = valorSeguroDe(await c.api.valorSeguro(dados, 'seguro (valor)'))
   } catch (e) {
     c.avisos.push(`Seguro não calculado (${e instanceof Error ? e.message : 'erro'}).`)
   }
@@ -396,6 +355,7 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
 
   let kwp = cmd.kwp
   let estimado = false
+  let dimConsumo: ReturnType<typeof dimensionarConsumoKeroSolar> | null = null
   if (kwp == null) {
     const solar = ehObj(cf.solar) ? cf.solar : {}
     let kwh = num(cf.consumoKwh ?? solar.consumoKwh)
@@ -407,7 +367,8 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
       }
     }
     if (!(kwh > 0)) throw new Error('Não sei a potência: o lead não tem consumo nem valor de conta. Escreva "cota belenus 4,34 kWp". Nada foi enviado ao cliente.')
-    kwp = kwpPorConsumo(kwh)
+    dimConsumo = dimensionarConsumoKeroSolar(kwh)
+    kwp = dimConsumo.kwp
     estimado = true
   }
 
@@ -428,7 +389,7 @@ export async function comandoCotaBelenus(leadId: string, conversationId: string 
     await prisma.note.create({ data: { leadId, type: 'system', content: `🤖 Cotação Belenus (${kwp} kWp) não concluída: ${msg}` } }).catch(() => {})
     throw new Error(`${msg} Nada foi enviado ao cliente.`)
   }
-  if (estimado) resultado.avisos.unshift(`Potência estimada pelo consumo do lead (1 painel = 60 kWh, painel de 620 W): ${kwp.toLocaleString('pt-BR')} kWp. Confira.`)
+  if (estimado && dimConsumo) resultado.avisos.unshift(`Potência estimada pelo consumo do lead (kWp = consumo ÷ (HSP 4,5 × 30 × 80%)): ${kwp.toLocaleString('pt-BR')} kWp ≈ ${dimConsumo.placas} placas de 620 W (${dimConsumo.kwpKit.toLocaleString('pt-BR')} kWp). Confira.`)
   let texto = textoNota(resultado)
   // 📄 Fase 3: PDF do orçamento KeroSolar — fica SÓ para o operador (nota com link); vai ao cliente só com "envia orçamento"
   if (resultado.valorCliente != null && resultado.valorCliente > 0) {

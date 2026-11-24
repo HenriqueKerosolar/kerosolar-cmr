@@ -16,6 +16,30 @@
       "pacote": "vendor/lib-nervo-0.4.2.tgz",
       "sha256": "7b283eb0079eefc61fcd4119d36fbddac8193816dfa89e5139cb08403a79b214",
       "manifestoSha256": "14668334f63ca847044b86811ef4f3514ffdc42e1bc602c3845e4aa3d053a540"
+    },
+    "proposta-pdf": {
+      "versao": "0.1.0",
+      "caminho": "packages/documentos/proposta-pdf/0.1.0",
+      "desde": "2026-11-24",
+      "pacote": "vendor/lib-proposta-pdf-0.1.0.tgz",
+      "sha256": "13e060268f908cd21681dc9d03d745ae6a4761e4923805b880815636e0c4d9e8",
+      "manifestoSha256": "415c49eb03a9cfd31ac8381b396790c70abc15ecdb87f422e41caa8b77c259f0"
+    },
+    "dimensionamento-solar": {
+      "versao": "0.1.0",
+      "caminho": "packages/dominio-solar/dimensionamento-solar/0.1.0",
+      "desde": "2026-11-24",
+      "pacote": "vendor/lib-dimensionamento-solar-0.1.0.tgz",
+      "sha256": "dc836f3268307777f7a139e19f2c64931e95893e8832efe35ee0380f1a4d75dc",
+      "manifestoSha256": "fb6bfc3855bb0946e16c869c402da62022598d2ddf040dff3bc505c2fbd156f8"
+    },
+    "conector-belenus": {
+      "versao": "0.1.0",
+      "caminho": "packages/integracao/conector-belenus/0.1.0",
+      "desde": "2026-11-24",
+      "pacote": "vendor/lib-conector-belenus-0.1.0.tgz",
+      "sha256": "8adcc567cef28aef341b63b79c4a10d56a59771756636f076873a7265449aed7",
+      "manifestoSha256": "3e4ead24e313263abf8bb0384990fb7a315cfb18603614e8948ff76244097f4f"
     }
   }
 }
