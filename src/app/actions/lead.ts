@@ -122,6 +122,25 @@ export async function createManualLead(data: {
 export async function sendManualMessage(leadId: string, text: string, media?: { url: string; type: 'image' | 'video' | 'document' }, accountId?: string) {
   const session = await verifySession()
   let conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' } })
+
+  // 🤖 COMANDO DO OPERADOR: "cota belenus <kWp>" (só isso na mensagem) → monta o kit na Belenus (Fase 1: só
+  // leitura) e grava uma NOTA INTERNA. O texto do comando NUNCA vai ao cliente; nada é enviado ao cliente.
+  if (text && !media) {
+    const { lerComandoBelenus } = await import('@/lib/crm/belenus/regras')
+    if (lerComandoBelenus(text)) {
+      try {
+        const { comandoCotaBelenus } = await import('@/lib/crm/belenus/cotar')
+        const r = await comandoCotaBelenus(leadId, conv?.id ?? null, text)
+        if (r.tratado) {
+          revalidatePath(`/leads/${leadId}`)
+          return { belenus: r.texto }
+        }
+      } catch (e) {
+        return { erro: e instanceof Error ? e.message : 'Não consegui cotar na Belenus. Nada foi enviado ao cliente.' }
+      }
+    }
+  }
+
   if (!conv) {
     // Lead criado manualmente ainda sem conversa → cria uma na hora (se tiver telefone)
     const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: true } })

@@ -196,6 +196,8 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
       try {
         const r = await sendManualMessage(lead.id, t, undefined, sendAccountId || undefined)
         if (r && 'erro' in r) { alert(r.erro); setText(t) }
+        // 🤖 "cota belenus": o kit montado vem para a tela (e fica numa nota interna); nada vai ao cliente
+        else if (r && 'belenus' in r) alert(r.belenus)
         await poll()
       } catch (e) {
         // nada foi enviado: devolve o texto ao campo (antes ele sumia sem aviso)

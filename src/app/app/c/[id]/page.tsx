@@ -126,6 +126,7 @@ export default function ChatPage() {
     try {
       const r = await sendManualMessage(leadId, t)
       if (r && 'erro' in r) { alert(r.erro); setTexto(t) }
+      else if (r && 'belenus' in r) alert(r.belenus)   // 🤖 "cota belenus": kit montado (nota interna)
       await carregar()
     } catch (e) {
       setTexto(t)
