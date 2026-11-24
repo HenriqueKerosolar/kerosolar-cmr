@@ -9,6 +9,9 @@ const token = () => process.env.WHATSAPP_CLOUD_TOKEN || ''
 
 /** Exemplos que a Meta exige para cada variável {{n}} do corpo (usados só na análise da Meta). */
 function exemploDaVariavel(descricao: string): string {
+  // descrição com exemplo explícito: "texto livre (ex.: Kit de 4,34 kWp ...)" → usa o exemplo (a Meta analisa)
+  const ex = /\(ex\.?:\s*([^)]+)\)/i.exec(descricao)
+  if (ex) return ex[1].trim()
   const d = descricao.toLowerCase()
   if (/nome|lead|cliente/.test(d)) return 'Maria'
   if (/valor|r\$|pre[cç]o/.test(d)) return 'R$ 13.800,00'

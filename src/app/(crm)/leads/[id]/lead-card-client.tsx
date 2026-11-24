@@ -92,6 +92,9 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
   const [tplOpen, setTplOpen] = useState(false)
   const [qrOpen, setQrOpen] = useState(false)   // ⚡ respostas rápidas
   const [tplList, setTplList] = useState<{ id: string; displayName: string; bodyText: string; actionType: string | null }[]>([])
+  // template com espaço para o texto do atendente ({{2}}) aberto para escrever
+  const [tplTexto, setTplTexto] = useState<{ id: string; displayName: string; bodyText: string } | null>(null)
+  const [tplTextoLivre, setTplTextoLivre] = useState('')
   const [tplSending, setTplSending] = useState<string | null>(null)
   const [waAccounts, setWaAccounts] = useState<{ id: string; label: string; provider: string; phone: string | null }[]>([])
   const [sendAccountId, setSendAccountId] = useState<string>('') // '' = automático (prioridade padrão)
@@ -219,17 +222,18 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
     setTplOpen(true)
   }
 
-  async function enviarTemplate(tplId: string, bodyText: string) {
+  async function enviarTemplate(tplId: string, bodyText: string, textoLivre?: string) {
     setTplSending(tplId)
     try {
       const res = await fetch(`/api/leads/${lead.id}/send-template`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId: tplId }),
+        body: JSON.stringify({ templateId: tplId, ...(textoLivre ? { textoLivre } : {}) }),
       })
       const data = await res.json() as { ok?: boolean; error?: string }
       if (!data.ok) { alert(data.error ?? 'Erro ao enviar template'); return }
-      setMessages(m => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: bodyText, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
+      const conteudo = bodyText.replace('{{1}}', lead.contact?.name?.split(' ')[0] ?? 'Cliente').replace('{{2}}', textoLivre ?? '')
+      setMessages(m => [...m, { id: `tmp-${Date.now()}`, direction: 'outbound', senderType: 'human', content: conteudo, mediaUrl: null, mediaType: null, createdAt: new Date().toISOString() }])
       setTplOpen(false)
       await poll()
     } finally { setTplSending(null) }
@@ -410,12 +414,32 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
                 <p className="text-xs font-semibold">📋 Escolha um template para enviar</p>
                 <button onClick={() => setTplOpen(false)} className="text-xs text-[--muted-foreground] hover:text-[--foreground]">✕</button>
               </div>
-              {tplList.length === 0 ? (
+              {tplTexto ? (
+                // ✍️ template com espaço para o texto do atendente ({{2}}) — 24/11/2026
+                <div className="p-3 space-y-2">
+                  <p className="text-xs font-semibold">{tplTexto.displayName}</p>
+                  <textarea value={tplTextoLivre} onChange={(e) => setTplTextoLivre(e.target.value.replace(/[\r\n\t]+/g, ' ').slice(0, 1000))} rows={3} autoFocus
+                    placeholder="Escreva aqui o seu texto (ex.: Preciso de uma cotação de 4,34 kWp com inversor Auxsol 3 kW para Niterói - RJ.)"
+                    className="w-full px-3 py-2 rounded-lg border border-[--input] bg-[--background] text-sm outline-none focus:border-[--primary] resize-y" />
+                  <p className="text-[11px] text-[--muted-foreground] whitespace-pre-line">
+                    <b>Vai assim:</b> {tplTexto.bodyText.replace('{{1}}', lead.contact?.name?.split(' ')[0] ?? 'Cliente').replace('{{2}}', tplTextoLivre.trim() || '…')}
+                  </p>
+                  <p className="text-[11px] text-[--muted-foreground]">Uma linha só (o WhatsApp não aceita pular linha nesse espaço) · {tplTextoLivre.length}/1000</p>
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => { setTplTexto(null); setTplTextoLivre('') }} className="px-3 py-1.5 rounded-lg text-xs border border-[--input] hover:bg-[--accent]">Voltar</button>
+                    <button disabled={!tplTextoLivre.trim() || tplSending === tplTexto.id}
+                      onClick={async () => { await enviarTemplate(tplTexto.id, tplTexto.bodyText, tplTextoLivre); setTplTexto(null); setTplTextoLivre('') }}
+                      className="px-3 py-1.5 rounded-lg text-xs bg-[--primary] text-[--primary-foreground] font-medium disabled:opacity-50">
+                      {tplSending === tplTexto.id ? 'Enviando…' : 'Enviar template'}
+                    </button>
+                  </div>
+                </div>
+              ) : tplList.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-[--muted-foreground] text-center">Nenhum template aprovado ainda. Aguarde a aprovação da Meta.</p>
               ) : (
                 <div className="max-h-52 overflow-y-auto divide-y divide-[--border]">
                   {tplList.map(t => (
-                    <button key={t.id} onClick={() => enviarTemplate(t.id, t.bodyText)} disabled={tplSending === t.id}
+                    <button key={t.id} onClick={() => (t.bodyText.includes('{{2}}') ? setTplTexto(t) : enviarTemplate(t.id, t.bodyText))} disabled={tplSending === t.id}
                       className="w-full text-left px-3 py-2.5 hover:bg-[--accent] transition-colors disabled:opacity-50">
                       <p className="text-xs font-semibold">{t.displayName}</p>
                       <p className="text-[11px] text-[--muted-foreground] mt-0.5 line-clamp-2">{t.bodyText.replace('{{1}}', lead.contact?.name?.split(' ')[0] ?? 'Cliente')}</p>
