@@ -28,20 +28,70 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const conv = await prisma.conversation.findFirst({ where: { leadId }, orderBy: { lastMessageAt: 'desc' }, include: { contact: true } })
   if (!conv) return NextResponse.json({ error: 'Esse lead ainda não tem conversa.' }, { status: 400 })
 
-  const account = conv.accountId ? await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } }) : null
+  // O navegador às vezes manda o arquivo SEM tipo (Windows sem leitor de PDF registrado) e a Meta recusa
+  // "application/octet-stream" — descobre pelo nome (24/11/2026: ebook não saía).
+  const POR_EXT: Record<string, string> = {
+    '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+    '.mp4': 'video/mp4', '.3gp': 'video/3gpp', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+    '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.txt': 'text/plain',
+  }
+  const extNome = path.extname(file.name || '').toLowerCase()
+  const mime = (file.type && file.type !== 'application/octet-stream') ? file.type : (POR_EXT[extNome] || 'application/octet-stream')
+  const falhou = (etapa: string, motivo: string) => {
+    console.error('[send-media] falhou (%s) lead=%s arquivo="%s" tipo=%s tamanho=%d: %s', etapa, leadId, file.name, mime, file.size, motivo)
+  }
+  if (mime === 'application/octet-stream') {
+    falhou('tipo', 'tipo de arquivo desconhecido')
+    return NextResponse.json({ error: `O WhatsApp não aceita esse tipo de arquivo ("${file.name}"). Envie PDF, imagem, vídeo, áudio, Word, Excel ou PowerPoint.` }, { status: 400 })
+  }
+  const kind = kindFromMime(mime)
+
+  // 📷 Instagram / Facebook (24/11/2026 — Livingstone): o arquivo ia pelo WhatsApp para um "número" que é o id do
+  //    Instagram e a Meta recusava (131026). A ponte do Mind Marketing só leva TEXTO → guarda o arquivo e manda
+  //    um LINK PÚBLICO ASSINADO (link-arquivo.ts, vale 30 dias) pelo mesmo canal da conversa.
+  if (conv.channel === 'instagram' || conv.channel === 'facebook') {
+    if (file.size > MAX_BYTES) return NextResponse.json({ error: 'Arquivo muito grande (máx. 25 MB).' }, { status: 400 })
+    const { salvarMidiaRecebida } = await import('@/lib/crm/media')
+    const extIg = path.extname(file.name || '') || ('.' + ((mime.split('/')[1] || 'bin').split(';')[0]))
+    const copia = salvarMidiaRecebida(Buffer.from(await file.arrayBuffer()), extIg)
+    const { linkPublicoDoAnexo } = await import('@/lib/crm/link-arquivo')
+    const link = copia ? linkPublicoDoAnexo(copia, file.name) : null
+    if (!copia || !link) {
+      console.error('[send-media] instagram/facebook: não consegui guardar o arquivo (lead=%s)', leadId)
+      return NextResponse.json({ error: 'Não consegui guardar o arquivo para enviar. Tente de novo.' }, { status: 500 })
+    }
+    const nomeVisivel = file.name || 'arquivo'
+    const texto = `${caption ? `${caption}\n\n` : ''}📎 ${nomeVisivel}\n${link}`
+    const { dispatchOutbound } = await import('@/lib/crm/flow')
+    // vai como TEXTO (ponte do Marketing); o anexo fica guardado no histórico do CRM para abrir aqui
+    await dispatchOutbound(conv.id, texto, undefined, 'human', session.userId, true)
+    const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id, direction: 'outbound', content: texto }, orderBy: { createdAt: 'desc' }, select: { id: true } })
+    if (ultima) await prisma.message.update({ where: { id: ultima.id }, data: { mediaUrl: copia, mediaType: kind } }).catch(() => {})
+    await prisma.lead.update({ where: { id: leadId }, data: { lastMessageAt: new Date() } })
+    return NextResponse.json({ ok: true })
+  }
+
+  // Mesma regra do texto (dispatchOutbound): conversa sem conta, ou de conta antiga (Baileys), sai pela
+  // primeira conta da API oficial. Antes o arquivo dava "WhatsApp Cloud não configurado" nesses leads.
+  const daConversa = conv.accountId ? await prisma.whatsappAccount.findUnique({ where: { id: conv.accountId } }) : null
+  const account = (daConversa?.provider === 'cloud' && daConversa.cloudPhoneNumberId)
+    ? daConversa
+    : await prisma.whatsappAccount.findFirst({ where: { provider: 'cloud', cloudPhoneNumberId: { not: null } } })
   if (!account?.cloudPhoneNumberId || !process.env.WHATSAPP_CLOUD_TOKEN) {
+    console.error('[send-media] sem conta da API oficial (lead=%s, conversa=%s)', leadId, conv.id)
     return NextResponse.json({ error: 'WhatsApp Cloud não configurado.' }, { status: 503 })
   }
 
-  const mime = file.type || 'application/octet-stream'
-  const kind = kindFromMime(mime)
 
   try {
     // 📤 PASSO 1: Upload pra Meta (recebe mediaId)
     const up = new FormData()
     up.append('messaging_product', 'whatsapp')
     up.append('type', mime)
-    up.append('file', file)
+    up.append('file', new Blob([await file.arrayBuffer()], { type: mime }), file.name || `arquivo${extNome}`)
 
     const upRes = await fetch(`${GRAPH}/${account.cloudPhoneNumberId}/media`, {
       method: 'POST',
@@ -50,11 +100,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     })
     const upData = (await upRes.json()) as { id?: string; error?: { message?: string } }
     if (!upRes.ok || !upData.id) {
+      falhou('upload Meta', JSON.stringify(upData.error ?? upData).slice(0, 300))
       return NextResponse.json({ error: upData.error?.message || 'Falha no upload da mídia.' }, { status: 502 })
     }
 
     // 📨 PASSO 2: Envia a mensagem com o mediaId
-    const toPhone = conv.contact?.phone || conv.externalId || ''
+    const toPhone = conv.contact?.whatsappId || conv.contact?.phone || conv.externalId || ''
+    if (!toPhone) {
+      falhou('destino', 'contato sem número de WhatsApp')
+      return NextResponse.json({ error: 'Esse contato não tem número de WhatsApp.' }, { status: 400 })
+    }
     const mediaObj: Record<string, unknown> = { id: upData.id }
     if (caption && (kind === 'image' || kind === 'video' || kind === 'document')) mediaObj.caption = caption
     if (kind === 'document') mediaObj.filename = file.name
@@ -72,6 +127,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     })
     const sendData = (await sendRes.json()) as { messages?: { id: string }[]; error?: { message?: string } }
     if (!sendRes.ok) {
+      falhou('envio Meta', JSON.stringify(sendData.error ?? sendData).slice(0, 300))
       return NextResponse.json({ error: sendData.error?.message || 'Falha ao enviar a mídia.' }, { status: 502 })
     }
     const waId = sendData.messages?.[0]?.id
