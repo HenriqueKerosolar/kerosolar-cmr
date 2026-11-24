@@ -115,17 +115,23 @@ export async function sendCloudTemplate(
 
 /** Baixa uma mídia recebida (2 passos: pega a URL temporária pelo media id, depois os bytes). */
 export async function downloadCloudMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
-  try {
-    const metaRes = await fetch(`${GRAPH}/${mediaId}`, { headers: { Authorization: `Bearer ${token()}` } })
-    if (!metaRes.ok) return null
-    const meta = await metaRes.json() as { url?: string; mime_type?: string }
-    if (!meta.url) return null
-    const binRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token()}` } })
-    if (!binRes.ok) return null
-    const buffer = Buffer.from(await binRes.arrayBuffer())
-    return { buffer, mimeType: meta.mime_type || 'application/octet-stream' }
-  } catch (e) {
-    console.error('[cloud-api] download mídia falhou:', e)
-    return null
+  // 24/11/2026 (áudio da Taranis sumiu): a conexão com a Meta falha de vez em quando ("fetch failed").
+  // Tenta 3 vezes com espera crescente e registra o motivo de cada falha.
+  const esperas = [0, 1500, 4000]
+  for (let i = 0; i < esperas.length; i++) {
+    if (esperas[i]) await new Promise((r) => setTimeout(r, esperas[i]))
+    try {
+      const metaRes = await fetch(`${GRAPH}/${mediaId}`, { headers: { Authorization: `Bearer ${token()}` }, signal: AbortSignal.timeout(20_000) })
+      if (!metaRes.ok) { console.error('[cloud-api] mídia %s: Meta respondeu %d (tentativa %d)', mediaId, metaRes.status, i + 1); continue }
+      const meta = await metaRes.json() as { url?: string; mime_type?: string }
+      if (!meta.url) { console.error('[cloud-api] mídia %s sem url (tentativa %d)', mediaId, i + 1); continue }
+      const binRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token()}` }, signal: AbortSignal.timeout(30_000) })
+      if (!binRes.ok) { console.error('[cloud-api] mídia %s: download %d (tentativa %d)', mediaId, binRes.status, i + 1); continue }
+      const buffer = Buffer.from(await binRes.arrayBuffer())
+      return { buffer, mimeType: meta.mime_type || 'application/octet-stream' }
+    } catch (e) {
+      console.error('[cloud-api] mídia %s: falhou (tentativa %d): %s', mediaId, i + 1, e instanceof Error ? e.message : e)
+    }
   }
+  return null
 }

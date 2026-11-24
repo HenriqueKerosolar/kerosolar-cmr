@@ -199,6 +199,9 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
     const { downloadCloudMedia } = await import('@/lib/crm/cloud-api')
     const dl = mediaObj?.id ? await downloadCloudMedia(mediaObj.id) : null
     const caption = mediaObj?.caption ?? ''
+    // Não baixou nem tentando 3 vezes → guarda o endereço do arquivo NA META (proxy /api/media/meta): o CRM busca
+    // quando o atendente abrir (a Meta guarda ~30 dias). Assim a mídia nunca some da conversa.
+    const proxyMeta = !dl && mediaObj?.id ? `${(process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')}/api/media/meta/${mediaObj.id}` : undefined
     if (m.type === 'image') {
       displayText = caption || '📷 Foto enviada'
       mediaType = 'image'
@@ -251,6 +254,7 @@ async function processarMensagem(m: WaMessage, account: { id: string; cloudPhone
       }
       text = caption
     }
+    if (!mediaUrl && proxyMeta) mediaUrl = proxyMeta
   } else {
     return // tipos não tratados (location, contacts, reaction, etc.)
   }
