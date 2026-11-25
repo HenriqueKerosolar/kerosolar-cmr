@@ -355,6 +355,6 @@ describe('tempo limite e novas tentativas (dono, 24/11/2026: Belenus lenta)', ()
   it('acesso negado mantém a dica do Railway', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })))
     await expect(chamarBelenus('api/catalogo/KitPersonalizado/Modulos', {}, { token: 't', etapa: 'módulos' }))
-      .rejects.toThrow('A Belenus recusou o acesso (HTTP 401, etapa: módulos). Confira BELENUS_EMAIL/BELENUS_SENHA no Railway.')
+      .rejects.toThrow('A Belenus recusou o acesso (HTTP 401, etapa: módulos).')
   })
 })

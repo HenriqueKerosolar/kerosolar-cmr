@@ -55,7 +55,11 @@ export async function montarKitBelenus(entrada: EntradaCotacao, opts: { esperaMa
     throw new ErroBelenus(`A fila de cotações da Belenus passou de ${Math.round(espera / 1000)} s. Tente de novo em instantes.`)
   }
   try {
-    return await montar(entrada)
+    const r = await montar(entrada)
+    // banco de referência: o mais recente no mesmo kWp substitui o antigo (dono, 24/11/2026)
+    const { guardarReferencia } = await import('./banco')
+    await guardarReferencia(entrada, r)
+    return r
   } finally {
     liberar()
   }

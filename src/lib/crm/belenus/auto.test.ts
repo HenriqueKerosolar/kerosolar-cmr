@@ -26,6 +26,12 @@ vi.mock('./orcamento-cmd', () => ({
 const envio = vi.hoisted(() => ({ enviar: vi.fn(async (_a: Record<string, unknown>) => ({ ok: true, messageId: 'm1' })), ler: vi.fn(() => Buffer.from('%PDF-1.3 teste')) }))
 vi.mock('../enviar-arquivo', () => ({ enviarArquivoNaConversa: envio.enviar }))
 vi.mock('../media', () => ({ lerMidiaSalva: envio.ler }))
+const alcance = vi.hoisted(() => ({ aberto: true, ref: null as null | Record<string, unknown> }))
+vi.mock('./api', () => ({ belenusAlcancavel: () => alcance.aberto }))
+vi.mock('./banco', () => ({
+  buscarReferencia: vi.fn(async () => alcance.ref),
+  orcamentoDaReferencia: vi.fn((ref: { resultado: Record<string, unknown> }) => ({ ...ref.resultado, avisos: ['do banco'], valorCliente: 9999 })),
+}))
 
 import {
   belenusAutoLigado, documentoDoOrcamento, enviarDocumentoDepois, orcamentoBelenusAuto, podeUsarBelenusNoOrcamento,
@@ -119,6 +125,24 @@ describe('orcamentoBelenusAuto', () => {
     const r = await orcamentoBelenusAuto({ leadId: 'lead1', consumoKwh: 420, cf: {}, limiteMs: 30 })
     expect(r).toEqual({ ok: false, motivo: expect.stringMatching(/passou de/) })
     expect(Date.now() - t0).toBeLessThan(2000)
+  })
+  it('nenhum CRM aberto → não chama a Belenus e usa o BANCO de referência (mesmo valor)', async () => {
+    cotacao.montar.mockClear()
+    alcance.aberto = false
+    alcance.ref = { placas: 7, resultado: resultado(11929.82) }
+    try {
+      const r = await orcamentoBelenusAuto({ leadId: 'lead1', consumoKwh: 420, cf: {} })
+      expect(cotacao.montar).not.toHaveBeenCalled()
+      expect(r.ok).toBe(true)
+      if (r.ok) expect(r.valorCliente).toBe(9999)
+    } finally { alcance.aberto = true; alcance.ref = null }
+  })
+  it('nenhum CRM aberto e banco vazio → ok:false (fórmula)', async () => {
+    alcance.aberto = false
+    try {
+      const r = await orcamentoBelenusAuto({ leadId: 'lead1', consumoKwh: 420, cf: {} })
+      expect(r).toEqual({ ok: false, motivo: expect.stringMatching(/nenhum CRM aberto.*sem orçamento de referência/) })
+    } finally { alcance.aberto = true }
   })
   it('sem total na Confirmação → ok:false', async () => {
     cotacao.montar.mockResolvedValue(resultado(null))

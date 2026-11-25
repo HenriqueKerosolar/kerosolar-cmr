@@ -8,7 +8,9 @@ import 'server-only'
 import { prisma } from '@/lib/prisma'
 import { ajustarValorVenda } from '../solar-calc'
 import { entradaDoLead, montarKitBelenus } from './cotar'
-import { dimensionarConsumoKeroSolar, textoNota, type ResultadoCotacao } from './regras'
+import { dimensionarConsumoKeroSolar, textoNota, TRANSFORMADOR_PRECO, type ResultadoCotacao } from './regras'
+import { belenusAlcancavel } from './api'
+import { buscarReferencia, orcamentoDaReferencia } from './banco'
 import type { OrcamentoSalvo } from './orcamento'
 
 /** Quando o orçamento automático do motor pode ir pela Belenus (o resto fica na fórmula de sempre). */
@@ -68,13 +70,28 @@ export async function orcamentoBelenusAuto(p: {
     const dim = dimensionarConsumoKeroSolar(p.consumoKwh)
     const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { contact: { select: { name: true, phone: true, whatsappId: true, email: true, customFields: true } } } })
     const entrada = entradaDoLead(dim.kwp, p.cf, lead?.contact)
-    const resultado = await comLimite(montarKitBelenus(entrada, { esperaMaxMs: limite }), limite)
-    const valorCliente = resultado.valorCliente
-    if (valorCliente == null || !(valorCliente > 0)) {
-      const aviso = resultado.avisos.find((a) => /Total não lido/.test(a))
-      return { ok: false, motivo: aviso ?? 'a Belenus não devolveu o total' }
+    // 1º Belenus ao vivo (pelo CRM aberto no navegador / proxy); fora do alcance ou falhou → banco de referência
+    let resultado: ResultadoCotacao | null = null
+    let motivoBelenus = ''
+    if (belenusAlcancavel()) {
+      try {
+        resultado = await comLimite(montarKitBelenus(entrada, { esperaMaxMs: limite }), limite)
+        if (resultado.valorCliente == null || !(resultado.valorCliente > 0)) {
+          motivoBelenus = resultado.avisos.find((a) => /Total não lido/.test(a)) ?? 'a Belenus não devolveu o total'
+          resultado = null
+        }
+      } catch (e) { motivoBelenus = e instanceof Error ? e.message : String(e) }
+    } else motivoBelenus = 'nenhum CRM aberto no navegador para falar com a Belenus'
+    let doBanco = false
+    if (!resultado) {
+      const ref = await buscarReferencia(entrada, dim.placas)
+      if (!ref) return { ok: false, motivo: `${motivoBelenus}; sem orçamento de referência perto de ${dim.placas} placas no banco` }
+      resultado = orcamentoDaReferencia(ref, entrada, TRANSFORMADOR_PRECO)
+      doBanco = true
+      console.log('[belenus auto] usando banco (%s): %d placas de %s', motivoBelenus, ref.placas, ref.criadoEm)
     }
-    resultado.avisos.unshift(`Orçamento AUTOMÁTICO (IA): consumo ${Math.round(p.consumoKwh)} kWh → ${dim.kwp.toLocaleString('pt-BR')} kWp pela fórmula (HSP 4,5 × 30 × 80%).`)
+    const valorCliente = resultado.valorCliente as number
+    resultado.avisos.unshift(`Orçamento AUTOMÁTICO (IA): consumo ${Math.round(p.consumoKwh)} kWh → ${dim.kwp.toLocaleString('pt-BR')} kWp pela fórmula (HSP 4,5 × 30 × 80%).${doBanco ? ` Belenus ao vivo: ${motivoBelenus}.` : ''}`)
     // PDF KeroSolar (mesma geração do "cota belenus"); falha no PDF não derruba o orçamento (vai só o texto)
     let orcamento: OrcamentoSalvo | null = null
     let notaPdf = ''

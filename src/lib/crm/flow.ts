@@ -556,7 +556,24 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
   // 🔌 medidor monofásico (guardado no lead) → o transformador entra no valor (regra do dono, 16/11/2026)
-  const solar = ajustarPorMedidor(hib ? aplicarHibrido(base) : base, cf.medidor as string | undefined)
+  let solar = ajustarPorMedidor(hib ? aplicarHibrido(base) : base, cf.medidor as string | undefined)
+  // ⚡ Padrão novo (dono, 24/11/2026: "só vai pela Belenus"): on-grid → Belenus ao vivo (CRM aberto) ou banco de
+  //    referência, com PDF KeroSolar depois do texto. Falhou os dois → fórmula, como antes (o "faz" SEMPRE sai).
+  let pdf: import('./belenus/auto').DocumentoDepois | null = null
+  let notaBelenus = ''
+  if (!hib) {
+    const auto = await import('./belenus/auto')
+    const chave = await auto.belenusAutoLigado()
+    if (chave.ligado) {
+      const bel = await auto.orcamentoBelenusAuto({ leadId, consumoKwh: base.consumoKwh, cf, limiteMs: 90_000 })
+      if (bel.ok) {
+        solar = auto.solarComValorBelenus(solar, bel.valorCliente, !!bel.resultado.transformador)
+        if (bel.orcamento) pdf = auto.documentoDoOrcamento(leadId, conversationId, bel.orcamento)
+        await prisma.note.create({ data: { leadId, type: 'system', content: bel.nota } }).catch(() => {})
+        if (bel.orcamento) cf.orcamentoBelenus = bel.orcamento as unknown
+      } else notaBelenus = ` ⚠️ Belenus/banco indisponível (${bel.motivo}) → saiu pela fórmula.`
+    }
+  }
   await prisma.lead.update({ where: { id: leadId }, data: {
     customFields: { ...cf, solar, consumoKwh: solar.consumoKwh, billValue: solar.contaReais } as object,
     value: solar.valorSistema, lastMessageAt: new Date(),
@@ -564,7 +581,8 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   // O OPERADOR pediu → sai SEMPRE, como mensagem dele (regra do dono, 23/11/2026: "independente de qualquer
   // coisa ele deveria ter feito"): sem trava de repetição, sem adiar por horário, com IA em manual ou não.
   await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'human', userId, true)
-  await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu orçamento ("faz") por ${kwh} → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).` } }).catch(() => {})
+  if (pdf) { const { enviarDocumentoDepois } = await import('./belenus/auto'); await enviarDocumentoDepois(pdf) }
+  await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu orçamento ("faz") por ${kwh} → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).${notaBelenus}` } }).catch(() => {})
   // Enviou orçamento → move pra etapa "Recebeu orçamento automático" (se ainda não estiver lá).
   const alvo = await prisma.stage.findFirst({ where: { name: { contains: 'Recebeu orçamento autom', mode: 'insensitive' } } })
   const ld = await prisma.lead.findUnique({ where: { id: leadId }, select: { stageId: true } })

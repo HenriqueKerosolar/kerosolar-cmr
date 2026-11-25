@@ -12,17 +12,44 @@ import {
   type DependenciasBelenus, type OpcoesChamada, type SessaoBelenus,
 } from '@lib/conector-belenus'
 
+import { fetchPelaPonte, ponteDisponivel } from './ponte'
+
 export { ErroBelenus, type SessaoBelenus }
 
 /** Dono (24/11/2026): a Belenus está lenta (cotações reais caíram por tempo em "inversores" e "módulos") → 45 s. */
 export const TEMPO_LIMITE_MS = 45_000
+
+/**
+ * Dono (24/11/2026): a Belenus bloqueia (HTTP 403) qualquer IP de data center — Railway, ServerSP, Contabo. Só aceita
+ * internet residencial/empresa. Solução: proxy residencial/ISP brasileiro contratado. Se BELENUS_PROXY_URL estiver no
+ * Railway (formato http://usuario:senha@host:porta), SÓ as chamadas à Belenus saem por ele; o resto do CRM não muda.
+ */
+function fetchPeloProxy(): typeof fetch | undefined {
+  const url = process.env.BELENUS_PROXY_URL?.trim()
+  if (!url) return undefined
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { ProxyAgent, fetch: fetchUndici } = require('undici') as typeof import('undici')
+  const agente = new ProxyAgent(url)
+  return ((entrada: string | URL, init?: RequestInit) =>
+    fetchUndici(String(entrada), { ...(init as object), dispatcher: agente } as Parameters<typeof fetchUndici>[1])) as unknown as typeof fetch
+}
 
 /** Configuração do conector no CRM: 45 s e 1 nova tentativa SÓ nas consultas do catálogo (nunca Confirmar/Salvar). */
 export const DEPS_BELENUS: DependenciasBelenus = {
   tempoLimiteMs: TEMPO_LIMITE_MS,
   novasTentativasConsulta: 1,
   dicaAcessoNegado: 'Confira BELENUS_EMAIL/BELENUS_SENHA no Railway.',
+  // Ordem: proxy contratado (se houver) → ponte pelo navegador do CRM aberto. BELENUS_DIRETO=1 = sai direto
+  // (scripts rodados no computador do dono com `railway run`, que já está numa internet aceita).
+  // Decidido a cada chamada: CRM aberto no navegador → ponte; senão direto (no computador do dono com `railway run`
+  // funciona; no servidor a Belenus devolve 403 e o motor cai no banco de referência / fórmula).
+  fetch: fetchPeloProxy() ?? (((url: string | URL | Request, init?: RequestInit) =>
+    (process.env.BELENUS_DIRETO !== '1' && ponteDisponivel() ? fetchPelaPonte : globalThis.fetch)(url, init)) as typeof fetch),
 }
+
+/** Dá para cotar agora? (proxy configurado, saída direta, ou algum CRM aberto no navegador) */
+export const belenusAlcancavel = (): boolean =>
+  !!process.env.BELENUS_PROXY_URL?.trim() || process.env.BELENUS_DIRETO === '1' || ponteDisponivel()
 
 export function credenciaisBelenus(): { email: string; senha: string } {
   const email = process.env.BELENUS_EMAIL?.trim()
