@@ -150,8 +150,17 @@ export async function enviarDocumentoDepois(d: DocumentoDepois | null | undefine
     const conv = await prisma.conversation.findUnique({ where: { id: d.conversationId }, include: { contact: true } })
     if (!conv) throw new Error('conversa não encontrada')
     const { enviarArquivoNaConversa } = await import('../enviar-arquivo')
-    const r = await enviarArquivoNaConversa({ leadId: d.leadId, conv, buffer, nome: d.nome, mime: 'application/pdf', caption: d.caption, copiaLocal: d.arquivo })
-    if (!r.ok) throw new Error(r.erro)
+    // 24/11/2026: a Meta devolveu "(#131000) Something went wrong" (instabilidade) no PDF de 550 kWh → tenta 3
+    // vezes (3 s e 8 s entre elas) antes de cair no texto de reserva.
+    let ultimoErro = ''
+    for (const [i, espera] of [0, 3000, 8000].entries()) {
+      if (espera) await new Promise((res) => setTimeout(res, espera))
+      const r = await enviarArquivoNaConversa({ leadId: d.leadId, conv, buffer, nome: d.nome, mime: 'application/pdf', caption: d.caption, copiaLocal: d.arquivo })
+      if (r.ok) { ultimoErro = ''; break }
+      ultimoErro = r.erro
+      console.error('[belenus auto] PDF tentativa %d/3 falhou: %s', i + 1, r.erro)
+    }
+    if (ultimoErro) throw new Error(ultimoErro)
   } catch (e) {
     const motivo = e instanceof Error ? e.message : String(e)
     console.error('[belenus auto] PDF não enviado:', motivo)

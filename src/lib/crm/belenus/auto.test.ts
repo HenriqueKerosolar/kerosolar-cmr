@@ -168,9 +168,33 @@ describe('PDF depois do texto', () => {
     expect(envio.enviar).toHaveBeenCalledTimes(1)
     expect(envio.enviar.mock.calls[0][0]).toMatchObject({ leadId: 'lead1', nome: 'Orcamento-KeroSolar-KS-20261124-9F2K.pdf', mime: 'application/pdf', copiaLocal: '/api/uploads/in_1_2.pdf' })
   })
-  it('falha no envio do PDF → nota para o operador (o texto já saiu)', async () => {
-    envio.enviar.mockResolvedValueOnce({ ok: false, erro: 'WhatsApp Cloud não configurado.', status: 503 } as never)
-    await enviarDocumentoDepois(documentoDoOrcamento('lead1', 'conv1', { arquivo: '/api/uploads/a.pdf', valorCliente: 1, kwp: 1, criadoEm: 'x', numero: 'KS-1' }))
-    expect(banco.notas.join('\n')).toMatch(/PDF do orçamento não foi enviado/)
+  it('falha no envio do PDF → tenta 3 vezes e depois nota para o operador', async () => {
+    vi.useFakeTimers()
+    try {
+      envio.enviar.mockClear()
+      envio.enviar.mockResolvedValue({ ok: false, erro: '(#131000) Something went wrong', status: 502 } as never)
+      const p = enviarDocumentoDepois(documentoDoOrcamento('lead1', 'conv1', { arquivo: '/api/uploads/a.pdf', valorCliente: 1, kwp: 1, criadoEm: 'x', numero: 'KS-1' }))
+      await vi.runAllTimersAsync()
+      await p
+      expect(envio.enviar).toHaveBeenCalledTimes(3)
+      expect(banco.notas.join('\n')).toMatch(/PDF do orçamento não foi enviado/)
+    } finally {
+      vi.useRealTimers()
+      envio.enviar.mockResolvedValue({ ok: true, messageId: 'm1' } as never)
+    }
+  })
+  it('Meta falha na 1ª e aceita na 2ª → PDF sai, sem nota de falha', async () => {
+    vi.useFakeTimers()
+    try {
+      envio.enviar.mockClear()
+      banco.notas.length = 0
+      envio.enviar.mockResolvedValueOnce({ ok: false, erro: '(#131000) Something went wrong', status: 502 } as never)
+      envio.enviar.mockResolvedValueOnce({ ok: true, messageId: 'm2' } as never)
+      const p = enviarDocumentoDepois(documentoDoOrcamento('lead1', 'conv1', { arquivo: '/api/uploads/a.pdf', valorCliente: 1, kwp: 1, criadoEm: 'x', numero: 'KS-1' }))
+      await vi.runAllTimersAsync()
+      await p
+      expect(envio.enviar).toHaveBeenCalledTimes(2)
+      expect(banco.notas.join('\n')).not.toMatch(/não foi enviado/)
+    } finally { vi.useRealTimers() }
   })
 })
