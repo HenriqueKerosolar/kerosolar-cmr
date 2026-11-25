@@ -568,7 +568,8 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
       const bel = await auto.orcamentoBelenusAuto({ leadId, consumoKwh: base.consumoKwh, cf, limiteMs: 90_000 })
       if (bel.ok) {
         solar = auto.solarComValorBelenus(solar, bel.valorCliente, !!bel.resultado.transformador)
-        if (bel.orcamento) pdf = auto.documentoDoOrcamento(leadId, conversationId, bel.orcamento)
+        // "um ou outro" (dono, 24/11/2026): vai SÓ o PDF com legenda curta; o texto fica de reserva se o PDF falhar
+        if (bel.orcamento) pdf = auto.documentoDoOrcamento(leadId, conversationId, bel.orcamento, { caption: auto.legendaOrcamento(bel.orcamento, solar), textoReserva: orcamentoTexto(solar) })
         await prisma.note.create({ data: { leadId, type: 'system', content: bel.nota } }).catch(() => {})
         if (bel.orcamento) cf.orcamentoBelenus = bel.orcamento as unknown
       } else notaBelenus = ` ⚠️ Belenus/banco indisponível (${bel.motivo}) → saiu pela fórmula.`
@@ -580,8 +581,8 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   } }).catch(() => {})
   // O OPERADOR pediu → sai SEMPRE, como mensagem dele (regra do dono, 23/11/2026: "independente de qualquer
   // coisa ele deveria ter feito"): sem trava de repetição, sem adiar por horário, com IA em manual ou não.
-  await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'human', userId, true)
   if (pdf) { const { enviarDocumentoDepois } = await import('./belenus/auto'); await enviarDocumentoDepois(pdf) }
+  else await dispatchOutbound(conversationId, orcamentoTexto(solar), undefined, 'human', userId, true)
   await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu orçamento ("faz") por ${kwh} → orçamento enviado (sistema R$ ${solar.valorSistema.toLocaleString('pt-BR')}).${notaBelenus}` } }).catch(() => {})
   // Enviou orçamento → move pra etapa "Recebeu orçamento automático" (se ainda não estiver lá).
   const alvo = await prisma.stage.findFirst({ where: { name: { contains: 'Recebeu orçamento autom', mode: 'insensitive' } } })

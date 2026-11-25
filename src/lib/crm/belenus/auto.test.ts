@@ -137,6 +137,16 @@ describe('orcamentoBelenusAuto', () => {
       if (r.ok) expect(r.valorCliente).toBe(9999)
     } finally { alcance.aberto = true; alcance.ref = null }
   })
+  it('CRM aberto → SEMPRE cota na Belenus, mesmo tendo a mesma potência no banco', async () => {
+    cotacao.montar.mockClear()
+    cotacao.montar.mockResolvedValue(resultado(12600.06))
+    alcance.ref = { placas: 7, criadoEm: new Date().toISOString(), resultado: resultado(11929.82) }
+    try {
+      const r = await orcamentoBelenusAuto({ leadId: 'lead1', consumoKwh: 420, cf: {} })
+      expect(cotacao.montar).toHaveBeenCalledTimes(1)
+      expect(r.ok && r.valorCliente).toBe(12600.06)
+    } finally { alcance.ref = null }
+  })
   it('nenhum CRM aberto e banco vazio → ok:false (fórmula)', async () => {
     alcance.aberto = false
     try {

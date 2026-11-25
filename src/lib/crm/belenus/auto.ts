@@ -73,6 +73,8 @@ export async function orcamentoBelenusAuto(p: {
     // 1º Belenus ao vivo (pelo CRM aberto no navegador / proxy); fora do alcance ou falhou → banco de referência
     let resultado: ResultadoCotacao | null = null
     let motivoBelenus = ''
+    // Ordem do dono (24/11/2026): tem acesso → SEMPRE Belenus ao vivo; sem acesso → orçamento do banco (mesma
+    // potência ou a mais próxima, com os dados deste cliente); sem nenhum → texto pela fórmula (quem chama).
     if (belenusAlcancavel()) {
       try {
         resultado = await comLimite(montarKitBelenus(entrada, { esperaMaxMs: limite }), limite)
@@ -98,7 +100,7 @@ export async function orcamentoBelenusAuto(p: {
     try {
       const { gerarOrcamentoDoLead } = await import('./orcamento-cmd')
       orcamento = await gerarOrcamentoDoLead(p.leadId, resultado, p.agora ?? new Date(), { ...p.cf, consumoKwh: p.consumoKwh })
-      notaPdf = `\n\n📄 PDF do orçamento ${orcamento.numero} enviado ao cliente logo depois do texto:\n${orcamento.arquivo}`
+      notaPdf = `\n\n📄 PDF do orçamento ${orcamento.numero} enviado ao cliente (só o PDF, com legenda curta; o texto vai só se o PDF falhar):\n${orcamento.arquivo}`
     } catch (e) {
       notaPdf = `\n\n⚠️ PDF do orçamento não gerado (${e instanceof Error ? e.message : 'erro'}): o cliente recebeu só o texto.`
     }
@@ -113,10 +115,29 @@ export async function orcamentoBelenusAuto(p: {
 }
 
 /** Documento a mandar DEPOIS da resposta de texto (o motor devolve; quem envia é o chamador, como o texto). */
-export type DocumentoDepois = { leadId: string; conversationId: string; arquivo: string; nome: string; caption: string }
+/**
+ * Dono (24/11/2026): "é um ou outro e não os dois ao mesmo tempo" → saiu pela Belenus = vai SÓ o PDF, com uma
+ * legenda curta (valor, kWp, menor parcela). O texto completo do orçamento fica de RESERVA: se o PDF não sair, ele
+ * vai no lugar (o cliente nunca fica sem orçamento).
+ */
+export type DocumentoDepois = { leadId: string; conversationId: string; arquivo: string; nome: string; caption: string; textoReserva?: string }
 
-export function documentoDoOrcamento(leadId: string, conversationId: string, o: OrcamentoSalvo): DocumentoDepois {
-  return { leadId, conversationId, arquivo: o.arquivo, nome: `Orcamento-KeroSolar-${o.numero}.pdf`, caption: 'Segue o seu orçamento da KeroSolar ☀️' }
+/** Legenda curta do PDF. `solar` = orçamento já com o valor da Belenus (parcelas recalculadas). */
+export function legendaOrcamento(o: OrcamentoSalvo, solar?: { financiamento?: Array<{ parcela?: number }> } | null): string {
+  const parcelas = (solar?.financiamento ?? []).map((f) => Number(f.parcela)).filter((p) => p > 0)
+  const menor = parcelas.length ? Math.min(...parcelas) : null
+  return [
+    'Segue o seu orçamento da KeroSolar ☀️',
+    '',
+    `🔆 Sistema de ${o.kwp.toLocaleString('pt-BR')} kWp, instalado e homologado: *${brl(o.valorCliente)}*`,
+    ...(menor ? [`💳 Financiamento a partir de *${brl(menor)}/mês* (1ª parcela só daqui a 120 dias)`] : []),
+    '',
+    'No PDF estão os equipamentos, a economia, as formas de pagamento e as garantias. Qualquer dúvida, é só me chamar 😊',
+  ].join('\n')
+}
+
+export function documentoDoOrcamento(leadId: string, conversationId: string, o: OrcamentoSalvo, extra: { caption?: string; textoReserva?: string } = {}): DocumentoDepois {
+  return { leadId, conversationId, arquivo: o.arquivo, nome: `Orcamento-KeroSolar-${o.numero}.pdf`, caption: extra.caption ?? 'Segue o seu orçamento da KeroSolar ☀️', textoReserva: extra.textoReserva }
 }
 
 /** Envia o PDF pelo canal da conversa (enviar-arquivo.ts) e grava no histórico. Nunca lança. */
@@ -134,6 +155,15 @@ export async function enviarDocumentoDepois(d: DocumentoDepois | null | undefine
   } catch (e) {
     const motivo = e instanceof Error ? e.message : String(e)
     console.error('[belenus auto] PDF não enviado:', motivo)
-    await prisma.note.create({ data: { leadId: d.leadId, type: 'system', content: `⚠️ O PDF do orçamento não foi enviado ao cliente (${motivo}). Para enviar, escreva: envia orçamento` } }).catch(() => {})
+    // só o PDF ia sair → manda o texto do orçamento no lugar (o cliente não pode ficar sem resposta)
+    let reserva = ''
+    if (d.textoReserva?.trim()) {
+      try {
+        const { dispatchOutbound } = await import('../flow')
+        await dispatchOutbound(d.conversationId, d.textoReserva, undefined, 'ai', undefined, true)
+        reserva = ' Foi enviado o texto do orçamento no lugar.'
+      } catch (e2) { reserva = ` O texto de reserva também falhou (${e2 instanceof Error ? e2.message : 'erro'}).` }
+    }
+    await prisma.note.create({ data: { leadId: d.leadId, type: 'system', content: `⚠️ O PDF do orçamento não foi enviado ao cliente (${motivo}).${reserva} Para tentar o PDF de novo, escreva: envia orçamento` } }).catch(() => {})
   }
 }

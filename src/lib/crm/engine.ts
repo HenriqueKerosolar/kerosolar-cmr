@@ -1762,7 +1762,11 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
             if (bel.orcamento) merged.orcamentoBelenus = bel.orcamento as unknown as Prisma.InputJsonValue
             leadUpdate.value = bel.valorCliente
             leadUpdate.customFields = merged as Prisma.InputJsonValue
-            if (bel.orcamento) documentoDepois = documentoDoOrcamento(lead.id, conversation.id, bel.orcamento)
+            // "um ou outro" (dono, 24/11/2026): com PDF, vai SÓ o PDF com legenda curta; o texto fica de reserva
+            if (bel.orcamento) {
+              const { legendaOrcamento } = await import('./belenus/auto')
+              documentoDepois = documentoDoOrcamento(lead.id, conversation.id, bel.orcamento, { caption: legendaOrcamento(bel.orcamento, sb), textoReserva: outboundText })
+            }
             await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: bel.nota } }).catch(() => {})
           } else {
             await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `⚠️ Belenus falhou: orçamento saiu pela fórmula; motivo: ${bel.motivo}` } }).catch(() => {})
@@ -2029,11 +2033,21 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     }
   }
 
-  await simularDigitacao(outboundText)
-
-  await prisma.message.create({
-    data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: outboundText },
-  })
+  // Orçamento da Belenus com PDF → o PDF (com a legenda) É a resposta: não grava/envia o texto (vira reserva).
+  // Exceção: vários orçamentos na mesma rodada (texto + extras) seguem como texto.
+  const soPdf = !!documentoDepois && !orcamentosExtras.length
+  if (documentoDepois && !soPdf) documentoDepois.textoReserva = undefined
+  if (soPdf && documentoDepois) {
+    // transformador avisado agora / linha à vista entram na legenda para não se perder
+    const prefixo = outboundText.startsWith('Como o seu medidor é *monofásico*') ? `${outboundText.split('\n\n')[0]}\n\n` : ''
+    documentoDepois.caption = prefixo + documentoDepois.caption
+    documentoDepois.textoReserva = outboundText
+  } else {
+    await simularDigitacao(outboundText)
+    await prisma.message.create({
+      data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: outboundText },
+    })
+  }
   await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } })
 
   // Após o orçamento: agenda follow-up (~90s) — desativado no simulador
@@ -2075,5 +2089,5 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   for (const extra of orcamentosExtras) {
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: outboundSender, content: extra } })
   }
-  return { ...base, reply: outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage, ...(orcamentosExtras.length ? { followUps: orcamentosExtras } : {}), ...(documentoDepois ? { documentoDepois } : {}) }
+  return { ...base, reply: soPdf ? '' : outboundText, aiHandled: true, handoff: result.handoff, stage: finalStage, ...(orcamentosExtras.length ? { followUps: orcamentosExtras } : {}), ...(documentoDepois ? { documentoDepois } : {}) }
 }
