@@ -553,7 +553,18 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
     await prisma.note.create({ data: { leadId, type: 'system', content: `Operador pediu simulação de ${sim.tipo === 'cartao' ? 'cartão (2x a 24x)' : 'financiamento'} de R$ ${sim.valor.toLocaleString('pt-BR')} → enviada.` } }).catch(() => {})
     return true
   }
-  const cmd = lerComandoIndicacao(text)
+  // 🔢 "faz orçamento 4 placas de 700W com microinversor e telhado cerâmico" (dono, 25/11/2026): quantidade e
+  //    placa fixas; o consumo vira a geração estimada desse kit (para a fórmula e as parcelas).
+  const { lerComandoPlacas } = await import('./comando-indicacao')
+  const pl = lerComandoPlacas(text)
+  let kitPlacas: { placas: number; moduloW: number | null; micro: boolean } | undefined
+  let cmd: ReturnType<typeof lerComandoIndicacao>
+  if (pl) {
+    const { geracaoKeroSolar } = await import('./belenus/regras')
+    const kwpPl = Math.round(pl.placas * (pl.potenciaW ?? 620)) / 1000
+    kitPlacas = { placas: pl.placas, moduloW: pl.potenciaW, micro: pl.micro }
+    cmd = { tipo: 'kwh', valor: Math.max(1, Math.round(geracaoKeroSolar(kwpPl).mensal)) }
+  } else cmd = lerComandoIndicacao(text)
   if (!cmd) return false
   // comando incompleto/fora da faixa → avisa o operador (a tela mostra o erro) e NÃO manda nada ao cliente
   if ('erro' in cmd) throw new Error(cmd.erro)
@@ -565,9 +576,11 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   const { leadQuerHibrido } = await import('./hibrido')
   const hib = await leadQuerHibrido(leadId, conversationId, text)
   const base = cmd.tipo === 'kwh' ? calcularSolarPorKwh(cmd.valor) : calcularSolar(cmd.valor)
-  const kwh = cmd.tipo === 'kwh' ? `${cmd.valor} kWh` : `conta de R$ ${cmd.valor}`
+  const kwh = pl ? `${pl.placas} placas${pl.potenciaW ? ` de ${pl.potenciaW} W` : ''}${pl.micro ? ' com micro inversor' : ''}${pl.telhado ? `, telhado ${pl.telhado}` : ''} (~${cmd.valor} kWh/mês)`
+    : cmd.tipo === 'kwh' ? `${cmd.valor} kWh` : `conta de R$ ${cmd.valor}`
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
+  if (pl?.telhado) cf.telhado = pl.telhado   // o operador disse o telhado → vale para a estrutura e fica no lead
   // 🔌 medidor monofásico (guardado no lead) → o transformador entra no valor (regra do dono, 16/11/2026)
   let solar = ajustarPorMedidor(hib ? aplicarHibrido(base) : base, cf.medidor as string | undefined)
   // ⚡ Padrão novo (dono, 24/11/2026: "só vai pela Belenus"): on-grid → Belenus ao vivo (CRM aberto) ou banco de
@@ -578,7 +591,7 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
     const auto = await import('./belenus/auto')
     const chave = await auto.belenusAutoLigado()
     if (chave.ligado) {
-      const bel = await auto.orcamentoBelenusAuto({ leadId, consumoKwh: base.consumoKwh, cf, limiteMs: 90_000 })
+      const bel = await auto.orcamentoBelenusAuto({ leadId, consumoKwh: base.consumoKwh, cf, limiteMs: 90_000, kit: kitPlacas })
       if (bel.ok) {
         solar = auto.solarComValorBelenus(solar, bel.valorCliente, !!bel.resultado.transformador)
         // "um ou outro" (dono, 24/11/2026): vai SÓ o PDF com legenda curta; o texto fica de reserva se o PDF falhar

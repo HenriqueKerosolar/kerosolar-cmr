@@ -44,6 +44,38 @@ export function lerComandoSimulacao(text: string): ComandoSimulacao | null {
   return { tipo, valor }
 }
 
+// 🔢 Orçamento por QUANTIDADE DE PLACAS (dono, 25/11/2026) — a mensagem inteira é o comando:
+//   "faz orçamento 4 placas de 700W com microinversor e telhado cerâmico"
+//   "faz 10 placas de 620w telhado fibrocimento" · "orçamento de 6 painéis 700 w micro"
+// Placa em W (opcional: sem ela usa a faixa de 600 W da regra), micro (opcional), telhado (opcional: texto livre
+// depois de "telhado"). O texto do comando nunca vai ao cliente, só o orçamento.
+export type ComandoPlacas = { placas: number; potenciaW: number | null; micro: boolean; telhado: string | null; hibrido: boolean }
+
+export function lerComandoPlacas(text: string): ComandoPlacas | null {
+  const t = (text || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[.!]+$/, '').replace(/\s+/g, ' ')
+  const m = /^(?:faz(?:er)?\s+)?(?:(?:um|o)\s+)?(?:orcamento\s+)?(?:de\s+|com\s+|para\s+|pra\s+)?(\d{1,3})\s*(?:placas?|paineis|painel|modulos?)\b(.*)$/.exec(t)
+  if (!m) return null
+  // precisa começar com "faz" ou "orçamento" (frase solta "4 placas..." não é comando)
+  if (!/^(faz|orcamento)/.test(t)) return null
+  const placas = parseInt(m[1], 10)
+  let resto = ` ${m[2]} `
+  let potenciaW: number | null = null
+  const w = /\s(?:de\s+)?(\d{3,4})\s*(?:w|wp|watts?)\b/.exec(resto)
+  if (w) { potenciaW = parseInt(w[1], 10); resto = resto.replace(w[0], ' ') }
+  const micro = /\bmicro/.test(resto)
+  resto = resto.replace(/\b(?:com\s+)?micro\s*-?\s*(?:inversor(?:es)?)?\b/g, ' ')
+  const hibrido = /\bh[iy]brido\b/.test(resto)
+  resto = resto.replace(/\bh[iy]brido\b/g, ' ')
+  let telhado: string | null = null
+  const tel = /\b(?:no\s+|em\s+|com\s+|e\s+)?telhado\s+(?:de\s+)?([a-z ]+?)\s*$/.exec(resto)
+  if (tel) { telhado = tel[1].trim() || null; resto = resto.replace(tel[0], ' ') }
+  // sobrou algo além de conectivos → não é o comando (vai como texto normal)
+  if (resto.replace(/\b(?:e|com|de|para|pra|no|na|em|o|a|inversor|string|on ?grid)\b/g, '').trim()) return null
+  if (!(placas > 0) || placas > 200) return null
+  if (potenciaW != null && (potenciaW < 300 || potenciaW > 900)) return null
+  return { placas, potenciaW, micro, telhado, hibrido }
+}
+
 export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
   // "faz para 600 reais" / "faz pra 800 kwh" = mesmo comando (o dono escreve assim)
   const t = (text || '').trim().replace(/^faz\s+(?:para|pra|p\/)\s+/i, 'faz ')

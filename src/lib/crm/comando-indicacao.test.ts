@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lerComandoIndicacao } from './comando-indicacao'
+import { lerComandoIndicacao, lerComandoPlacas } from './comando-indicacao'
 
 describe('lerComandoIndicacao — só "faz XXXX" em kWh ou R$ (regra do dono 16/11/2026)', () => {
   it('"faz XXXX kwh" → por consumo', () => {
@@ -33,5 +33,24 @@ describe('lerComandoIndicacao — só "faz XXXX" em kWh ou R$ (regra do dono 16/
       'faz 800 kwh\nfoi o do outro cliente',
       'faz',
     ]) expect(lerComandoIndicacao(t)).toBeNull()
+  })
+})
+
+describe('lerComandoPlacas — "faz orçamento N placas de W W com micro e telhado X" (dono 25/11/2026)', () => {
+  it('frase do dono', () => {
+    expect(lerComandoPlacas('Faz Orçamento 4 placas de 700W com microinversor e telhado ceramico'))
+      .toEqual({ placas: 4, potenciaW: 700, micro: true, telhado: 'ceramico', hibrido: false })
+  })
+  it('variações', () => {
+    expect(lerComandoPlacas('faz 10 placas de 620w telhado fibrocimento')).toEqual({ placas: 10, potenciaW: 620, micro: false, telhado: 'fibrocimento', hibrido: false })
+    expect(lerComandoPlacas('orçamento de 6 painéis 700 w micro')).toEqual({ placas: 6, potenciaW: 700, micro: true, telhado: null, hibrido: false })
+    expect(lerComandoPlacas('faz um orçamento com 8 módulos')).toEqual({ placas: 8, potenciaW: null, micro: false, telhado: null, hibrido: false })
+    expect(lerComandoPlacas('Faz orçamento 4 placas de 700W com micro inversor no telhado de cerâmica.')?.telhado).toBe('ceramica')
+  })
+  it('frases que NÃO são o comando', () => {
+    expect(lerComandoPlacas('4 placas de 700W')).toBeNull()
+    expect(lerComandoPlacas('faz 800 kwh')).toBeNull()
+    expect(lerComandoPlacas('faz orçamento 4 placas para o cliente que mora em niterói')).toBeNull()
+    expect(lerComandoPlacas('o vizinho tem 4 placas de 700w')).toBeNull()
   })
 })

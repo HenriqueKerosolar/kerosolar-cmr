@@ -62,14 +62,19 @@ function comLimite<T>(p: Promise<T>, ms: number): Promise<T> {
  */
 export async function orcamentoBelenusAuto(p: {
   leadId: string; consumoKwh: number; cf: Record<string, unknown>; limiteMs?: number; agora?: Date
+  /** Pedido por placas ("faz orçamento 4 placas de 700W com micro"): quantidade e placa fixas. */
+  kit?: { placas: number; moduloW: number | null; micro: boolean }
 }): Promise<OrcamentoAuto> {
   const limite = p.limiteMs ?? LIMITE_AUTO_MS
   const inicio = Date.now()
   try {
     if (!(p.consumoKwh > 0)) return { ok: false, motivo: 'sem consumo para dimensionar' }
-    const dim = dimensionarConsumoKeroSolar(p.consumoKwh)
+    const dimC = dimensionarConsumoKeroSolar(p.consumoKwh)
+    const dim = p.kit
+      ? { kwp: Math.round(p.kit.placas * (p.kit.moduloW ?? 620)) / 1000, placas: p.kit.placas }
+      : dimC
     const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { contact: { select: { name: true, phone: true, whatsappId: true, email: true, customFields: true } } } })
-    const entrada = entradaDoLead(dim.kwp, p.cf, lead?.contact)
+    const entrada = { ...entradaDoLead(dim.kwp, p.cf, lead?.contact, { micro: p.kit?.micro }), ...(p.kit ? { placas: p.kit.placas, moduloW: p.kit.moduloW } : {}) }
     // 1º Belenus ao vivo (pelo CRM aberto no navegador / proxy); fora do alcance ou falhou → banco de referência
     let resultado: ResultadoCotacao | null = null
     let motivoBelenus = ''
@@ -93,7 +98,7 @@ export async function orcamentoBelenusAuto(p: {
       console.log('[belenus auto] usando banco (%s): %d placas de %s', motivoBelenus, ref.placas, ref.criadoEm)
     }
     const valorCliente = resultado.valorCliente as number
-    resultado.avisos.unshift(`Orçamento AUTOMÁTICO (IA): consumo ${Math.round(p.consumoKwh)} kWh → ${dim.kwp.toLocaleString('pt-BR')} kWp pela fórmula (HSP 4,5 × 30 × 80%).${doBanco ? ` Belenus ao vivo: ${motivoBelenus}.` : ''}`)
+    resultado.avisos.unshift(`${p.kit ? `Orçamento por PLACAS: ${p.kit.placas} placas${p.kit.moduloW ? ` de ${p.kit.moduloW} W` : ''}${p.kit.micro ? ' com micro inversor' : ''} (${dim.kwp.toLocaleString('pt-BR')} kWp).` : `Orçamento AUTOMÁTICO (IA): consumo ${Math.round(p.consumoKwh)} kWh → ${dim.kwp.toLocaleString('pt-BR')} kWp pela fórmula (HSP 4,5 × 30 × 80%).`}${doBanco ? ` Belenus ao vivo: ${motivoBelenus}.` : ''}`)
     // PDF KeroSolar (mesma geração do "cota belenus"); falha no PDF não derruba o orçamento (vai só o texto)
     let orcamento: OrcamentoSalvo | null = null
     let notaPdf = ''

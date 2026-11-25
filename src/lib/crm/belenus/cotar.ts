@@ -14,7 +14,7 @@ import {
   DESTINO_PADRAO, ESTRUTURA_DE_N_PAINEIS, LIMITE_MONOFASICO_KW, MARCA_PREFERIDA, MICRO_KEROSOLAR, OVERLOAD_MONOFASICO_LIMITE, PALAVRAS_TELHADO,
   PLACAS_POR_MICRO, PRECO_KEROSOLAR, RE_NAO_ON_GRID, RE_ON_GRID, REGRAS_INVERSOR_KEROSOLAR, TRANSFORMADOR_PRECO,
   aplicarRegrasComponentes, calcularDps, calcularStrings, campo, codigoDe, corpoSalvarOrcamento, descricaoDe, dimensionarConsumoKeroSolar,
-  ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, escolherModulo600, escolherOpcao, freteEntregaNoCliente, lerComandoBelenus,
+  ehDps, ehMarcaPreferida, ehObj, escolherInversor, escolherMicro, escolherModulo600, escolherOpcao, freteEntregaNoCliente, lerComandoBelenus, ordenarComoSite,
   lerConfirmacao, lerDadosCliente, lerDestino, lerLigacao, lerTelhado, lerTensao, listaDe, num, numeroCotacaoDe, opcaoTexto, paraPeca,
   potenciaKw, potenciaW, qtdeDe, reLigacao, reTensao, semRepetidos, textoNota, totalSeTiverPreco, valorAoCliente, valorSeguroDe,
   type Confirmacao, type Ligacao, type Obj, type Peca, type ResultadoCotacao, type Telhado,
@@ -26,6 +26,9 @@ export type EntradaCotacao = {
   tensao?: number | null     // V (do lead)
   telhado?: Telhado | null   // do lead
   micro?: boolean            // cliente pediu micro inversor → DEYE, 1 para cada 4 placas
+  /** Pedido por placas ("4 placas de 700W"): usa EXATAMENTE essa quantidade e a placa mais próxima dessa potência. */
+  placas?: number | null
+  moduloW?: number | null
   destino?: { cidade: string; uf: string } | null   // município do lead (frete); sem ele → Rio de Janeiro - RJ
   nomeCliente?: string | null                         // nome do contato do lead (nome do orçamento salvo na Belenus)
   entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
@@ -69,6 +72,18 @@ export async function montarKitBelenus(entrada: EntradaCotacao, opts: { esperaMa
  * Entrada da cotação a partir do lead (customFields + contato) — usada pelo "cota belenus" e pelo orçamento
  * automático do motor (que passa os customFields já atualizados nesta rodada: medidor/cidade lidos agora).
  */
+/** Placa da lista com potência mais próxima de `w` (empate → a primeira na ordem do site). */
+export function escolherModuloPorW(modulos: Obj[], w: number): Obj | null {
+  let melhor: Obj | null = null, dist = Infinity
+  for (const m of ordenarComoSite(modulos)) {
+    const p = num(campo(m, 'potencia'))
+    if (!(p > 0)) continue
+    const d = Math.abs(p - w)
+    if (d < dist) { melhor = m; dist = d }
+  }
+  return melhor
+}
+
 export function entradaDoLead(
   kwp: number, cf: Record<string, unknown>,
   contato: Parameters<typeof lerDadosCliente>[0], opts: { micro?: boolean } = {},
@@ -104,11 +119,17 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
   const rMod = await api.modulos( { site, potenciaProjeto: entrada.kwp, modulo: '', qtde: 0, fabricantes: [{ fabricante: '' }] }, 'módulos')
   const modulos = listaDe(rMod, 'modulos')
   if (!modulos.length) throw new ErroBelenus(`A Belenus não devolveu módulos para ${entrada.kwp} kWp.`)
-  const modulo = escolherModulo600(modulos)
+  // Pedido por placas com potência ("4 placas de 700W", dono 25/11/2026): a placa da lista mais próxima dessa
+  // potência (empate → ordem do site); sem potência → regra normal (faixa de 600 W).
+  const modulo = entrada.moduloW ? escolherModuloPorW(modulos, entrada.moduloW) : escolherModulo600(modulos)
   if (!modulo) throw new ErroBelenus('Nenhum módulo na faixa de 600 W (600–699 W) na lista da Belenus. Cote manualmente.')
-  const qtdModulos = num(campo(modulo, 'numeroModulos', 'qtdSugerida', 'qtde'))
+  const wEscolhido = num(campo(modulo, 'potencia'))
+  if (entrada.moduloW && wEscolhido !== entrada.moduloW) avisos.push(`Placa de ${entrada.moduloW} W não está na Belenus: usei a mais próxima (${wEscolhido} W).`)
+  const qtdModulos = entrada.placas && entrada.placas > 0 ? entrada.placas : num(campo(modulo, 'numeroModulos', 'qtdSugerida', 'qtde'))
   if (!(qtdModulos > 0)) throw new ErroBelenus('A Belenus não sugeriu a quantidade de módulos (formato inesperado — veja o log [belenus]).')
-  const potenciaKit = num(campo(modulo, 'potenciaMaxima', 'potenciaSugerida'))
+  const potenciaKit = entrada.placas && wEscolhido > 0
+    ? Math.round(entrada.placas * wEscolhido) / 1000
+    : num(campo(modulo, 'potenciaMaxima', 'potenciaSugerida'))
   // INFO_KIT do site: o módulo escolhido com potenciaProjeto = potenciaMaxima (goToInversor)
   const kit: Obj = { ...modulo, numeroModulos: qtdModulos, potenciaProjeto: Number.isFinite(potenciaKit) && potenciaKit > 0 ? potenciaKit : entrada.kwp }
   const kitKwp = Number(kit.potenciaProjeto)
