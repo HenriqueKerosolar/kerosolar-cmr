@@ -1726,14 +1726,21 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 18/11/2026: NUNCA manda orçamento automático junto com a passagem para o atendente (a IA passou para o
   //    humano e o orçamento saiu mesmo assim) nem para quem quer AMPLIAR o sistema que já tem.
   const ehAmpliacaoLead = !!(lead.customFields as Record<string, unknown> | null)?.ampliacao
-  // 24/11/2026: cliente escreveu "Faz 700 kwh" e a IA passou para o humano em vez de orçar. Pedido de orçamento com
-  // CONSUMO EXPLÍCITO em kWh na mensagem (e sem pedir atendente) → orça; a passagem para humano da IA é ignorada.
-  if (result.handoff && solar && mudancaRelevante && !acIntent && !ehAmpliacaoLead
+  // 24/11/2026: PEDIDO EXPLÍCITO de orçamento = mensagem curta com o consumo em kWh ("Faz 700 kwh", "quero 550 kWh")
+  // e sem pedir atendente/reclamar. Vale mesmo se o consumo for o MESMO do orçamento anterior (cliente pediu de novo:
+  // "Faz para 550kwh" caiu na trava de consumo igual e saiu "Não entendi bem sua pergunta").
+  const pedidoExplicitoKwh = !!solar && text.trim().length <= 80
     && /\d[\d.,]*\s*(kwh|kw\s*\/?\s*h)\b/i.test(text)
-    && !/(atendente|humano|pessoa|vendedor|consultor|falar com (algu[eé]m|voc[eê]s)|ligar|liga[çc][aã]o|reclama|problema|defeito)/i.test(text)) {
+    && !/(atendente|humano|pessoa|vendedor|consultor|falar com (algu[eé]m|voc[eê]s)|ligar|liga[çc][aã]o|reclama|problema|defeito|\?)/i.test(text)
+  // ...e a passagem para humano que a IA quis fazer nesse caso é ignorada ("Faz 700 kwh" → "Vou confirmar…").
+  if (result.handoff && pedidoExplicitoKwh && !acIntent && !ehAmpliacaoLead) {
     console.log('[engine] handoff da IA ignorado: pedido de orçamento com consumo explícito em kWh')
     result.handoff = false
   }
+  // Dono (24/11/2026): pediu de novo o MESMO valor → "já foi enviado com esse valor" + REENVIA o mesmo orçamento
+  // (PDF se houver; senão o texto) — não faz cotação nova.
+  const reenviarMesmo = pedidoExplicitoKwh && !mudancaRelevante && !contaNovaLida && !transformadorNovo && !acIntent
+    && !ehAmpliacaoLead && !result.handoff && !!(cf.solar as { valorSistema?: number } | undefined)?.valorSistema
   const presentBudget = !!solar && (mudancaRelevante || contaNovaLida || transformadorNovo) && !acIntent
     && !result.handoff && !ehAmpliacaoLead
 
@@ -1744,6 +1751,20 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   let outboundText = presentBudget && solar ? orcamentoTexto(solar) : corrigirCumprimento(result.reply)
   let orcamentosExtras: string[] = []
   let documentoDepois: import('./belenus/auto').DocumentoDepois | null = null
+  if (reenviarMesmo) {
+    const solarAnterior = cf.solar as Parameters<typeof orcamentoTexto>[0]
+    const kwhTxt = Math.round(consumoAntes ?? solarAnterior.consumoKwh ?? 0).toLocaleString('pt-BR')
+    const aviso = `Esse orçamento com ${kwhTxt} kWh já foi enviado 😊 Segue de novo:`
+    outboundText = `${aviso}\n\n${orcamentoTexto(solarAnterior)}`
+    const { validarOrcamentoSalvo } = await import('./belenus/orcamento')
+    const pdf = validarOrcamentoSalvo(cf.orcamentoBelenus)
+    // tem o PDF do mesmo orçamento (e dentro da validade) → reenvia o PDF (o texto fica de reserva)
+    if ('ok' in pdf && Math.abs((pdf.ok.valorCliente ?? 0) - (solarAnterior.valorSistema ?? 0)) < 1) {
+      const { documentoDoOrcamento, legendaOrcamento } = await import('./belenus/auto')
+      documentoDepois = documentoDoOrcamento(lead.id, conversation.id, pdf.ok, { caption: `${aviso}\n\n${legendaOrcamento(pdf.ok, solarAnterior)}`, textoReserva: outboundText })
+    }
+    console.log('[engine] mesmo valor pedido de novo → reenviando o orçamento (%s)', documentoDepois ? 'PDF' : 'texto')
+  }
   if (presentBudget && solar) {
     // ⚡ ORÇAMENTO AUTOMÁTICO PELA BELENUS (Fase 5 — dono liberou, 24/11/2026): kit e preço reais da distribuidora
     //    (valor ao cliente = total Belenus × 1,6 + transformador). Falha ou demora (> ~120 s) → fica a fórmula de
@@ -1925,7 +1946,7 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 2) Loop SEMÂNTICO: as últimas 2 respostas da IA + a nova todas começam com as
   //    mesmas 5 palavras (ex.: "Sim estou aqui como posso") → IA travou num ciclo de
   //    variações do mesmo texto → passa pro humano imediatamente.
-  if (!result.handoff && !presentBudget && outboundText?.trim()) {
+  if (!result.handoff && !presentBudget && !reenviarMesmo && outboundText?.trim()) {
     const normMsg = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
     const prefixOf = (s: string) => normMsg(s).split(' ').slice(0, 5).join(' ')
     const recentOut = await prisma.message.findMany({
@@ -2027,7 +2048,7 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 🔁 NUNCA REPETIR A MESMA RESPOSTA: se a IA gerou exatamente o que já foi enviado há pouco,
   //    em vez de repetir pede para o cliente refazer a pergunta (regra do dono).
   //    (2026-11-12: compara com TODA a conversa e pega também resposta "quase igual", não só idêntica)
-  if (!presentBudget && outboundText) {
+  if (!presentBudget && !reenviarMesmo && outboundText) {
     const ult = await prisma.message.findMany({ where: { conversationId: conversation.id, direction: 'outbound' }, orderBy: { createdAt: 'desc' }, take: 40, select: { content: true } })
     const { repeteAlguma } = await import('./repeticao')
     const anteriores = ult.map((m) => m.content ?? '')
