@@ -114,6 +114,8 @@ export type IngestInput = {
   name?: string | null
   phone?: string | null
   externalMessageId?: string | null
+  /** id da mensagem de entrada JÁ gravada que ficou sem resposta (resposta-garantida.ts) → reprocessa sem duplicar */
+  reprocessarId?: string | null
   pipelineId?: string | null
   accountId?: string | null
   imageBase64?: string           // imagem enviada pelo cliente (conta de luz, foto etc.)
@@ -354,7 +356,7 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 3.5) DEDUPLICAÇÃO — evita resposta duplicada quando a MESMA mensagem chega 2x
   // (Baileys reentrega/retransmite, reconexão pós-restart reprocessa offline, evento duplo).
   // Se já existe uma mensagem inbound com este externalMessageId, ignora silenciosamente.
-  if (input.externalMessageId) {
+  if (input.externalMessageId && !input.reprocessarId) {
     const jaProcessada = await prisma.message.findFirst({
       where: { direction: 'inbound', externalId: input.externalMessageId },
       select: { id: true },
@@ -371,7 +373,10 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
 
   // 4) Mensagem recebida
   const now = new Date()
-  const msgRecebida = await prisma.message.create({
+  // 🛟 Reprocessamento (resposta-garantida.ts): a mensagem JÁ está gravada — usa a mesma, não cria outra.
+  const msgRecebida = input.reprocessarId
+    ? await prisma.message.findUniqueOrThrow({ where: { id: input.reprocessarId } })
+    : await prisma.message.create({
     data: {
       conversationId: conversation.id, direction: 'inbound', senderType: 'contact',
       content: input.displayText ?? text, externalId: input.externalMessageId ?? null,
@@ -1721,6 +1726,14 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // 18/11/2026: NUNCA manda orçamento automático junto com a passagem para o atendente (a IA passou para o
   //    humano e o orçamento saiu mesmo assim) nem para quem quer AMPLIAR o sistema que já tem.
   const ehAmpliacaoLead = !!(lead.customFields as Record<string, unknown> | null)?.ampliacao
+  // 24/11/2026: cliente escreveu "Faz 700 kwh" e a IA passou para o humano em vez de orçar. Pedido de orçamento com
+  // CONSUMO EXPLÍCITO em kWh na mensagem (e sem pedir atendente) → orça; a passagem para humano da IA é ignorada.
+  if (result.handoff && solar && mudancaRelevante && !acIntent && !ehAmpliacaoLead
+    && /\d[\d.,]*\s*(kwh|kw\s*\/?\s*h)\b/i.test(text)
+    && !/(atendente|humano|pessoa|vendedor|consultor|falar com (algu[eé]m|voc[eê]s)|ligar|liga[çc][aã]o|reclama|problema|defeito)/i.test(text)) {
+    console.log('[engine] handoff da IA ignorado: pedido de orçamento com consumo explícito em kWh')
+    result.handoff = false
+  }
   const presentBudget = !!solar && (mudancaRelevante || contaNovaLida || transformadorNovo) && !acIntent
     && !result.handoff && !ehAmpliacaoLead
 
