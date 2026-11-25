@@ -38,6 +38,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     falhou('tipo', 'tipo de arquivo desconhecido')
     return NextResponse.json({ error: `O WhatsApp não aceita esse tipo de arquivo ("${file.name}"). Envie PDF, imagem, vídeo, áudio, Word, Excel ou PowerPoint.` }, { status: 400 })
   }
+  // 📄 "orça esse" na legenda de um PDF = orçamento do FORNECEDOR (ex.: híbrido): NÃO vai ao cliente (tem o custo).
+  //    Vira o PDF KeroSolar com a margem e fica só para o operador, até ele escrever "envia orçamento".
+  if (mime === 'application/pdf') {
+    const { lerComandoOrcaEsse } = await import('@/lib/crm/belenus/pdf-fornecedor')
+    const cmd = lerComandoOrcaEsse(caption)
+    if (cmd) {
+      try {
+        const { processarPdfFornecedor } = await import('@/lib/crm/belenus/pdf-fornecedor-cmd')
+        const texto = await processarPdfFornecedor(leadId, Buffer.from(await file.arrayBuffer()), cmd.margem)
+        return NextResponse.json({ ok: true, info: texto })
+      } catch (err) {
+        falhou('orça esse', err instanceof Error ? err.message : String(err))
+        return NextResponse.json({ error: `${err instanceof Error ? err.message : 'Falha ao ler o PDF do fornecedor.'} (o PDF NÃO foi enviado ao cliente)` }, { status: 400 })
+      }
+    }
+  }
   // Envio pelo canal da conversa (Instagram/Facebook pela ponte; WhatsApp pela API oficial) — mesma função
   // usada pelo comando "envia orçamento" (src/lib/crm/enviar-arquivo.ts).
   try {

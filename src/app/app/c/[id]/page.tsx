@@ -221,10 +221,17 @@ export default function ChatPage() {
     setEnviando(true)
     try {
       const fd = new FormData(); fd.append('file', file)
+      // "orça esse" escrito na caixa antes de anexar = PDF do fornecedor (não vai ao cliente); só esse caso usa o texto
+      const ehOrca = /^\s*or[çc]a(r)?\s+(esse|este|isso)\b/i.test(texto)
+      if (ehOrca) fd.append('caption', texto.trim())
       const r = await fetch(`/api/leads/${leadId}/send-media`, { method: 'POST', body: fd })
+      if (ehOrca && r.ok) setTexto('')
       if (!r.ok) {
         const e = await r.json().catch(() => null)
         alert('Não consegui enviar: ' + (e?.error || `erro ${r.status}`))
+      } else {
+        const d = await r.json().catch(() => null)
+        if (d?.info) alert(d.info) // "orça esse": orçamento gerado, não foi ao cliente
       }
       await carregar()
     } catch { alert('Falha de conexão ao enviar o arquivo.') }

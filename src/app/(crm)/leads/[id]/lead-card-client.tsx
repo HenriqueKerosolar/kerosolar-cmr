@@ -269,8 +269,11 @@ export function LeadCardClient({ lead }: { lead: Lead }) {
         const data = await res.json().catch(() => ({}))
         alert(data.error || 'Falha ao enviar o arquivo.')
       } else {
+        const data = await res.json().catch(() => ({}))
         setText('')
         await poll()
+        // "orça esse" (PDF do fornecedor): não foi ao cliente — mostra o resumo do orçamento gerado
+        if (data.info) alert(data.info)
       }
     } catch {
       alert('Falha ao enviar o arquivo.')

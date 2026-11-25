@@ -1743,20 +1743,22 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
       const { podeUsarBelenusNoOrcamento } = await import('./belenus/auto')
       if (podeUsarBelenusNoOrcamento({
         permitido: !!input.permitirBelenus, simulador: isSimulator, hibrido: !!solar.hibrido || !!cfRodada.hibrido,
-        ampliacao: ehAmpliacaoLead || !!cfRodada.ampliacao, valorVendaFixo: valorDaVendaFixo, kitMinimo,
+        // kit mínimo (consumo baixo) TAMBÉM vai pela Belenus, dimensionado no consumo do menor kit (dono, 24/11/2026:
+        // "mandou no formato antigo e nem buscou o orçamento" — cliente de 138 kWh)
+        ampliacao: ehAmpliacaoLead || !!cfRodada.ampliacao, valorVendaFixo: valorDaVendaFixo, kitMinimo: false,
         variosValores: !!vp && vp.valores.length >= 2, soTransformador: transformadorNovo,
       })) {
         const { belenusAutoLigado, orcamentoBelenusAuto, documentoDoOrcamento } = await import('./belenus/auto')
         const chave = await belenusAutoLigado()
         if (chave.ligado) {
-          const bel = await orcamentoBelenusAuto({ leadId: lead.id, consumoKwh: solar.consumoKwh, cf: cfRodada })
+          const bel = await orcamentoBelenusAuto({ leadId: lead.id, consumoKwh: kitMinimo ? Math.max(solar.consumoKwh, MINIMO_KIT_KWH) : solar.consumoKwh, cf: cfRodada })
           if (bel.ok) {
             const { solarComValorBelenus } = await import('./belenus/auto')
             // parcelas/payback/economia recalculadas pelo valor da Belenus; transformador só se a Belenus o incluiu
             const sb = solarComValorBelenus(solar, bel.valorCliente, !!bel.resultado.transformador)
             solar = sb
             outboundText = orcamentoTexto(sb)
-            merged.solar = { ...sb, kitMinimo: false }
+            merged.solar = { ...sb, kitMinimo }
             if (bel.orcamento) merged.orcamentoBelenus = bel.orcamento as unknown as Prisma.InputJsonValue
             leadUpdate.value = bel.valorCliente
             leadUpdate.customFields = merged as Prisma.InputJsonValue
