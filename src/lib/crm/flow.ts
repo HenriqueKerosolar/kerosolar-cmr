@@ -341,7 +341,20 @@ export async function dispatchOutbound(
  * Dispara a "chamada" da etapa quando um lead ENTRA nela.
  * Mensagens com delay 0 saem na hora; as demais ficam agendadas.
  */
+/**
+ * Dono (25/11/2026): etapas de ESPERA — o cliente já recebeu o que precisava (orçamento) ou está na repescagem.
+ * Ao entrar nelas, a conversa é FECHADA (sai do "Precisam de mim" do Inbox). Ela reabre sozinha na próxima
+ * mensagem do cliente; os avisos programados da etapa continuam normalmente.
+ */
+export const ETAPA_FECHA_CONVERSA = /recebeu or[çc]amento|repescagem|\bdias depois\b|leads adquiridos/i
+
 export async function enterStage(leadId: string, stageId: string) {
+  {
+    const st = await prisma.stage.findUnique({ where: { id: stageId }, select: { name: true } }).catch(() => null)
+    if (st && ETAPA_FECHA_CONVERSA.test(st.name)) {
+      await prisma.conversation.updateMany({ where: { leadId, resolvedAt: null }, data: { resolvedAt: new Date() } }).catch(() => {})
+    }
+  }
   // 🧹 Ao ENTRAR numa etapa, cancela as automações PENDENTES das OUTRAS etapas (etapas anteriores
   //    não "carregam" sua automação pra cá). Mantém só as da etapa atual (que serão (re)armadas
   //    abaixo). Roda sempre, mesmo se a etapa nova não tiver bot.
