@@ -581,6 +581,9 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
   if (pl?.telhado) cf.telhado = pl.telhado   // o operador disse o telhado → vale para a estrutura e fica no lead
+  // o operador disse o medidor ("faz 300 kwh monofásico") → vale para inversor/transformador e fica no lead
+  const medidorCmd = pl?.medidor ?? ('medidor' in cmd ? cmd.medidor : undefined)
+  if (medidorCmd) cf.medidor = medidorCmd
   // 🔌 medidor monofásico (guardado no lead) → o transformador entra no valor (regra do dono, 16/11/2026)
   let solar = ajustarPorMedidor(hib ? aplicarHibrido(base) : base, cf.medidor as string | undefined)
   // ⚡ Padrão novo (dono, 24/11/2026: "só vai pela Belenus"): on-grid → Belenus ao vivo (CRM aberto) ou banco de

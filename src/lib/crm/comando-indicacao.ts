@@ -9,9 +9,10 @@
 //   ("para"/"pra" depois do "faz" é opcional; o texto do comando NUNCA vai ao cliente, só o orçamento)
 //   "faz 800" (sem unidade)                                  → NÃO adivinha: pede para dizer kWh ou R$
 
+export type Medidor = 'monofásico' | 'bifásico' | 'trifásico'
 export type ComandoOrcamento =
-  | { tipo: 'kwh'; valor: number }
-  | { tipo: 'reais'; valor: number }
+  | { tipo: 'kwh'; valor: number; medidor?: Medidor }
+  | { tipo: 'reais'; valor: number; medidor?: Medidor }
   | { erro: string }
 
 function numero(bruto: string): number {
@@ -49,7 +50,7 @@ export function lerComandoSimulacao(text: string): ComandoSimulacao | null {
 //   "faz 10 placas de 620w telhado fibrocimento" · "orçamento de 6 painéis 700 w micro"
 // Placa em W (opcional: sem ela usa a faixa de 600 W da regra), micro (opcional), telhado (opcional: texto livre
 // depois de "telhado"). O texto do comando nunca vai ao cliente, só o orçamento.
-export type ComandoPlacas = { placas: number; potenciaW: number | null; micro: boolean; telhado: string | null; hibrido: boolean }
+export type ComandoPlacas = { placas: number; potenciaW: number | null; micro: boolean; telhado: string | null; hibrido: boolean; medidor?: Medidor }
 
 export function lerComandoPlacas(text: string): ComandoPlacas | null {
   const t = (text || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[.!]+$/, '').replace(/\s+/g, ' ')
@@ -66,6 +67,9 @@ export function lerComandoPlacas(text: string): ComandoPlacas | null {
   resto = resto.replace(/\b(?:com\s+)?micro\s*-?\s*(?:inversor(?:es)?)?\b/g, ' ')
   const hibrido = /\bh[iy]brido\b/.test(resto)
   resto = resto.replace(/\bh[iy]brido\b/g, ' ')
+  let medidor: Medidor | null = null
+  const md = /\b(?:medidor\s+|padrao\s+)?(mono|bi|tri)fasic[oa]\b/.exec(resto)
+  if (md) { medidor = md[1] === 'mono' ? 'monofásico' : md[1] === 'bi' ? 'bifásico' : 'trifásico'; resto = resto.replace(md[0], ' ') }
   let telhado: string | null = null
   const tel = /\b(?:no\s+|em\s+|com\s+|e\s+)?telhado\s+(?:de\s+)?([a-z ]+?)\s*$/.exec(resto)
   if (tel) { telhado = tel[1].trim() || null; resto = resto.replace(tel[0], ' ') }
@@ -73,10 +77,18 @@ export function lerComandoPlacas(text: string): ComandoPlacas | null {
   if (resto.replace(/\b(?:e|com|de|para|pra|no|na|em|o|a|inversor|string|on ?grid)\b/g, '').trim()) return null
   if (!(placas > 0) || placas > 200) return null
   if (potenciaW != null && (potenciaW < 300 || potenciaW > 900)) return null
-  return { placas, potenciaW, micro, telhado, hibrido }
+  return { placas, potenciaW, micro, telhado, hibrido, ...(medidor ? { medidor } : {}) }
 }
 
 export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
+  // 26/11/2026 (Iara): "Faz 300 Kwh Monofásico" saiu como texto — o medidor no fim também faz parte do comando
+  const med = /\s+(?:medidor\s+|padr[aã]o\s+)?(mono|bi|tri)f[aá]sic[oa]\b/i.exec(text || '')
+  if (med) {
+    const r = lerComandoIndicacao((text || '').replace(med[0], ' ').replace(/\s+/g, ' '))
+    if (!r || 'erro' in r) return r
+    const tipoMed = med[1].toLowerCase()
+    return { ...r, medidor: tipoMed === 'mono' ? 'monofásico' : tipoMed === 'bi' ? 'bifásico' : 'trifásico' }
+  }
   // "faz para 600 reais" / "faz pra 800 kwh" = mesmo comando (o dono escreve assim)
   const t = (text || '').trim().replace(/^faz\s+(?:para|pra|p\/)\s+/i, 'faz ')
   const fim = String.raw`\s*(?:h[ií]brido)?\s*[.!]?$`

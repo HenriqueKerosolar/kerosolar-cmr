@@ -54,3 +54,16 @@ describe('lerComandoPlacas — "faz orçamento N placas de W W com micro e telha
     expect(lerComandoPlacas('o vizinho tem 4 placas de 700w')).toBeNull()
   })
 })
+
+describe('medidor no fim do comando (26/11/2026, Iara: "Faz 300 Kwh Monofásico" saiu como texto)', () => {
+  it('faz kWh/R$ + medidor', () => {
+    expect(lerComandoIndicacao('Faz 300 Kwh Monofásico')).toEqual({ tipo: 'kwh', valor: 300, medidor: 'monofásico' })
+    expect(lerComandoIndicacao('faz 500 kwh trifasico')).toEqual({ tipo: 'kwh', valor: 500, medidor: 'trifásico' })
+    expect(lerComandoIndicacao('faz R$ 400 bifásico')).toEqual({ tipo: 'reais', valor: 400, medidor: 'bifásico' })
+    expect(lerComandoIndicacao('faz 300 kwh medidor monofásico')).toEqual({ tipo: 'kwh', valor: 300, medidor: 'monofásico' })
+    expect(lerComandoIndicacao('o padrão é monofásico')).toBeNull()
+  })
+  it('placas + medidor', () => {
+    expect(lerComandoPlacas('faz 4 placas de 700w micro monofásico telhado cerâmico')).toEqual({ placas: 4, potenciaW: 700, micro: true, telhado: 'ceramico', hibrido: false, medidor: 'monofásico' })
+  })
+})
