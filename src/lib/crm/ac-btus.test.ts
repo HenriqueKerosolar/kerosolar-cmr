@@ -20,3 +20,20 @@ describe('ar-condicionado com vários BTUs (Jonni, 24/11/2026)', () => {
     expect(consumoAcKwhMes(9000, 12)).toBe(210)
   })
 })
+
+describe('"12 e 24 bitus" e horas em negação (Sheila, 26/11/2026)', () => {
+  it('bitus curtos = dois aparelhos, sem horas', async () => {
+    const { horasDoTexto } = await import('./ac-calc')
+    expect(extrairBtus('12 e 24 bitus')).toEqual({ btus: [12000, 24000], alternativas: false })
+    expect(extrairAc('12 e 24 bitus')).toEqual({ units: 2, btu: 12000, hoursPerDay: null, btus: [12000, 24000] })
+    expect(extrairBtus('9 ou 12 btus').alternativas).toBe(true)
+    expect(horasDoTexto('12 e 24 bitus')).toBeNull()
+    expect(horasDoTexto('Eu não vou ligar 24 por dia')).toBeNull()
+    expect(horasDoTexto('vou ligar 8 horas por dia')).toBe(8)
+    expect(horasDoTexto('uns 6h')).toBe(6)
+    expect(horasDoTexto('10 por dia')).toBe(10)
+  })
+  it('conta dos dois aparelhos', () => {
+    expect(consumoAcKwhMes(12000, 8, 1) + consumoAcKwhMes(24000, 8, 1)).toBe(186 + 372)
+  })
+})

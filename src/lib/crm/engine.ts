@@ -1621,23 +1621,30 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
   // ❄️ Pedido de ar-condicionado adicional → guarda, SINALIZA pra revisão, e
   //    agenda fallback de 30 min (se o cliente não informar as horas).
   //    Detecta por regex (confiável) com fallback pro campo estruturado da IA.
-  const { extrairAc } = await import('./ac-calc')
+  const { extrairAc, textoFalaDeHoras } = await import('./ac-calc')
+  // 26/11/2026 (Sheila: "12 e 24 bitus" → a IA leu 24 h/dia e saiu orçamento de R$ 77 mil): as HORAS que a IA
+  // lê só valem se a mensagem fala mesmo de horas ("8 horas", "8h", "8 por dia"), e nunca em negação.
+  const horasIa = result.acRequest?.hoursPerDay != null && textoFalaDeHoras(text) ? result.acRequest.hoursPerDay : null
   const acDet = extrairAc(text) ?? (result.acRequest && (result.acRequest.btu || result.acRequest.units)
-    ? { units: result.acRequest.units ?? 1, btu: result.acRequest.btu ?? null, hoursPerDay: result.acRequest.hoursPerDay ?? null }
+    ? { units: result.acRequest.units ?? 1, btu: result.acRequest.btu ?? null, hoursPerDay: horasIa }
     : null)
-  const prevAc = (cf.ac as { units?: number; btu?: number | null; hoursPerDay?: number | null } | undefined)
+  const prevAc = (cf.ac as { units?: number; btu?: number | null; hoursPerDay?: number | null; btus?: number[] } | undefined)
   // acIntent: cliente mencionou querer instalar/usar mais ar-condicionado. Enquanto não temos
   // BTU + horas, NÃO mandamos o orçamento simples (ficaria subdimensionado, ignorando os ares):
   // perguntamos os dados e sinalizamos pra revisão. (Ver bloco de outboundText abaixo.)
   let acIntent = false
-  let acData: { units: number; btu: number | null; hoursPerDay: number | null } | null = null
+  let acData: { units: number; btu: number | null; hoursPerDay: number | null; btus?: number[] } | null = null
   if (acDet) {
     acIntent = true
     // Junta com o que já sabíamos do AC (ex: BTU veio antes, horas agora)
+    const btusDet = 'btus' in acDet ? acDet.btus : undefined
+    const btus = btusDet ?? prevAc?.btus
     const ac = {
-      units: acDet.units ?? prevAc?.units ?? 1,
+      // "12 e 24 btus" → 2 aparelhos; sem quantidade nova (1 é o padrão) → mantém a que já sabíamos
+      units: btusDet ? Math.max(acDet.units ?? 1, btusDet.length) : ((acDet.units ?? 1) > 1 ? acDet.units : (prevAc?.units ?? acDet.units ?? 1)),
       btu: acDet.btu ?? prevAc?.btu ?? null,
       hoursPerDay: acDet.hoursPerDay ?? prevAc?.hoursPerDay ?? null,
+      ...(btus?.length ? { btus } : {}),
     }
     merged.ac = ac
     acData = ac
@@ -1901,7 +1908,8 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
       const qtd = Math.max(1, acData?.units ?? 1)
       const horas = acData!.hoursPerDay!
       const lidos = extrairBtus(text)
-      const btus = lidos.btus.length ? lidos.btus : [acData!.btu!]
+      // BTUs desta mensagem; senão os que o cliente disse antes ("12 e 24 btus" → um de cada); senão o único
+      const btus = lidos.btus.length ? lidos.btus : (acData?.btus?.length ? acData.btus : [acData!.btu!])
       // "7500 ou 9000" → um cenário por opção (todos os aparelhos iguais); "7500 e 9000" → um aparelho de cada
       const cenarios: number[][] = lidos.alternativas
         ? [...btus].sort((a, b) => a - b).map((b) => Array(qtd).fill(b))

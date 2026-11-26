@@ -31,13 +31,27 @@ export function consumoAcPorHora(btu: number): number {
   return Math.round((btuDaTabela(btu) / 1000) * FATOR_AC * 100) / 100
 }
 
+// 26/11/2026 (Sheila: "12 e 24 bitus"): o cliente escreve "bitus", "bitu", "btus", "btu's", "btu"
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/\bb[iy]?t[uo]'?s?\b/g, 'btus')
 
-/** Todos os BTUs citados ("7500 e 9000", "7.500 ou 9.000 btus", "9 mil e 12 mil") e se são ALTERNATIVAS ("ou")
- *  ou aparelhos DIFERENTES ("e"). 24/11/2026 (Jonni: "2 ar condicionados de 7500 ou 9000 btus"). */
+/** "12 e 24 btus" / "9, 12 ou 18 btus" → [12000, 24000] (números curtos antes de "btus" = milhares). */
+function btusCurtos(t: string): number[] {
+  const out: number[] = []
+  for (const m of t.matchAll(/((?:\d{1,2}\s*(?:,|e|ou|\+)\s*)*\d{1,2})\s*(?:mil\s*)?btus\b/g)) {
+    for (const n of m[1].split(/\s*(?:,|e|ou|\+)\s*/)) {
+      const v = parseInt(n, 10)
+      if (v >= 5 && v <= 60) out.push(v * 1000)
+    }
+  }
+  return out
+}
+
+/** Todos os BTUs citados ("7500 e 9000", "7.500 ou 9.000 btus", "9 mil e 12 mil", "12 e 24 bitus") e se são
+ *  ALTERNATIVAS ("ou") ou aparelhos DIFERENTES ("e"). 24/11/2026 (Jonni: "2 ar condicionados de 7500 ou 9000 btus"). */
 export function extrairBtus(text: string): { btus: number[]; alternativas: boolean } {
   const t = norm(text)
-  const btus: number[] = []
+  const btus: number[] = [...btusCurtos(t)]
   for (const m of t.matchAll(/(\d{1,2})\s*mil\b/g)) btus.push(parseInt(m[1]) * 1000)
   for (const m of t.matchAll(/\b(\d{1,2}[.\s]\d{3}|\d{4,5})\b/g)) {
     const v = parseInt(m[1].replace(/[.\s]/g, ''))
@@ -48,7 +62,26 @@ export function extrairBtus(text: string): { btus: number[]; alternativas: boole
 }
 
 /** Detecta pedido de ar-condicionado na mensagem do cliente (determinístico). */
-export function extrairAc(text: string): { units: number; btu: number | null; hoursPerDay: number | null } | null {
+/**
+ * Horas por dia ditas pelo cliente — só com "hora(s)/h" ou "por dia", e nunca em negação
+ * (26/11/2026, Sheila: "Eu não vou ligar 24 por dia" virou 24 h/dia). "12 e 24 btus" NÃO são horas.
+ */
+export function horasDoTexto(text: string): number | null {
+  const t = norm(text)
+  const m = /(\d{1,2})\s*(?:h\b|hs\b|horas?\b|por dia\b|\/dia\b|ao dia\b)/.exec(t)
+  if (!m) return null
+  const antes = t.slice(Math.max(0, m.index - 30), m.index)
+  if (/\b(nao|nem|jamais|nunca)\b/.test(antes)) return null
+  const h = parseInt(m[1], 10)
+  return h >= 1 && h <= 24 ? h : null
+}
+
+/** Texto do cliente pode trazer horas? (para aceitar o que a IA leu) */
+export function textoFalaDeHoras(text: string): boolean {
+  return horasDoTexto(text) != null
+}
+
+export function extrairAc(text: string): { units: number; btu: number | null; hoursPerDay: number | null; btus?: number[] } | null {
   const t = norm(text)
   const ehAc =
     /ar.?condicionad|\bsplit\b|climatizad|\bbtus?\b/.test(t)
@@ -62,22 +95,23 @@ export function extrairAc(text: string): { units: number; btu: number | null; ho
     || /\b(o|os|meu|meus)\s+ar(es|zinho)?\b/.test(t)
   if (!ehAc) return null
 
-  // BTU: "9000 btu", "9.000", ou "9 mil"
+  // BTU: "9000 btu", "9.000", "9 mil", "12 e 24 btus"
   let btu: number | null = null
+  const lidos = extrairBtus(text)
   const mil = t.match(/(\d{1,2})\s*mil/)
   const btuNum = t.match(/(\d{1,3}(?:[.\s]?\d{3})|\d{4,6})\s*btu/) || t.match(/\b(\d{4,6})\b/)
-  if (mil) btu = parseInt(mil[1]) * 1000
+  if (lidos.btus.length) btu = lidos.btus[0]
+  else if (mil) btu = parseInt(mil[1]) * 1000
   else if (btuNum) btu = parseInt(btuNum[1].replace(/[.\s]/g, ''))
 
-  // Quantidade: "2 aparelhos", "2 ar", "3 split"
+  // Quantidade: "2 aparelhos", "2 ar", "3 split"; "12 e 24 btus" = 2 aparelhos diferentes
   let units = 1
   const q = t.match(/(\d+)\s*(aparelho|ar\b|split|unidad|maquina|equipamento)/)
   if (q) units = Math.max(1, parseInt(q[1]))
+  if (lidos.btus.length > 1 && !lidos.alternativas) units = Math.max(units, lidos.btus.length)
 
-  // Horas/dia: "8 horas", "8h por dia"
-  let hoursPerDay: number | null = null
-  const h = t.match(/(\d{1,2})\s*(h\b|hora)/)
-  if (h) hoursPerDay = parseInt(h[1])
+  // Horas/dia: "8 horas", "8h por dia", "8 por dia" (nunca em negação)
+  const hoursPerDay = horasDoTexto(text)
 
-  return { units, btu, hoursPerDay }
+  return { units, btu, hoursPerDay, ...(lidos.btus.length > 1 ? { btus: lidos.btus } : {}) }
 }

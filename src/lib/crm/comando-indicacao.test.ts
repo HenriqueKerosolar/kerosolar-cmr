@@ -79,3 +79,27 @@ describe('mil e telhado no fim (26/11/2026, Alberto: "8 mil reais telhado cerâm
     expect(lerComandoIndicacao('o telhado é cerâmico')).toBeNull()
   })
 })
+
+describe('outros verbos no lugar do "faz" (26/11/2026, Leila: "Simula 1200 Kwh telhado cerâmico")', () => {
+  it('simula/orça/cota/calcula/monta/manda/faça', () => {
+    expect(lerComandoIndicacao('Simula 1200 Kwh telhado cerâmico')).toEqual({ tipo: 'kwh', valor: 1200, telhado: 'cerâmico' })
+    expect(lerComandoIndicacao('orça 500 kwh')).toEqual({ tipo: 'kwh', valor: 500 })
+    expect(lerComandoIndicacao('cota R$ 600')).toEqual({ tipo: 'reais', valor: 600 })
+    expect(lerComandoIndicacao('calcula 800 kwh trifásico')).toEqual({ tipo: 'kwh', valor: 800, medidor: 'trifásico' })
+    expect(lerComandoIndicacao('Faça orçamento de 400 kwh')).toEqual({ tipo: 'kwh', valor: 400 })
+    expect(lerComandoPlacas('simula 4 placas de 700w micro')).toEqual({ placas: 4, potenciaW: 700, micro: true, telhado: null, hibrido: false })
+  })
+  it('frases normais continuam texto', () => {
+    expect(lerComandoIndicacao('Simula aí pra ver quanto fica')).toBeNull()
+    expect(lerComandoIndicacao('orçamento enviado ontem')).toBeNull()
+    expect(lerComandoIndicacao('Manda a conta de luz por favor')).toBeNull()
+  })
+})
+
+describe('telhado sem a palavra "telhado" e aviso quando sobra algo (26/11/2026, Leila: "Faz 1200 Kwh cerâmico")', () => {
+  it('telhado sozinho no fim', () => {
+    expect(lerComandoIndicacao('Faz 1200 Kwh cerâmico')).toEqual({ tipo: 'kwh', valor: 1200, telhado: 'cerâmico' })
+    expect(lerComandoIndicacao('faz 500 kwh monofásico fibrocimento')).toEqual({ tipo: 'kwh', valor: 500, medidor: 'monofásico', telhado: 'fibrocimento' })
+    expect(lerComandoIndicacao('faz R$ 800 laje')).toEqual({ tipo: 'reais', valor: 800, telhado: 'laje' })
+  })
+})

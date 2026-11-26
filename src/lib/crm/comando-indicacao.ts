@@ -53,7 +53,7 @@ export function lerComandoSimulacao(text: string): ComandoSimulacao | null {
 export type ComandoPlacas = { placas: number; potenciaW: number | null; micro: boolean; telhado: string | null; hibrido: boolean; medidor?: Medidor }
 
 export function lerComandoPlacas(text: string): ComandoPlacas | null {
-  const t = (text || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[.!]+$/, '').replace(/\s+/g, ' ')
+  const t = verboParaFaz(text).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[.!]+$/, '').replace(/\s+/g, ' ')
   const m = /^(?:faz(?:er)?\s+)?(?:(?:um|o)\s+)?(?:orcamento\s+)?(?:de\s+|com\s+|para\s+|pra\s+)?(\d{1,3})\s*(?:placas?|paineis|painel|modulos?)\b(.*)$/.exec(t)
   if (!m) return null
   // precisa começar com "faz" ou "orçamento" (frase solta "4 placas..." não é comando)
@@ -80,7 +80,17 @@ export function lerComandoPlacas(text: string): ComandoPlacas | null {
   return { placas, potenciaW, micro, telhado, hibrido, ...(medidor ? { medidor } : {}) }
 }
 
-export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
+/**
+ * 26/11/2026 (Leila: "Simula 1200 Kwh telhado cerâmico" foi como texto): o dono também escreve simula/orça/cota/
+ * calcula/monta/manda/faça no lugar do "faz". Troca o verbo do começo por "faz" (o resto da regra continua: a
+ * mensagem inteira tem de ser o comando). "simula financiamento/cartão" é tratado antes (lerComandoSimulacao).
+ */
+export function verboParaFaz(text: string): string {
+  return (text || '').trim().replace(/^(?:simul[ae]r?|or[çc][ae]r?|cot[ae]r?|calcul[ae]r?|mont[ae]r?|mand[ae]r?|fa[çc]a|fazer|faz)\b\s*/i, 'faz ')
+}
+
+export function lerComandoIndicacao(textoOriginal: string): ComandoOrcamento | null {
+  const text = verboParaFaz(textoOriginal)
   // 26/11/2026 (Iara): "Faz 300 Kwh Monofásico" saiu como texto — o medidor no fim também faz parte do comando
   const med = /\s+(?:medidor\s+|padr[aã]o\s+)?(mono|bi|tri)f[aá]sic[oa]\b/i.exec(text || '')
   if (med) {
@@ -95,6 +105,13 @@ export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
     const r = lerComandoIndicacao((text || '').slice(0, tel.index))
     if (!r || 'erro' in r) return r
     return { ...r, telhado: tel[1].trim().toLowerCase() }
+  }
+  // 26/11/2026 (Leila): "Faz 1200 Kwh cerâmico" — o tipo de telhado sozinho, sem a palavra "telhado"
+  const telSo = /\s+((?:telha\s+)?(?:cer[aâ]mic[oa]|colonial|fibrocimento|fibro|eternit|amianto|met[aá]lic[oa]|zinco|galvalume|trapezoidal|sandu[ií]che|laje|solo))\s*[.!]?$/i.exec(text || '')
+  if (telSo) {
+    const r = lerComandoIndicacao((text || '').slice(0, telSo.index))
+    if (!r || 'erro' in r) return r
+    return { ...r, telhado: telSo[1].trim().toLowerCase() }
   }
   // "faz para 600 reais" / "faz pra 800 kwh" / "faz orçamento de 8 mil reais" = mesmo comando (o dono escreve assim)
   const t = (text || '').trim().replace(/^faz\s+(?:(?:um|o)\s+)?(?:or[çc]amento\s+)?(?:(?:de|para|pra|com)\s+|p\/\s*)?/i, 'faz ')
