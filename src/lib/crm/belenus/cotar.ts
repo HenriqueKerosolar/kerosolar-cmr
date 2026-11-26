@@ -29,6 +29,8 @@ export type EntradaCotacao = {
   /** Pedido por placas ("4 placas de 700W"): usa EXATAMENTE essa quantidade e a placa mais próxima dessa potência. */
   placas?: number | null
   moduloW?: number | null
+  /** Operador escolheu a potência do inversor ("inversor de 50 kW"): usa um dessa potência (AUXSOL se tiver). */
+  inversorKw?: number | null
   destino?: { cidade: string; uf: string } | null   // município do lead (frete); sem ele → Rio de Janeiro - RJ
   nomeCliente?: string | null                         // nome do contato do lead (nome do orçamento salvo na Belenus)
   entrega?: { rua?: string; numero?: string; bairro?: string; complemento?: string; cep?: string | null } | null
@@ -172,7 +174,15 @@ async function montar(entrada: EntradaCotacao): Promise<ResultadoCotacao> {
     const optsEsc = { limiteKw: limiteInversorKw(ligacaoLead, lig, REGRAS_INVERSOR_KEROSOLAR), kwpKit: kitKwp }
     // 1º só AUXSOL na faixa (50%; depois até 100%); sem AUXSOL na faixa → todas as marcas na faixa; por último o menor que atende
     let escolha = entrada.micro ? escolherMicro(lista) : escolherInversor(lista, { ...optsEsc, somenteFaixa: !!auxsol })
-    if (auxsol && !('inversor' in escolha)) {
+    if (entrada.inversorKw && !entrada.micro) {
+      // potência pedida pelo operador: procura em todas as marcas; AUXSOL primeiro, depois a ordem do site
+      const doKw = (l: Obj[]) => ordenarComoSite(l).filter((i) => Math.abs(num(i.potenciaNominalSaida) - (entrada.inversorKw as number)) < 0.01)
+      let achados = doKw(lista)
+      if (!achados.length) { r = await api.inversores(corpo(''), 'inversores (todas as marcas)'); lista = listaDe(r, 'inversores'); achados = doKw(lista) }
+      const inv = achados.find((i) => ehMarcaPreferida(i)) ?? achados[0]
+      if (!inv) throw new ErroBelenus(`A Belenus não tem inversor de ${entrada.inversorKw} kW para este kit (disponíveis: ${lista.map((i) => `${String(i.potenciaNominalSaida)} kW`).join(', ')}).`)
+      escolha = { inversor: inv, qtdeSugeridaBelenus: 1 }
+    } else if (auxsol && !('inversor' in escolha)) {
       // AUXSOL não serviu: tenta com todas as marcas
       r = await api.inversores( corpo(''), 'inversores (todas as marcas)')
       lista = listaDe(r, 'inversores')
