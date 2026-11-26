@@ -580,7 +580,9 @@ export async function comandoIndicacaoKwh(leadId: string, conversationId: string
     : cmd.tipo === 'kwh' ? `${cmd.valor} kWh` : `conta de R$ ${cmd.valor}`
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { customFields: true } })
   const cf = (lead?.customFields as Record<string, unknown> | null) ?? {}
-  if (pl?.telhado) cf.telhado = pl.telhado   // o operador disse o telhado → vale para a estrutura e fica no lead
+  // o operador disse o telhado → vale para a estrutura e fica no lead
+  const telhadoCmd = pl?.telhado ?? ('telhado' in cmd ? cmd.telhado : undefined)
+  if (telhadoCmd) cf.telhado = telhadoCmd
   // o operador disse o medidor ("faz 300 kwh monofásico") → vale para inversor/transformador e fica no lead
   const medidorCmd = pl?.medidor ?? ('medidor' in cmd ? cmd.medidor : undefined)
   if (medidorCmd) cf.medidor = medidorCmd

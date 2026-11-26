@@ -11,8 +11,8 @@
 
 export type Medidor = 'monofásico' | 'bifásico' | 'trifásico'
 export type ComandoOrcamento =
-  | { tipo: 'kwh'; valor: number; medidor?: Medidor }
-  | { tipo: 'reais'; valor: number; medidor?: Medidor }
+  | { tipo: 'kwh'; valor: number; medidor?: Medidor; telhado?: string }
+  | { tipo: 'reais'; valor: number; medidor?: Medidor; telhado?: string }
   | { erro: string }
 
 function numero(bruto: string): number {
@@ -89,15 +89,24 @@ export function lerComandoIndicacao(text: string): ComandoOrcamento | null {
     const tipoMed = med[1].toLowerCase()
     return { ...r, medidor: tipoMed === 'mono' ? 'monofásico' : tipoMed === 'bi' ? 'bifásico' : 'trifásico' }
   }
-  // "faz para 600 reais" / "faz pra 800 kwh" = mesmo comando (o dono escreve assim)
-  const t = (text || '').trim().replace(/^faz\s+(?:para|pra|p\/)\s+/i, 'faz ')
+  // 26/11/2026 (Alberto): "... telhado cerâmico" no fim também faz parte do comando
+  const tel = /\s+(?:(?:no|em|com|e)\s+)?telhado\s+(?:de\s+)?([a-zà-ú ]+?)\s*[.!]?$/i.exec(text || '')
+  if (tel) {
+    const r = lerComandoIndicacao((text || '').slice(0, tel.index))
+    if (!r || 'erro' in r) return r
+    return { ...r, telhado: tel[1].trim().toLowerCase() }
+  }
+  // "faz para 600 reais" / "faz pra 800 kwh" / "faz orçamento de 8 mil reais" = mesmo comando (o dono escreve assim)
+  const t = (text || '').trim().replace(/^faz\s+(?:(?:um|o)\s+)?(?:or[çc]amento\s+)?(?:(?:de|para|pra|com)\s+|p\/\s*)?/i, 'faz ')
   const fim = String.raw`\s*(?:h[ií]brido)?\s*[.!]?$`
-  const reaisAntes = new RegExp(String.raw`^faz\s+r\$\s*([\d.,]+)` + fim, 'i').exec(t)
-  if (reaisAntes) return { tipo: 'reais', valor: numero(reaisAntes[1]) }
-  const reaisDepois = new RegExp(String.raw`^faz\s+([\d.,]+)\s*(?:reais|real)` + fim, 'i').exec(t)
-  if (reaisDepois) return { tipo: 'reais', valor: numero(reaisDepois[1]) }
-  const kwh = new RegExp(String.raw`^faz\s+([\d.,]+)\s*(?:kwh|kw\/h|kw|k)` + fim, 'i').exec(t)
-  if (kwh) return { tipo: 'kwh', valor: numero(kwh[1]) }
+  // "8 mil" = 8.000
+  const val = (n: string, mil?: string) => numero(n) * (mil ? 1000 : 1)
+  const reaisAntes = new RegExp(String.raw`^faz\s+r\$\s*([\d.,]+)(\s*mil)?\s*(?:reais|real)?` + fim, 'i').exec(t)
+  if (reaisAntes) return { tipo: 'reais', valor: val(reaisAntes[1], reaisAntes[2]) }
+  const reaisDepois = new RegExp(String.raw`^faz\s+([\d.,]+)(\s*mil)?\s*(?:reais|real)` + fim, 'i').exec(t)
+  if (reaisDepois) return { tipo: 'reais', valor: val(reaisDepois[1], reaisDepois[2]) }
+  const kwh = new RegExp(String.raw`^faz\s+([\d.,]+)(\s*mil)?\s*(?:kwh|kw\/h|kw|k)` + fim, 'i').exec(t)
+  if (kwh) return { tipo: 'kwh', valor: val(kwh[1], kwh[2]) }
   if (/^faz\s+[\d.,]+\s*[.!]?$/i.test(t)) return { erro: 'Faltou a unidade: escreva "faz 800 kwh" (consumo) ou "faz R$ 800" (valor da conta). Nada foi enviado ao cliente.' }
   return null
 }

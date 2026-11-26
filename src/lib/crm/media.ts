@@ -1,7 +1,7 @@
 import 'server-only'
 import path from 'path'
 import fs from 'fs'
-import { limparMidiaSeForHora } from './media-limpeza'
+import { liberarEspacoAgora, limparMidiaSeForHora } from './media-limpeza'
 
 const UPLOADS_DIR = fs.existsSync('/data')
   ? '/data/uploads'
@@ -32,7 +32,14 @@ export function salvarMidiaRecebida(buffer: Buffer, ext: string): string | null 
       // Disco cheio: limpa na hora e tenta gravar mais uma vez.
       if ((e as NodeJS.ErrnoException)?.code !== 'ENOSPC') throw e
       limparMidiaSeForHora(UPLOADS_DIR, true)
-      fs.writeFileSync(path.join(UPLOADS_DIR, name), buffer)
+      try {
+        fs.writeFileSync(path.join(UPLOADS_DIR, name), buffer)
+      } catch (e2) {
+        // ainda cheio (tudo tem menos de 90 dias): apaga os mais antigos até liberar espaço e tenta de novo
+        if ((e2 as NodeJS.ErrnoException)?.code !== 'ENOSPC') throw e2
+        liberarEspacoAgora(UPLOADS_DIR, Math.max(60 * 1024 * 1024, buffer.length * 3))
+        fs.writeFileSync(path.join(UPLOADS_DIR, name), buffer)
+      }
     }
     const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || ''
     return `${base}/api/uploads/${name}`

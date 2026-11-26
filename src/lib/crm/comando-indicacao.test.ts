@@ -67,3 +67,15 @@ describe('medidor no fim do comando (26/11/2026, Iara: "Faz 300 Kwh Monofásico"
     expect(lerComandoPlacas('faz 4 placas de 700w micro monofásico telhado cerâmico')).toEqual({ placas: 4, potenciaW: 700, micro: true, telhado: 'ceramico', hibrido: false, medidor: 'monofásico' })
   })
 })
+
+describe('mil e telhado no fim (26/11/2026, Alberto: "8 mil reais telhado cerâmico")', () => {
+  it('reais com mil + telhado', () => {
+    expect(lerComandoIndicacao('faz orçamento de 8 mil reais telhado ceramico')).toEqual({ tipo: 'reais', valor: 8000, telhado: 'ceramico' })
+    expect(lerComandoIndicacao('Faz R$ 8 mil telhado cerâmico')).toEqual({ tipo: 'reais', valor: 8000, telhado: 'cerâmico' })
+    expect(lerComandoIndicacao('faz 8.000 reais')).toEqual({ tipo: 'reais', valor: 8000 })
+    expect(lerComandoIndicacao('faz R$ 8000 reais')).toEqual({ tipo: 'reais', valor: 8000 })
+    expect(lerComandoIndicacao('faz 300 kwh monofásico telhado de fibrocimento')).toEqual({ tipo: 'kwh', valor: 300, medidor: 'monofásico', telhado: 'fibrocimento' })
+    expect(lerComandoIndicacao('faz 800 kwh')).toEqual({ tipo: 'kwh', valor: 800 })
+    expect(lerComandoIndicacao('o telhado é cerâmico')).toBeNull()
+  })
+})
