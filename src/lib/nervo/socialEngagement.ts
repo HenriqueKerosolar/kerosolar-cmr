@@ -30,3 +30,17 @@ export function parseSocialEngagement(payload: unknown, occurredAtIso: string): 
   if (Number.isNaN(occurredAt.getTime())) return null
   return { ...parsed.data, occurredAt }
 }
+
+/**
+ * Aviso no celular para um comentário novo. O título segue um formato fixo ("💬 Comentário no Facebook · Ana") porque
+ * a EVA (secretária do dono) lê esses avisos do app do CRM e separa o autor do canal por ele.
+ */
+export function commentPush(row: SocialEngagementRow): { title: string; body: string; url: string; tag: string } {
+  const rede = row.channel === 'instagram' ? 'Instagram' : 'Facebook'
+  return {
+    title: `💬 Comentário no ${rede} · ${row.authorName || 'alguém'}`,
+    body: row.text.slice(0, 160),
+    url: '/social',
+    tag: `comment-${row.externalId}`,
+  }
+}

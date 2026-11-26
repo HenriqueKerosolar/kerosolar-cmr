@@ -7,7 +7,7 @@ import { createCrmNervo, type CrmNervo } from './crmNervo'
 import { loadNervoConfig } from './config'
 import { createPrismaQuery } from './prismaQuery'
 import { createSocialEngagementHandler } from './socialEngagementHandler'
-import type { SocialEngagementRow } from './socialEngagement'
+import { commentPush, type SocialEngagementRow } from './socialEngagement'
 import { SOCIAL_COMMENT_REPLIED, SOCIAL_MESSAGE_RECEIVED, SOCIAL_MESSAGE_SENT, createSocialCommentRepliedHandler, createSocialMessageReceivedHandler, createSocialMessageSentHandler } from './socialMessages'
 
 type Log = (level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) => void
@@ -54,14 +54,21 @@ export function getCrmNervo(): CrmNervo | undefined {
     nervo.on(
       'social.engagement.captured',
       createSocialEngagementHandler({
-        upsert: (row: SocialEngagementRow) =>
-          prisma.socialEngagement
-            .upsert({
-              where: { externalId: row.externalId },
-              create: row,
-              update: { authorName: row.authorName, text: row.text, postPermalink: row.postPermalink },
-            })
-            .then(() => undefined),
+        upsert: async (row: SocialEngagementRow) => {
+          const existia = await prisma.socialEngagement.findUnique({ where: { externalId: row.externalId }, select: { id: true } })
+          await prisma.socialEngagement.upsert({
+            where: { externalId: row.externalId },
+            create: row,
+            update: { authorName: row.authorName, text: row.text, postPermalink: row.postPermalink },
+          })
+          return !existia
+        },
+        // 🔔 Comentário novo → aviso no celular (igual mensagem nova no Inbox). A EVA do dono lê esse aviso.
+        notify: async (row: SocialEngagementRow) => {
+          if (row.kind !== 'comment') return
+          const { enviarPush } = await import('@/lib/crm/push')
+          await enviarPush(commentPush(row))
+        },
       }),
     )
     globalForNervo.crmNervo = nervo

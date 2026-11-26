@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { NervoRejection } from '@lib/nervo'
 import { createSocialEngagementHandler } from './socialEngagementHandler'
+import { commentPush } from './socialEngagement'
 
 function envelope(payload: unknown, occurredAt = '2026-11-05T12:00:00.000Z') {
   return { id: 'evt1', type: 'social.engagement.captured', version: 1, tenant: 't1', occurredAt, correlationId: 'c1', payload } as any
@@ -39,5 +40,24 @@ describe('createSocialEngagementHandler', () => {
     await handler(envelope({ kind: 'dm', channel: 'instagram', externalId: 'm1', text: 'Oi' }))
 
     expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('avisa o celular só para comentário NOVO (reentrega do Nervo não avisa de novo); falha do aviso não derruba', async () => {
+    const notify = vi.fn().mockResolvedValue(undefined)
+    const novo = createSocialEngagementHandler({ upsert: vi.fn().mockResolvedValue(true), notify })
+    await novo(envelope({ kind: 'comment', channel: 'facebook', externalId: 'c3', authorName: 'Henrique Leal', text: 'Gostei' }))
+    expect(notify).toHaveBeenCalledTimes(1)
+
+    const reentrega = createSocialEngagementHandler({ upsert: vi.fn().mockResolvedValue(false), notify })
+    await reentrega(envelope({ kind: 'comment', channel: 'facebook', externalId: 'c3', authorName: 'Henrique Leal', text: 'Gostei' }))
+    expect(notify).toHaveBeenCalledTimes(1)
+
+    const falha = createSocialEngagementHandler({ upsert: vi.fn().mockResolvedValue(true), notify: vi.fn().mockRejectedValue(new Error('push')) })
+    await expect(falha(envelope({ kind: 'comment', channel: 'instagram', externalId: 'c4', text: 'Oi' }))).resolves.toBeUndefined()
+  })
+
+  it('aviso de comentário tem título fixo (a EVA separa autor e rede por ele)', () => {
+    const p = commentPush({ kind: 'comment', channel: 'instagram', externalId: 'c5', authorName: 'Ana', text: 'Qto custa?', occurredAt: new Date() })
+    expect(p).toMatchObject({ title: '💬 Comentário no Instagram · Ana', body: 'Qto custa?', url: '/social', tag: 'comment-c5' })
   })
 })

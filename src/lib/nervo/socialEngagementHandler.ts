@@ -8,8 +8,10 @@ import { reject, type EventEnvelope } from '@lib/nervo'
 import { parseSocialEngagement, type SocialEngagementRow } from './socialEngagement'
 
 export interface SocialEngagementHandlerDeps {
-  /** Idempotente por `externalId` (upsert): reentrega do Nervo nunca duplica a linha. */
-  upsert(row: SocialEngagementRow): Promise<void>
+  /** Idempotente por `externalId` (upsert): reentrega do Nervo nunca duplica a linha. `true` = comentário novo. */
+  upsert(row: SocialEngagementRow): Promise<boolean | void>
+  /** Avisa o celular do operador (push) — só para comentário NOVO; falha do aviso nunca derruba o recebimento. */
+  notify?(row: SocialEngagementRow): Promise<void>
 }
 
 export function createSocialEngagementHandler(deps: SocialEngagementHandlerDeps) {
@@ -17,6 +19,7 @@ export function createSocialEngagementHandler(deps: SocialEngagementHandlerDeps)
     const row = parseSocialEngagement(event.payload, event.occurredAt)
     if (!row) reject(`payload inválido em ${event.type}`)
     if (row.kind === 'dm') return
-    await deps.upsert(row)
+    const created = await deps.upsert(row)
+    if (created === true && deps.notify) await deps.notify(row).catch(() => {})
   }
 }
