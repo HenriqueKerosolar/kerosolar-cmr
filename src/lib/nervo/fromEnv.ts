@@ -59,7 +59,7 @@ export function getCrmNervo(): CrmNervo | undefined {
           await prisma.socialEngagement.upsert({
             where: { externalId: row.externalId },
             create: row,
-            update: { authorName: row.authorName, text: row.text, postPermalink: row.postPermalink },
+            update: { authorName: row.authorName, text: row.text, postPermalink: row.postPermalink, postThumbnailUrl: row.postThumbnailUrl },
           })
           return !existia
         },

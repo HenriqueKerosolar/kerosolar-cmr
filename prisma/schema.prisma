@@ -474,6 +474,7 @@ model SocialEngagement {
   text          String
   postId        String?
   postPermalink String?
+  postThumbnailUrl String? // URL do CDN da Meta — expira em alguns dias; tela esconde se falhar ao carregar
   occurredAt    DateTime
   createdAt     DateTime @default(now())
 
