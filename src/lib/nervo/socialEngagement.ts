@@ -14,6 +14,8 @@ export const socialEngagementSchema = z.object({
   text: z.string().min(1).max(5000),
   postId: z.string().min(1).max(128).optional(),
   postPermalink: z.string().url().max(500).optional(),
+  // Capa/imagem do post no CDN da Meta — some sozinha na tela se a URL já tiver expirado (onError).
+  postThumbnailUrl: z.string().url().max(2000).optional(),
 })
 
 export type SocialEngagementPayload = z.infer<typeof socialEngagementSchema>

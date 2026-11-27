@@ -17,6 +17,15 @@ describe('createSocialEngagementHandler', () => {
     expect(upsert.mock.calls[0]![0]).toMatchObject({ kind: 'comment', channel: 'facebook', externalId: 'c1', authorName: 'Ana', text: 'Oi' })
   })
 
+  it('repassa postThumbnailUrl pro upsert quando vem no payload', async () => {
+    const upsert = vi.fn().mockResolvedValue(undefined)
+    const handler = createSocialEngagementHandler({ upsert })
+
+    await handler(envelope({ kind: 'comment', channel: 'facebook', externalId: 'c3', text: 'Oi', postThumbnailUrl: 'https://scontent.meta.com/p1.jpg' }))
+
+    expect(upsert.mock.calls[0]![0]).toMatchObject({ postThumbnailUrl: 'https://scontent.meta.com/p1.jpg' })
+  })
+
   it('recusa (NervoRejection, não repetível) payload inválido — e nunca chama upsert', async () => {
     const upsert = vi.fn()
     const handler = createSocialEngagementHandler({ upsert })

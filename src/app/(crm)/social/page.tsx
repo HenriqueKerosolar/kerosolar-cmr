@@ -1,5 +1,6 @@
 import { verifySession } from '@/lib/dal'
 import { prisma } from '@/lib/prisma'
+import { PostThumbnail } from './post-thumbnail-client'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,19 +37,22 @@ export default async function SocialPage() {
       ) : (
         <div className="space-y-2">
           {items.map((it) => (
-            <div key={it.id} className="p-3 rounded-xl border border-[--border] bg-[--card]">
-              <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
-                <span>{CHANNEL_ICON[it.channel] ?? '📣'}</span>
-                <span className="font-medium">{KIND_LABEL[it.kind] ?? it.kind}</span>
-                {it.authorName && <span>· {it.authorName}</span>}
-                <span className="ml-auto whitespace-nowrap">{horaBrasilia(it.occurredAt)}</span>
+            <div key={it.id} className="p-3 rounded-xl border border-[--border] bg-[--card] flex gap-3">
+              {it.postThumbnailUrl && <PostThumbnail src={it.postThumbnailUrl} href={it.postPermalink} />}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+                  <span>{CHANNEL_ICON[it.channel] ?? '📣'}</span>
+                  <span className="font-medium">{KIND_LABEL[it.kind] ?? it.kind}</span>
+                  {it.authorName && <span>· {it.authorName}</span>}
+                  <span className="ml-auto whitespace-nowrap">{horaBrasilia(it.occurredAt)}</span>
+                </div>
+                <p className="text-sm mt-1">{it.text}</p>
+                {it.postPermalink && (
+                  <a href={it.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-[--primary] hover:underline">
+                    Ver post
+                  </a>
+                )}
               </div>
-              <p className="text-sm mt-1">{it.text}</p>
-              {it.postPermalink && (
-                <a href={it.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-[--primary] hover:underline">
-                  Ver post
-                </a>
-              )}
             </div>
           ))}
         </div>

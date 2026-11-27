@@ -17,6 +17,25 @@ describe('parseSocialEngagement', () => {
     expect(row?.authorName).toBeUndefined()
   })
 
+  it('aceita postThumbnailUrl (capa do post) quando vem no payload', () => {
+    const row = parseSocialEngagement(
+      { kind: 'comment', channel: 'facebook', externalId: 'c124', text: 'Opa', postThumbnailUrl: 'https://scontent.meta.com/p1.jpg' },
+      '2026-11-05T12:00:00.000Z',
+    )
+    expect(row?.postThumbnailUrl).toBe('https://scontent.meta.com/p1.jpg')
+  })
+
+  it('aceita comentário sem postThumbnailUrl (nem todo evento antigo vai ter)', () => {
+    const row = parseSocialEngagement({ kind: 'comment', channel: 'facebook', externalId: 'c125', text: 'Opa' }, '2026-11-05T12:00:00.000Z')
+    expect(row?.postThumbnailUrl).toBeUndefined()
+  })
+
+  it('rejeita postThumbnailUrl que não é URL válida', () => {
+    expect(
+      parseSocialEngagement({ kind: 'comment', channel: 'facebook', externalId: 'c126', text: 'Opa', postThumbnailUrl: 'não-é-url' }, '2026-11-05T12:00:00.000Z'),
+    ).toBeNull()
+  })
+
   it('rejeita payload sem os campos obrigatórios', () => {
     expect(parseSocialEngagement({ kind: 'comment', channel: 'facebook' }, '2026-11-05T12:00:00.000Z')).toBeNull()
   })
