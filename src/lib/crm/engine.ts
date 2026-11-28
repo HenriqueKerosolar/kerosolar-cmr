@@ -1521,6 +1521,14 @@ async function ingestMessageInner(input: IngestInput, pausar?: (ms: number) => P
     await prisma.conversation.update({ where: { id: conversation.id }, data: { aiEnabled: false, resolvedAt: now } })
     await prisma.scheduledAction.updateMany({ where: { leadId: lead.id, done: false }, data: { done: true } })   // ebook, cobranças...
     await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: `Descartado: oferta/spam — movido para "${leadsAdqStage?.name ?? 'Leads adquiridos'}" e conversa encerrada.` } })
+    // 🚫 Sai dos anúncios da Meta (público de exclusão; dono, 28/11/2026). Em segundo plano, nunca trava a resposta.
+    if (!isSimulator) {
+      void (async () => {
+        const { excluirDosAnuncios, notaExclusao } = await import('./meta-excluir-anuncios')
+        const nota = notaExclusao(await excluirDosAnuncios(contact.whatsappId || contact.phone))
+        if (nota) await prisma.note.create({ data: { leadId: lead.id, type: 'system', content: nota } }).catch(() => {})
+      })().catch(() => {})
+    }
     await simularDigitacao(result.reply)
     await prisma.message.create({ data: { conversationId: conversation.id, direction: 'outbound', senderType: 'ai', content: result.reply } })
     return { ...base, reply: result.reply, aiHandled: true }
