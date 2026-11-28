@@ -42,7 +42,8 @@ export function lerDecisao(bruto: string): DecisaoComentario | null {
   if (!m) return null
   try {
     const j = JSON.parse(m[0]) as { responder?: unknown; texto?: unknown }
-    const texto = typeof j.texto === 'string' ? j.texto.trim() : ''
+    // link puro (a IA às vezes devolve "[https://...]" ou "(https://...)")
+    const texto = typeof j.texto === 'string' ? j.texto.trim().replace(/[[(](https?:\/\/[^\])\s]+)[\])]/g, '$1') : ''
     if (j.responder !== true || !texto) return { responder: false, texto: '' }
     // trava de segurança: nunca valor em público
     if (/r\$\s*\d|\d+\s*(mil|reais)|parcela/i.test(texto)) return { responder: false, texto: '' }

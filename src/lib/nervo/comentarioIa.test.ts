@@ -15,6 +15,7 @@ describe('IA responde comentários (28/11/2026)', () => {
     expect(lerDecisao('{"responder": false, "texto": ""}')).toEqual({ responder: false, texto: '' })
     expect(lerDecisao('{"responder": true, "texto": "Fica a partir de R$ 9.000"}')).toEqual({ responder: false, texto: '' })
     expect(lerDecisao('lixo')).toBeNull()
+    expect(lerDecisao('{"responder": true, "texto": "Chama no WhatsApp 😊 [https://wa.me/552120276013]"}')?.texto).toBe('Chama no WhatsApp 😊 https://wa.me/552120276013')
   })
   it('Facebook leva o link do WhatsApp; Instagram chama no direct', () => {
     expect(promptComentario('facebook')).toContain('wa.me/552120276013')
