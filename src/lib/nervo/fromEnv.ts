@@ -67,7 +67,10 @@ export function getCrmNervo(): CrmNervo | undefined {
         notify: async (row: SocialEngagementRow) => {
           if (row.kind !== 'comment') return
           const { enviarPush } = await import('@/lib/crm/push')
-          await enviarPush(commentPush(row))
+          await enviarPush(commentPush(row)).catch(() => {})
+          // 🤖 IA responde o comentário novo (dono, 28/11/2026). Em segundo plano: não segura o recebimento.
+          const { responderComentarioComIa } = await import('./comentarioIa')
+          void responderComentarioComIa(row.externalId)
         },
       }),
     )
